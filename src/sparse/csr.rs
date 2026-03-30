@@ -1,0 +1,335 @@
+use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};
+use crate::sparse::{coo::CooMatrix, csc::CscMatrix};
+
+/// Compressed Sparse Row (CSR) matrix.
+///
+/// This is the primary sparse format used by all iterative solvers and
+/// preconditioners in linger.
+///
+/// Layout:
+/// - `row_ptr[i]..row_ptr[i+1]` indexes the entries belonging to row `i`.
+/// - `col_idx[k]` and `values[k]` are the column index and value of entry `k`.
+///
+/// # Examples
+/// ```
+/// use linger::sparse::{CooMatrix, CsrMatrix};
+///
+/// let mut coo: CooMatrix<f64> = CooMatrix::new(3, 3);
+/// coo.push(0, 0, 2.0); coo.push(0, 1, -1.0);
+/// coo.push(1, 0, -1.0); coo.push(1, 1, 2.0); coo.push(1, 2, -1.0);
+/// coo.push(2, 1, -1.0); coo.push(2, 2, 2.0);
+/// let csr = CsrMatrix::from_coo(&coo);
+/// assert_eq!(csr.nnz(), 7);
+/// ```
+#[derive(Debug, Clone)]
+pub struct CsrMatrix<T> {
+    nrows:   usize,
+    ncols:   usize,
+    row_ptr: Vec<usize>, // length nrows + 1
+    col_idx: Vec<usize>, // length nnz
+    values:  Vec<T>,     // length nnz
+}
+
+impl<T: Scalar> CsrMatrix<T> {
+    // ─── Constructors ────────────────────────────────────────────────────────
+
+    /// Build a CSR matrix from COO format.
+    ///
+    /// Entries are sorted by `(row, col)` and duplicate pairs are summed.
+    pub fn from_coo(coo: &CooMatrix<T>) -> Self {
+        let nrows = coo.nrows;
+        let ncols = coo.ncols;
+        let nnz_input = coo.rows.len();
+
+        if nnz_input == 0 {
+            return Self {
+                nrows,
+                ncols,
+                row_ptr: vec![0; nrows + 1],
+                col_idx: vec![],
+                values:  vec![],
+            };
+        }
+
+        // Sort entries by (row, col).
+        let mut order: Vec<usize> = (0..nnz_input).collect();
+        order.sort_unstable_by_key(|&i| (coo.rows[i], coo.cols[i]));
+
+        // Merge duplicate (row, col) entries by summing their values.
+        let mut merged: Vec<(usize, usize, T)> = Vec::with_capacity(nnz_input);
+        for &i in &order {
+            let r = coo.rows[i];
+            let c = coo.cols[i];
+            let v = coo.values[i];
+            if let Some(last) = merged.last_mut() {
+                if last.0 == r && last.1 == c {
+                    last.2 += v;
+                    continue;
+                }
+            }
+            merged.push((r, c, v));
+        }
+
+        // Build row_ptr via per-row counts then prefix sum.
+        let nnz = merged.len();
+        let mut counts = vec![0usize; nrows];
+        for &(r, _, _) in &merged {
+            counts[r] += 1;
+        }
+        let mut row_ptr = vec![0usize; nrows + 1];
+        for r in 0..nrows {
+            row_ptr[r + 1] = row_ptr[r] + counts[r];
+        }
+
+        let mut col_idx = Vec::with_capacity(nnz);
+        let mut values  = Vec::with_capacity(nnz);
+        for (_, c, v) in merged {
+            col_idx.push(c);
+            values.push(v);
+        }
+
+        Self { nrows, ncols, row_ptr, col_idx, values }
+    }
+
+    /// Construct directly from raw CSR arrays.
+    ///
+    /// # Panics
+    /// Panics if `row_ptr.len() != nrows + 1` or the arrays are inconsistent.
+    pub fn from_raw(
+        nrows:   usize,
+        ncols:   usize,
+        row_ptr: Vec<usize>,
+        col_idx: Vec<usize>,
+        values:  Vec<T>,
+    ) -> Self {
+        assert_eq!(row_ptr.len(), nrows + 1, "row_ptr must have nrows+1 entries");
+        assert_eq!(col_idx.len(), values.len(), "col_idx and values must have equal length");
+        assert_eq!(*row_ptr.last().unwrap(), col_idx.len(), "row_ptr.last() must equal nnz");
+        Self { nrows, ncols, row_ptr, col_idx, values }
+    }
+
+    // ─── Dimensions / accessors ──────────────────────────────────────────────
+
+    /// Number of rows.
+    pub fn nrows(&self) -> usize { self.nrows }
+    /// Number of columns.
+    pub fn ncols(&self) -> usize { self.ncols }
+    /// Number of stored non-zero entries.
+    pub fn nnz(&self) -> usize { self.values.len() }
+
+    /// Raw row-pointer array (length `nrows + 1`).
+    pub fn row_ptr(&self) -> &[usize] { &self.row_ptr }
+    /// Raw column-index array (length `nnz`).
+    pub fn col_idx(&self) -> &[usize] { &self.col_idx }
+    /// Raw value array (length `nnz`).
+    pub fn values(&self) -> &[T] { &self.values }
+
+    /// Iterate over all `(row, col, value)` triplets in row-major order.
+    pub fn triplets(&self) -> impl Iterator<Item = (usize, usize, T)> + '_ {
+        (0..self.nrows).flat_map(move |r| {
+            let start = self.row_ptr[r];
+            let end   = self.row_ptr[r + 1];
+            self.col_idx[start..end]
+                .iter()
+                .zip(self.values[start..end].iter())
+                .map(move |(&c, &v)| (r, c, v))
+        })
+    }
+
+    // ─── Sparse matrix–vector products ───────────────────────────────────────
+
+    /// Compute  `y ← A · x`  (overwrites `y`).
+    ///
+    /// # Panics
+    /// Panics if `x.len() != ncols` or `y.len() != nrows`.
+    pub fn spmv(&self, x: &[T], y: &mut [T]) {
+        assert_eq!(x.len(), self.ncols, "spmv: x length mismatch");
+        assert_eq!(y.len(), self.nrows, "spmv: y length mismatch");
+        for i in 0..self.nrows {
+            let mut sum = T::zero();
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                // SAFETY: row_ptr and col_idx are consistent by construction.
+                sum += unsafe { *self.values.get_unchecked(k) }
+                    * unsafe { *x.get_unchecked(*self.col_idx.get_unchecked(k)) };
+            }
+            y[i] = sum;
+        }
+    }
+
+    /// Compute  `y ← α·A·x + β·y`  (generalised SpMV, overwrites `y`).
+    pub fn spmv_add(&self, alpha: T, x: &[T], beta: T, y: &mut [T]) {
+        assert_eq!(x.len(), self.ncols, "spmv_add: x length mismatch");
+        assert_eq!(y.len(), self.nrows, "spmv_add: y length mismatch");
+        for i in 0..self.nrows {
+            let mut sum = T::zero();
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                sum += unsafe { *self.values.get_unchecked(k) }
+                    * unsafe { *x.get_unchecked(*self.col_idx.get_unchecked(k)) };
+            }
+            y[i] = alpha * sum + beta * y[i];
+        }
+    }
+
+    // ─── Structure operations ─────────────────────────────────────────────────
+
+    /// Transpose: return the CSC representation of `Aᵀ`.
+    ///
+    /// For a CSR matrix A, the transposed CSC is obtained by swapping the roles
+    /// of row_ptr↔col_ptr and row_idx↔col_idx — an O(nnz) operation.
+    pub fn transpose(&self) -> CscMatrix<T> {
+        // A^T as CSC: column j of A^T = row j of A.
+        // So col_ptr = row_ptr, row_idx = col_idx (from A's CSR).
+        CscMatrix::from_raw(
+            self.ncols,             // nrows of A^T
+            self.nrows,             // ncols of A^T
+            self.row_ptr.clone(),   // col_ptr of CSC(A^T)
+            self.col_idx.clone(),   // row_idx of CSC(A^T)
+            self.values.clone(),
+        )
+    }
+
+    /// Extract the main diagonal.
+    ///
+    /// Returns a vector of length `min(nrows, ncols)`.
+    /// Missing diagonal entries are represented as zero.
+    pub fn diag(&self) -> Vec<T> {
+        let n = self.nrows.min(self.ncols);
+        let mut d = vec![T::zero(); n];
+        for i in 0..n {
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                if self.col_idx[k] == i {
+                    d[i] = self.values[k];
+                    break;
+                }
+            }
+        }
+        d
+    }
+
+    /// Return `true` if the matrix is structurally symmetric
+    /// (i.e. every `(i,j)` entry has a corresponding `(j,i)` entry).
+    pub fn is_structurally_symmetric(&self) -> bool {
+        if self.nrows != self.ncols {
+            return false;
+        }
+        for (r, c, _) in self.triplets() {
+            // Check that (c, r) exists.
+            let row_start = self.row_ptr[c];
+            let row_end   = self.row_ptr[c + 1];
+            if !self.col_idx[row_start..row_end].contains(&r) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Sparse matrix–matrix product: `C = self · B`.
+    ///
+    /// Uses a hash-map accumulator per row (correct but not cache-optimal).
+    /// Suitable for setup-phase use where performance is secondary to correctness.
+    pub fn matmat(&self, b: &CsrMatrix<T>) -> CsrMatrix<T> {
+        assert_eq!(self.ncols, b.nrows, "matmat: inner dimensions must match");
+        let m = self.nrows;
+        let n = b.ncols;
+
+        let mut c_rows: Vec<Vec<(usize, T)>> = vec![Vec::new(); m];
+
+        for i in 0..m {
+            // Dense accumulator for row i of C.
+            let mut acc: std::collections::HashMap<usize, T> =
+                std::collections::HashMap::new();
+            for ka in self.row_ptr[i]..self.row_ptr[i + 1] {
+                let k   = self.col_idx[ka];
+                let a_ik = self.values[ka];
+                for kb in b.row_ptr[k]..b.row_ptr[k + 1] {
+                    let j   = b.col_idx[kb];
+                    let b_kj = b.values[kb];
+                    let e = acc.entry(j).or_insert(T::zero());
+                    *e += a_ik * b_kj;
+                }
+            }
+            let mut row: Vec<(usize, T)> = acc.into_iter().collect();
+            row.sort_unstable_by_key(|&(j, _)| j);
+            c_rows[i] = row;
+        }
+
+        // Pack into CSR.
+        let nnz: usize = c_rows.iter().map(|r| r.len()).sum();
+        let mut row_ptr = vec![0usize; m + 1];
+        let mut col_idx = Vec::with_capacity(nnz);
+        let mut values  = Vec::with_capacity(nnz);
+        for (i, row) in c_rows.iter().enumerate() {
+            row_ptr[i + 1] = row_ptr[i] + row.len();
+            for &(j, v) in row {
+                col_idx.push(j);
+                values.push(v);
+            }
+        }
+        CsrMatrix { nrows: m, ncols: n, row_ptr, col_idx, values }
+    }
+
+    /// Compute `Aᵀ` as a `CsrMatrix` (rather than `CscMatrix`).
+    ///
+    /// Needed for Galerkin projection `Pᵀ A P`.
+    pub fn transpose_csr(&self) -> CsrMatrix<T> {
+        let m = self.nrows;
+        let n = self.ncols;
+        let nnz = self.values.len();
+
+        // Count entries per column (= row of Aᵀ).
+        let mut counts = vec![0usize; n];
+        for &c in &self.col_idx {
+            counts[c] += 1;
+        }
+        let mut row_ptr = vec![0usize; n + 1];
+        for j in 0..n {
+            row_ptr[j + 1] = row_ptr[j] + counts[j];
+        }
+
+        // Fill col_idx and values of Aᵀ.
+        let mut col_idx = vec![0usize; nnz];
+        let mut values  = vec![T::zero(); nnz];
+        let mut cursor  = row_ptr[..n].to_vec(); // write positions per row
+
+        for i in 0..m {
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                let j = self.col_idx[k];
+                let pos = cursor[j];
+                col_idx[pos] = i;
+                values[pos]  = self.values[k];
+                cursor[j] += 1;
+            }
+        }
+
+        // Sort each row of Aᵀ by column index.
+        for j in 0..n {
+            let start = row_ptr[j];
+            let end   = row_ptr[j + 1];
+            let mut pairs: Vec<(usize, T)> = col_idx[start..end]
+                .iter().zip(values[start..end].iter())
+                .map(|(&c, &v)| (c, v))
+                .collect();
+            pairs.sort_unstable_by_key(|&(c, _)| c);
+            for (k, (c, v)) in pairs.into_iter().enumerate() {
+                col_idx[start + k] = c;
+                values[start + k]  = v;
+            }
+        }
+
+        CsrMatrix { nrows: n, ncols: m, row_ptr, col_idx, values }
+    }
+}
+
+// ─── LinearOperator impl ──────────────────────────────────────────────────────
+
+impl<T: Scalar> LinearOperator for CsrMatrix<T> {
+    type Vector = DenseVec<T>;
+
+    #[inline]
+    fn apply(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
+        self.spmv(x.as_slice(), y.as_mut_slice());
+    }
+
+    fn nrows(&self) -> usize { self.nrows }
+    fn ncols(&self) -> usize { self.ncols }
+}

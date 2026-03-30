@@ -1,0 +1,50 @@
+[package]
+name = "linger"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Pure-Rust sparse linear system solver library for FEA"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["rayon"]
+rayon   = ["dep:rayon"]
+mpi     = []                         # placeholder: dep:rsmpi
+hypre-ffi = []                       # placeholder: C-lib binding
+petsc-ffi = []                       # placeholder: C-lib binding
+mumps   = []                         # placeholder: dep:mumps-sys
+mkl     = []                         # placeholder: dep:intel-mkl-src
+wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
+
+[dependencies]
+num-traits  = "0.2"
+thiserror   = "2"
+rayon       = { version = "1.10", optional = true }
+
+# WASM optional deps
+wasm-bindgen            = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# nalgebra / faer adapters — not compatible with wasm32 (use threads / getrandom).
+# Gated to native targets only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nalgebra        = { version = "0.33", features = [] }
+nalgebra-sparse = "0.4"
+faer            = "0.21"
+faer-traits     = "0.21"
+
+[dev-dependencies]
+approx   = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "bench_spmv"
+harness = false
+
+[[bench]]
+name    = "bench_krylov"
+harness = false
+
+[[bench]]
+name    = "bench_amg"
+harness = false

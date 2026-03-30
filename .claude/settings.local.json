@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"^test |^running|FAILED|passed|failed|ok$\")",
+      "Bash(rustup target:*)"
+    ]
+  }
+}
