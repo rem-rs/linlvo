@@ -64,6 +64,7 @@ impl Default for AmgConfig {
 }
 
 /// One level in the AMG hierarchy.
+#[derive(Clone)]
 pub struct AmgLevel<T> {
     /// Operator at this level.
     pub a: CsrMatrix<T>,
@@ -74,6 +75,7 @@ pub struct AmgLevel<T> {
 }
 
 /// Full AMG hierarchy.
+#[derive(Clone)]
 pub struct AmgHierarchy<T> {
     pub levels:  Vec<AmgLevel<T>>,
     pub config:  AmgConfig,
