@@ -1,4 +1,4 @@
-//! AMG V-cycle and W-cycle.
+//! AMG V-cycle, W-cycle, and F-cycle.
 //!
 //! The cycle is applied recursively:
 //!
@@ -14,13 +14,14 @@
 //! ```
 //!
 //! W-cycle calls the coarse level **twice** instead of once.
+//! F-cycle calls the coarse level twice: first with V, then with F (recursive).
 
-use crate::amg::{setup::AmgHierarchy, smoother::smooth};
+use crate::amg::{setup::AmgHierarchy, smoother::{smooth_with_hint, SmootherType}};
 use crate::core::{operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
 
 /// Number of coarse-level recursions per cycle level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CycleType { V, W }
+pub enum CycleType { V, W, F }
 
 impl<T: Scalar> AmgHierarchy<T> {
     /// Apply one AMG cycle as a preconditioner:  `x ← M⁻¹ b`  (x starts at 0).
@@ -38,17 +39,24 @@ fn vcycle<T: Scalar>(
 ) {
     let lv = &hier.levels[level];
 
-    // Coarsest level: solve approximately with many Jacobi sweeps.
+    // Coarsest level: solve approximately with many sweeps.
+    // Use weighted Jacobi on the coarsest level regardless of the configured
+    // smoother -- polynomial smoothers like Chebyshev can diverge here because
+    // eigenvalue bounds may be very loose on small coarse operators.
     if lv.p.is_none() {
-        smooth(&lv.a, x, b, &hier.config.smoother, 50);
+        let coarse_smoother = match &hier.config.smoother {
+            SmootherType::Chebyshev { .. } => SmootherType::WeightedJacobi { omega: 0.667 },
+            other => other.clone(),
+        };
+        smooth_with_hint(&lv.a, x, b, &coarse_smoother, 50, None);
         return;
     }
 
     let p = lv.p.as_ref().unwrap();
     let r = lv.r.as_ref().unwrap();
 
-    // Pre-smooth.
-    smooth(&lv.a, x, b, &hier.config.smoother, hier.config.pre_sweeps);
+    // Pre-smooth (pass cached spectral radius hint for Chebyshev).
+    smooth_with_hint(&lv.a, x, b, &hier.config.smoother, hier.config.pre_sweeps, lv.spectral_radius);
 
     // Residual: res = b - A x.
     let n = b.len();
@@ -69,9 +77,19 @@ fn vcycle<T: Scalar>(
 
     // Coarse-grid correction.
     let mut e_c = DenseVec::zeros(nc);
-    let n_coarse_calls = if cycle == CycleType::W { 2 } else { 1 };
-    for _ in 0..n_coarse_calls {
-        vcycle(hier, level + 1, &res_c, &mut e_c, cycle);
+    match cycle {
+        CycleType::V => {
+            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::V);
+        }
+        CycleType::W => {
+            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::W);
+            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::W);
+        }
+        CycleType::F => {
+            // F-cycle: first call with V, then call with F (recursive).
+            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::V);
+            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::F);
+        }
     }
 
     // Prolongate and update: x += P e_c.
@@ -83,6 +101,6 @@ fn vcycle<T: Scalar>(
         for i in 0..n { xs[i] += pes[i]; }
     }
 
-    // Post-smooth.
-    smooth(&lv.a, x, b, &hier.config.smoother, hier.config.post_sweeps);
+    // Post-smooth (pass cached spectral radius hint for Chebyshev).
+    smooth_with_hint(&lv.a, x, b, &hier.config.smoother, hier.config.post_sweeps, lv.spectral_radius);
 }

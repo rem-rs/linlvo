@@ -12,7 +12,7 @@ use crate::amg::{
     coarsen_agg::{build_aggregates, tentative_prolongation},
     coarsen_rs::rs_coarsen,
     interpolation::{rs_interpolation, smooth_prolongation},
-    smoother::SmootherType,
+    smoother::{SmootherType, estimate_spectral_radius_dinv_a},
     strength::strong_connections,
 };
 use crate::core::scalar::Scalar;
@@ -72,6 +72,8 @@ pub struct AmgLevel<T> {
     pub p: Option<CsrMatrix<T>>,
     /// Restriction = Pᵀ (computed on demand).
     pub r: Option<CsrMatrix<T>>,
+    /// Cached spectral radius estimate ρ(D⁻¹A) for Chebyshev smoother.
+    pub spectral_radius: Option<T>,
 }
 
 /// Full AMG hierarchy.
@@ -87,13 +89,23 @@ impl<T: Scalar> AmgHierarchy<T> {
         let mut levels: Vec<AmgLevel<T>> = Vec::new();
         let mut a_curr = Some(a);
 
+        // Check whether we need to precompute spectral radii for Chebyshev.
+        let need_spectral = matches!(&config.smoother, SmootherType::Chebyshev { .. });
+
         for _ in 0..config.max_levels {
             let a_now = a_curr.take().unwrap();
             let n = a_now.nrows();
             if n <= config.coarse_threshold {
-                levels.push(AmgLevel { a: a_now, p: None, r: None });
+                levels.push(AmgLevel { a: a_now, p: None, r: None, spectral_radius: None });
                 break;
             }
+
+            // Precompute spectral radius of D^{-1}A if needed (20 power iterations).
+            let sr = if need_spectral {
+                Some(estimate_spectral_radius_dinv_a(&a_now, 20))
+            } else {
+                None
+            };
 
             // Strong connection graph.
             let s = strong_connections(&a_now, config.theta);
@@ -115,7 +127,7 @@ impl<T: Scalar> AmgHierarchy<T> {
             let nc = p.ncols();
             if nc == 0 || nc >= n {
                 // Coarsening failed to reduce the problem; stop here.
-                levels.push(AmgLevel { a: a_now, p: None, r: None });
+                levels.push(AmgLevel { a: a_now, p: None, r: None, spectral_radius: None });
                 break;
             }
 
@@ -125,13 +137,13 @@ impl<T: Scalar> AmgHierarchy<T> {
             // Galerkin coarse-grid operator: Ac = R * A * P
             let a_coarse = r.matmat(&a_now.matmat(&p));
 
-            levels.push(AmgLevel { a: a_now, p: Some(p), r: Some(r) });
+            levels.push(AmgLevel { a: a_now, p: Some(p), r: Some(r), spectral_radius: sr });
             a_curr = Some(a_coarse);
         }
 
         // If max_levels exhausted without breaking, push the remaining level.
         if let Some(a_remaining) = a_curr {
-            levels.push(AmgLevel { a: a_remaining, p: None, r: None });
+            levels.push(AmgLevel { a: a_remaining, p: None, r: None, spectral_radius: None });
         }
 
         AmgHierarchy { levels, config }
