@@ -25,13 +25,10 @@ rayon       = { version = "1.10", optional = true }
 wasm-bindgen            = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 
-# nalgebra / faer adapters — not compatible with wasm32 (use threads / getrandom).
-# Gated to native targets only.
+# Native-only nalgebra integration.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 nalgebra        = { version = "0.33", features = [] }
 nalgebra-sparse = "0.4"
-faer            = "0.21"
-faer-traits     = "0.21"
 
 [dev-dependencies]
 approx   = "0.5"

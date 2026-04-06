@@ -30,14 +30,7 @@ linger/
 │   │   ├── coo.rs                # CooMatrix<T>（装配阶段）
 │   │   ├── bsr.rs                # BlockSparseRow<T>
 │   │   ├── ops.rs                # SpMV、稀疏 AXPY 等操作
-│   │   ├── adapt_nalgebra.rs     # nalgebra 适配 wrapper
-│   │   └── adapt_faer.rs         # faer 适配 wrapper
-│   ├── direct/
-│   │   ├── mod.rs
-│   │   ├── dense_lu.rs           # 密集 LU（包装 faer）
-│   │   ├── dense_cholesky.rs     # 密集 Cholesky
-│   │   ├── sparse_lu.rs          # 稀疏 LU（KLU 算法）
-│   │   └── sparse_chol.rs        # 稀疏 Cholesky（supernodal）
+│   │   └── nalgebra.rs           # 直接为 nalgebra_sparse::CsrMatrix 实现 LinearOperator
 │   ├── iterative/
 │   │   ├── mod.rs
 │   │   ├── cg.rs                 # Conjugate Gradient
@@ -128,7 +121,7 @@ impl Scalar for f32 {
 
 ### 2.2 core/vector.rs
 
-默认实现：`Vec<T>` 包装为 `DenseVec<T>`，同时为 nalgebra `DVector<T>` 和 faer `Col<T>` 实现 `Vector` trait。
+默认实现：`Vec<T>` 包装为 `DenseVec<T>`。当前 solver 路径统一使用 `DenseVec<T>` 作为向量类型。
 
 关键操作：
 - `dot`: 使用 rayon 并行归约（当 feature = "rayon"）
@@ -264,45 +257,21 @@ AMG 分三个阶段：
 
 ## 3. 适配层设计
 
-### 3.1 nalgebra 适配
+### 3.1 nalgebra 直接集成
 
 ```rust
-// src/sparse/adapt_nalgebra.rs
+// src/sparse/nalgebra.rs
 use nalgebra_sparse::CsrMatrix as NaCsr;
 
-pub struct NalgebraCsrOp<T>(NaCsr<T>);
-
-impl<T: Scalar> LinearOperator for NalgebraCsrOp<T> {
-    type Vector = NalgebraDVec<T>;
+impl<T: Scalar + nalgebra::RealField> LinearOperator for NaCsr<T> {
+    type Vector = DenseVec<T>;
 
     fn apply(&self, x: &Self::Vector, y: &mut Self::Vector) {
-        // 使用 nalgebra_sparse 的 SpMV
-        nalgebra_sparse::ops::serial::spmm_csr_dense(
-            T::zero(), y.as_mut(), T::one(), Op::NoOp(&self.0), x.as_ref()
-        );
+        // 逐行遍历 nalgebra_sparse CSR 结构
+        for (i, row) in self.row_iter().enumerate() { ... }
     }
-    fn nrows(&self) -> usize { self.0.nrows() }
-    fn ncols(&self) -> usize { self.0.ncols() }
-}
-```
-
-### 3.2 faer 适配
-
-```rust
-// src/sparse/adapt_faer.rs
-use faer::sparse::SparseColMat;
-
-pub struct FaerSparseOp<T>(SparseColMat<usize, T>);
-
-impl<T: Scalar + faer::Entity> LinearOperator for FaerSparseOp<T> {
-    type Vector = FaerColVec<T>;
-
-    fn apply(&self, x: &Self::Vector, y: &mut Self::Vector) {
-        faer::sparse::linalg::matmul::sparse_dense_matmul(
-            y.as_mut(), self.0.as_ref(), x.as_ref(), None, T::one(), ...
-        );
-    }
-    // ...
+    fn nrows(&self) -> usize { self.nrows() }
+    fn ncols(&self) -> usize { self.ncols() }
 }
 ```
 
@@ -362,7 +331,7 @@ pub fn make_nonsymmetric_convdiff<T: Scalar>(n: usize, peclet: T) -> (...) { ...
 ```
 core/ → sparse/ → iterative/ + precond/ → amg/ → ffi/
                                         ↘
-                                    direct/（可与 iterative 并行）
+
 ```
 
 ### 5.2 各模块 Agent 任务描述模板
@@ -474,7 +443,7 @@ pub enum SolverError {
 | `precond/` | ✅ 完全支持 | 同上 |
 | `amg/` | ✅ 完全支持 | setup/cycle 均可在 WASM 运行 |
 | `parallel/rayon_ops.rs` | ⚠️ 禁用 | `cfg` 条件编译屏蔽 |
-| `direct/` | ⚠️ 部分支持 | faer 密集求解器可用；sparse 直接法需验证 |
+| `direct/` | ❌ 未实现 | 当前版本仅保留为规划项 |
 | `ffi/` | ❌ 不支持 | C 库无法链接到 WASM |
 
 **编码约束**：
@@ -512,7 +481,7 @@ pub fn solve_cg_js(
 - [x] `core/` 全部 trait 定义（`Scalar`、`Vector`、`LinearOperator`、`Preconditioner`、`KrylovSolver`、`SolverError`）
 - [x] `sparse/csr.rs`、`coo.rs`、`csc.rs`（含 `matmat`、`transpose_csr`）
 - [x] `sparse/ops.rs`（SpMV、spmv_add、对角提取、三元组迭代）
-- [x] `sparse/adapt_nalgebra.rs`、`adapt_faer.rs`
+- [x] `sparse/nalgebra.rs`（直接为 `nalgebra_sparse::CsrMatrix` 实现 `LinearOperator`）
 - [x] `core/error.rs`
 - [x] 基础测试框架（`tests/common/`，含 MMS Poisson 1D/2D、对流扩散矩阵生成器）
 
@@ -553,7 +522,7 @@ pub fn solve_cg_js(
 - [x] `sparse/bsr.rs`（`BsrMatrix<T>`：块行指针/列索引/值；`BsrBuilder` 支持重复块累加；串行/并行 SpMV；`to_csr` 转换）
 - [x] Criterion.rs benchmark 套件（`benches/bench_spmv.rs`、`bench_krylov.rs`、`bench_amg.rs`）
 - [x] `src/wasm.rs`（`WasmCsrMatrix`、`WasmCgSolver`、`WasmGmresSolver`；`feature="wasm"` + wasm-bindgen）
-- [x] WASM 目标编译验证：`cargo build --target wasm32-unknown-unknown --no-default-features` 和 `--features wasm` 均通过。解决方案：将 `nalgebra`/`faer` 移入 `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`，`adapt_nalgebra`/`adapt_faer` 模块加 `#[cfg(not(target_arch = "wasm32"))]` 门控
+- [x] WASM 目标编译验证：`cargo build --target wasm32-unknown-unknown --no-default-features` 和 `--features wasm` 均通过。解决方案：将 `nalgebra` 移入 `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`，直接 nalgebra 集成代码仅在非 wasm32 目标编译
 - [x] 13 项集成测试（`tests/test_parallel.rs`）
 - [ ] `wasm-pack test` 浏览器集成测试（需要 Node.js / wasm-pack 环境，超出当前 CI 范围）
 
@@ -575,12 +544,10 @@ pub fn solve_cg_js(
 // linger 主项目中的典型使用
 use linger_solver::{
     SolverBuilder, KrylovMethod, PrecondType,
-    sparse::adapt_nalgebra::NalgebraCsrOp,
 };
 
 // FEA 全局刚度矩阵（装配完成的 nalgebra CSR）
 let stiffness: nalgebra_sparse::CsrMatrix<f64> = assemble_stiffness(&mesh, &material);
-let op = NalgebraCsrOp::new(stiffness);
 
 let solver = SolverBuilder::new()
     .method(KrylovMethod::CG)
@@ -594,7 +561,7 @@ let solver = SolverBuilder::new()
     .build::<f64>()?;
 
 let mut displacement = vec![0.0_f64; ndof];
-let result = solver.solve(&op, &force_vector, &mut displacement)?;
+let result = solver.solve(&stiffness, &force_vector, &mut displacement)?;
 
 println!("Converged in {} iterations, residual = {:.3e}",
     result.iterations, result.final_residual);

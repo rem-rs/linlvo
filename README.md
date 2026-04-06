@@ -83,6 +83,46 @@ let result = ConjugateGradient::<f64>::default()
     .unwrap();
 ```
 
+### With `nalgebra_sparse::CsrMatrix`
+
+On native targets, `nalgebra_sparse::CsrMatrix<T>` implements `LinearOperator`
+directly, so it can be passed to solvers without a wrapper.
+
+Note: nalgebra is an integration layer in this project, not an algorithmic backend.
+The Krylov solvers, preconditioners, AMG, and the default vector/matrix path are
+still implemented on top of linger's own `DenseVec` and sparse matrix types.
+The nalgebra integration only allows an already-assembled
+`nalgebra_sparse::CsrMatrix<T>` to be used as a `LinearOperator` on native
+builds. The wasm path does not use nalgebra; it uses linger's own COO/CSR types
+through `WasmCsrMatrix`.
+
+```rust
+use linger::{DenseVec, KrylovSolver, SolverParams, iterative::ConjugateGradient};
+use nalgebra_sparse::CooMatrix;
+
+let n = 8;
+let mut coo = CooMatrix::<f64>::new(n, n);
+for i in 0..n {
+    coo.push(i, i, 2.0);
+    if i > 0 {
+        coo.push(i, i - 1, -1.0);
+    }
+    if i + 1 < n {
+        coo.push(i, i + 1, -1.0);
+    }
+}
+
+let a = nalgebra_sparse::CsrMatrix::from(&coo);
+let b = DenseVec::from_vec(vec![1.0; n]);
+let mut x = DenseVec::zeros(n);
+
+let result = ConjugateGradient::<f64>::default()
+    .solve(&a, None, &b, &mut x, &SolverParams::default())
+    .unwrap();
+
+assert!(result.converged);
+```
+
 ---
 
 ## Module map
@@ -102,8 +142,7 @@ linger/
 │   ├── csc.rs             CscMatrix<T>  — obtained via csr.transpose()
 │   ├── bsr.rs             BsrMatrix<T>  — block sparse row + BsrBuilder
 │   ├── ops.rs             SpMV helpers
-│   ├── adapt_nalgebra.rs  nalgebra CsrMatrix → NalgebraCsrOp  (native only)
-│   └── adapt_faer.rs      faer SparseColMat → FaerSparseOp    (native only)
+│   └── nalgebra.rs        direct LinearOperator impl for nalgebra_sparse::CsrMatrix (native only)
 ├── iterative/
 │   ├── cg.rs              Conjugate Gradient (SPD systems)
 │   ├── minres.rs          MINRES (symmetric indefinite)
@@ -316,7 +355,7 @@ let csr = bsr.to_csr();          // convert to CsrMatrix
 
 Build:
 ```bash
-# Core (no adapters, no rayon)
+# Core (no native nalgebra integration, no rayon)
 cargo build --target wasm32-unknown-unknown --no-default-features
 
 # Full JS interface
@@ -336,7 +375,7 @@ const gmres = new WasmGmresSolver(1e-8, 500, 30);
 const x2 = gmres.solve(A, b);
 ```
 
-Note: `nalgebra`/`faer` adapters are automatically excluded from wasm32 builds (they depend on threading and `getrandom`).
+Note: native `nalgebra` integration is excluded from wasm32 builds. The core CSR/COO/CSC and solver stack remain wasm-compatible.
 
 ---
 
@@ -391,7 +430,7 @@ pub enum SolverError {
 2. **No global mutable state.** Preconditioners implement `&self` apply — safe for concurrent use.
 3. **No `std::thread::spawn` in library code.** Parallelism flows exclusively through Rayon's `par_iter` and is gated by `#[cfg(feature = "rayon")]`.
 4. **No `std::time::Instant` in the core library** — safe for wasm32 compilation.
-5. **`nalgebra`/`faer` adapters** (`adapt_nalgebra.rs`, `adapt_faer.rs`) are gated to `cfg(not(target_arch = "wasm32"))`. Do not import them in wasm-targeted code.
+5. **Direct `nalgebra_sparse::CsrMatrix` support** is gated to `cfg(not(target_arch = "wasm32"))`. Use linger's own sparse formats in wasm-targeted code.
 6. **Matrix construction is always COO → CSR.** Never construct `CsrMatrix` by hand; use `CooMatrix::push` then `CsrMatrix::from_coo`. Duplicate entries are summed automatically.
 7. **`from_raw` is for internal use.** Prefer `from_coo` unless you have pre-validated CSR arrays.
 

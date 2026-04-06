@@ -10,7 +10,7 @@
 
 ### 1.1 目标
 
-`linger` 是一个纯 Rust 实现的线性方程组求解库，提供与 HYPRE、PETSc 功能等价的算法体系，同时以 trait 抽象兼容 `nalgebra` 和 `faer` 矩阵类型。其核心目标是：
+`linger` 是一个纯 Rust 实现的线性方程组求解库，提供与 HYPRE、PETSc 功能等价的算法体系，同时以 trait 抽象兼容自有稀疏格式，并在原生目标上直接支持 `nalgebra_sparse::CsrMatrix`。其核心目标是：
 
 - 为 FEA 装配产生的大规模稀疏线性系统提供高效求解
 - 提供结构清晰的 Krylov 迭代器 + 预条件器组合框架
@@ -47,8 +47,7 @@
 ```
 linger
 ├── core/           # 抽象 trait 与基础类型
-├── sparse/         # 稀疏矩阵格式与 BLAS
-├── direct/         # 直接法求解器
+├── sparse/         # 稀疏矩阵格式、BLAS、nalgebra 集成
 ├── iterative/      # Krylov 迭代法
 ├── precond/        # 预条件器
 ├── amg/            # 代数多重网格
@@ -69,12 +68,12 @@ linger
 | 对称格式（CSS） | 对称问题节省存储 | P1 |
 | 分布式 CSR | MPI 分块行存储 | P2 |
 
-#### 2.2.2 直接求解器（对标 PETSc PCLU/PCCHOLESKY）
+#### 2.2.2 直接求解器（规划项）
+
+当前版本未实现 direct 模块，直接法保留为后续扩展方向。
 
 | 求解器 | 说明 | 优先级 |
 |--------|------|--------|
-| Dense LU | 通过 faer/nalgebra | P0 |
-| Dense Cholesky | 通过 faer/nalgebra | P0 |
 | Sparse LU（KLU 算法） | 适合中等规模、电路/结构问题 | P1 |
 | Sparse Cholesky（supernodal） | 对称正定大规模问题 | P1 |
 | MUMPS FFI | 可选外部库绑定 | P2 |
@@ -198,18 +197,17 @@ pub struct SolverResult {
 }
 ```
 
-### 3.2 矩阵适配层
+### 3.2 外部矩阵集成
 
-nalgebra 和 faer 矩阵类型通过 newtype wrapper 实现 `LinearOperator` trait，不侵入上游库：
+`LinearOperator` 是本地 trait，因此可以直接为 `nalgebra_sparse::CsrMatrix<T>` 提供实现，无需 wrapper：
 
 ```rust
-// faer 稀疏矩阵适配
-pub struct FaerSparseAdapter<T>(faer::sparse::SparseColMat<usize, T>);
-impl<T: Scalar> LinearOperator for FaerSparseAdapter<T> { ... }
-
-// nalgebra 稀疏矩阵适配
-pub struct NalgebraCsrAdapter<T>(nalgebra_sparse::CsrMatrix<T>);
-impl<T: Scalar> LinearOperator for NalgebraCsrAdapter<T> { ... }
+impl<T: Scalar + nalgebra::RealField> LinearOperator for nalgebra_sparse::CsrMatrix<T> {
+    type Vector = DenseVec<T>;
+    fn apply(&self, x: &Self::Vector, y: &mut Self::Vector) { ... }
+    fn nrows(&self) -> usize { ... }
+    fn ncols(&self) -> usize { ... }
+}
 ```
 
 ### 3.3 Builder 模式的求解器配置
@@ -237,7 +235,6 @@ let result = solver.solve(&matrix, &rhs, &mut x)?;
 |-------|------|---------|
 | `nalgebra` | 密集矩阵/向量，核心 FEA 数值 | >= 0.33 |
 | `nalgebra-sparse` | CSR/CSC 格式 | >= 0.10 |
-| `faer` | 高性能密集/稀疏线性代数 | >= 0.21 |
 | `rayon` | 数据并行 | >= 1.10 |
 | `thiserror` | 错误类型 | >= 2.0 |
 | `num-traits` | 泛型数值 trait | >= 0.2 |
@@ -273,14 +270,13 @@ mkl = ["dep:intel-mkl-src"]
 wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]
-nalgebra = { version = "0.33", features = ["sparse"] }
-faer = "0.21"
 rayon = { version = "1.10", optional = true }
 thiserror = "2"
 num-traits = "0.2"
 
-[dependencies.nalgebra-sparse]
-version = "0.10"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nalgebra = { version = "0.33", features = [] }
+nalgebra-sparse = "0.4"
 ```
 
 ---
@@ -309,7 +305,7 @@ version = "0.10"
 
 | 里程碑 | 内容 | 条件 |
 |--------|------|------|
-| M1 | 稀疏矩阵格式 + trait 抽象 + nalgebra/faer 适配 | P0 完成 |
+| M1 | 稀疏矩阵格式 + trait 抽象 + 直接 nalgebra 集成 | P0 完成 |
 | M2 | CG / GMRES / BiCGSTAB + Jacobi/ILU(0) | M1 完成 |
 | M3 | ILUT / SPAI / AMG（SA-AMG） | M2 完成 |
 | M4 | rayon 并行化 + 性能基准 | M2 完成 |

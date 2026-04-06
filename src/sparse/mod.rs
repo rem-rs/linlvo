@@ -1,7 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-pub mod adapt_faer;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod adapt_nalgebra;
+mod nalgebra;
 pub mod bsr;
 pub mod coo;
 pub mod csc;
