@@ -35,12 +35,16 @@
 //! ```
 
 pub mod ordering;
+pub mod etree;
+pub mod symbolic;
 mod triangular;
 mod lu;
 mod cholesky;
+mod multifrontal;
 
 pub use lu::SparseLu;
 pub use cholesky::SparseCholesky;
+pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
 pub use triangular::{forward_solve, backward_solve};
 
 use crate::core::{error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec};

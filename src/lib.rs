@@ -58,6 +58,6 @@ pub use crate::eigen::{
 
 pub use crate::direct::{
     DirectSolver, DirectOptions, DirectSolverPrecond,
-    SparseLu, SparseCholesky,
+    SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
     ordering::{OrderingMethod, rcm, colamd},
 };

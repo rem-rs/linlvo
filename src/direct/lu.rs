@@ -8,20 +8,14 @@
 //!
 //! ## Algorithm
 //!
-//! For the n×n system, we factorise the reordered matrix `B = A Q` column by
-//! column.  At column `j` we:
-//! 1. Scatter column `j` of `B` into a dense working vector `x`.
-//! 2. Apply the previously computed L columns: for `k < j`, subtract
-//!    `l[j,k] * u[k, k:]` from `x` (equivalent to forward-substituting
-//!    with the L factor constructed so far).
-//! 3. Choose the pivot row (maximum magnitude in `x[j:]`).
-//! 4. Store `u[j, j:] = x[j:]` (row j of U).
-//! 5. Store `l[i, j] = x[i] / u[j,j]` for `i > j` (column j of L).
+//! Right-looking dense Gaussian elimination on the reordered matrix `B = AQ`.
+//! A flat n×n working matrix is used, making correctness straightforward.
 //!
-//! This is a right-looking, dense-working-vector scheme; it is correct but
-//! O(n * fill) rather than the O(fill) of full Gilbert-Peierls.  For the
-//! problem sizes targeted by this module (up to ~10^4 DOF) it is fast enough
-//! and much easier to implement correctly.
+//! Memory: O(n²). Practical limit: n ≈ 10^4 (800 MB for f64).
+//! For larger matrices, Sprint 15 will add a multifrontal sparse backend.
+//!
+//! The elimination tree (`etree` module) and symbolic factorisation
+//! (`symbolic` module) are used in Sprint 15's multifrontal method.
 
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
 use crate::sparse::CsrMatrix;
@@ -125,18 +119,12 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         if !self.analyzed { self.analyze(a)?; }
         let n = self.n;
 
-        // Apply symmetric permutation B = P_q A P_q^T so that the reordered
-        // matrix has better fill characteristics.
+        // Apply symmetric permutation B = A[perm_q, perm_q].
         let b = permute_symmetric(a, &self.perm_q);
 
         // Dense n×n working matrix — right-looking LU on B.
-        // We store the entire dense matrix in row-major order and factorise
-        // it in place, then extract the sparse L and U at the end.
-        // This is O(n²) memory but correct and simple; for n ≤ 10^4 this is
-        // at most 800 MB — acceptable for the target problem size range.
-        // For larger n, use the SuperLU FFI backend (Sprint 14).
         let mut mat: Vec<T> = vec![T::zero(); n * n];
-        let mut pivot_row = vec![0usize; n]; // pivot_row[j] = row chosen at step j
+        let mut pivot_row = vec![0usize; n];
 
         // Scatter B into the dense matrix.
         for i in 0..n {
@@ -147,18 +135,16 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         }
 
         // Row permutation tracking.
-        let mut row_perm: Vec<usize> = (0..n).collect(); // row_perm[pos] = original_row
-        let mut row_pos:  Vec<usize> = (0..n).collect(); // row_pos[orig] = current_pos
+        let mut row_perm: Vec<usize> = (0..n).collect();
+        let mut row_pos:  Vec<usize> = (0..n).collect();
 
         let thresh = self.options.pivot_threshold;
 
         for j in 0..n {
-            // Find pivot in column j, rows j..n (in the permuted ordering).
             let pivot_pos = find_pivot_col(&mat, n, j, thresh);
             pivot_row[j] = row_perm[pivot_pos];
 
             if pivot_pos != j {
-                // Swap rows j and pivot_pos in mat.
                 for k in 0..n {
                     mat.swap(j * n + k, pivot_pos * n + k);
                 }
@@ -172,10 +158,9 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
                 return Err(SolverError::SingularMatrix { row: j });
             }
 
-            // Compute multipliers and update submatrix.
             for i in (j + 1)..n {
                 let mult = mat[i * n + j] / u_jj;
-                mat[i * n + j] = mult; // store L[i,j] in place
+                mat[i * n + j] = mult;
                 for k in (j + 1)..n {
                     let uval = mat[j * n + k];
                     mat[i * n + k] -= mult * uval;
@@ -183,27 +168,21 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             }
         }
 
-        // Extract L and U from the dense factored matrix.
+        // Extract sparse L and U from the dense factored matrix.
         let mut l_coo: Vec<(usize, usize, T)> = Vec::new();
         let mut u_coo: Vec<(usize, usize, T)> = Vec::new();
 
         for i in 0..n {
-            for j in 0..=i {
+            for j in 0..i {
                 let v = mat[i * n + j];
-                if j < i && v != T::zero() {
-                    l_coo.push((i, j, v));
-                }
-                // diagonal of L is implicitly 1 — not stored
+                if v != T::zero() { l_coo.push((i, j, v)); }
             }
             for j in i..n {
                 let v = mat[i * n + j];
-                if v != T::zero() {
-                    u_coo.push((i, j, v));
-                }
+                if v != T::zero() { u_coo.push((i, j, v)); }
             }
         }
 
-        // Build CSR factors.
         let (lrp, lci, lv, ldp) = coo_to_csr(n, &l_coo, true);
         let (urp, uci, uv, udp) = coo_to_csr(n, &u_coo, false);
 
@@ -234,15 +213,11 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         }
 
         // Step 1: apply row permutation P to b.
-        // perm_p[j] = original row placed at step j.
-        // The solve is: (PAQ)(Q⁻¹x) = Pb, i.e. LU z = Pb where x = Q z.
         let mut pb = DenseVec::zeros(n);
         {
             let bs  = b.as_slice();
             let pbs = pb.as_mut_slice();
-            for j in 0..n {
-                pbs[j] = bs[self.perm_p[j]];
-            }
+            for j in 0..n { pbs[j] = bs[self.perm_p[j]]; }
         }
 
         // Step 2: forward solve L y = Pb.
@@ -263,21 +238,18 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         )?;
 
         // Step 4: apply inverse column permutation Q⁻¹ z → x.
-        // perm_q[new] = old, so x[old] = z[new]  ↔  x[perm_q[i]] = z[i].
         {
             let zs = z.as_slice();
             let xs = x.as_mut_slice();
-            for i in 0..n {
-                xs[self.perm_q[i]] = zs[i];
-            }
+            for i in 0..n { xs[self.perm_q[i]] = zs[i]; }
         }
 
         Ok(())
     }
 
     fn reset_factors(&mut self) {
-        self.l_row_ptr.clear(); self.l_col_idx.clear(); self.l_values.clear();
-        self.u_row_ptr.clear(); self.u_col_idx.clear(); self.u_values.clear();
+        self.l_row_ptr.clear(); self.l_col_idx.clear(); self.l_values.clear(); self.l_diag_pos.clear();
+        self.u_row_ptr.clear(); self.u_col_idx.clear(); self.u_values.clear(); self.u_diag_pos.clear();
         self.perm_p.clear();
         self.factorized = false;
     }
@@ -285,7 +257,6 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Find the pivot row index in column `j` of the dense matrix (rows `j..n`).
 fn find_pivot_col<T: Scalar>(mat: &[T], n: usize, j: usize, threshold: f64) -> usize {
     let mut best   = j;
     let mut best_v = mat[j * n + j].abs();
@@ -300,14 +271,11 @@ fn find_pivot_col<T: Scalar>(mat: &[T], n: usize, j: usize, threshold: f64) -> u
     best
 }
 
-/// Convert COO to CSR.  `lower = true` → lower-triangular, skip diagonal.
-/// Returns `(row_ptr, col_idx, values, diag_pos)`.
 fn coo_to_csr<T: Scalar>(
     n: usize,
     coo: &[(usize, usize, T)],
     lower: bool,
 ) -> (Vec<usize>, Vec<usize>, Vec<T>, Vec<usize>) {
-    // Sort by (row, col).
     let mut sorted = coo.to_vec();
     sorted.sort_unstable_by_key(|&(r, c, _)| (r, c));
 
@@ -321,11 +289,8 @@ fn coo_to_csr<T: Scalar>(
 
     let mut diag_pos = vec![0usize; n];
     if lower {
-        // Unit lower-triangular: diagonal is implicit; point diag_pos[i] to
-        // the start of row i (used only as a sentinel).
         for i in 0..n { diag_pos[i] = row_ptr[i]; }
     } else {
-        // Upper-triangular: locate diagonal.
         for i in 0..n {
             for k in row_ptr[i]..row_ptr[i + 1] {
                 if col_idx[k] == i { diag_pos[i] = k; break; }

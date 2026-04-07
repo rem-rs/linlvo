@@ -6,11 +6,17 @@
 //!
 //! Only the lower-triangular part of `A` is read (including diagonal).
 //!
-//! ## Algorithm
+//! ## Algorithm: Left-looking sparse Cholesky
 //!
-//! Left-looking dense Cholesky, column by column:
-//!   `L[j,j] = sqrt(A[j,j] − Σ_{k<j} L[j,k]²)`
-//!   `L[i,j] = (A[i,j] − Σ_{k<j} L[i,k] L[j,k]) / L[j,j]`  for i > j
+//! Column-by-column, using the elimination tree to determine the non-zero
+//! pattern of each column of L before computing values.  Memory is O(nnz(L)).
+//!
+//! For column j:
+//! 1. Scatter A[j:n, j] into a dense working vector x.
+//! 2. Find the reach set: columns k < j where L[j,k] != 0, via DFS on etree.
+//! 3. For each k in the reach set (topological order):
+//!    x[j] -= L[j,k]^2  and  x[i] -= L[i,k]*L[j,k] for i > j in col k of L.
+//! 4. L[j,j] = sqrt(x[j]).  L[i,j] = x[i] / L[j,j].
 //!
 //! ## Reference
 //!
@@ -22,6 +28,7 @@ use crate::direct::{
     DirectSolver, DirectOptions,
     ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd},
     triangular::forward_solve,
+    etree::elimination_tree,
 };
 
 // ─── Public struct ────────────────────────────────────────────────────────────
@@ -90,61 +97,163 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
         // Apply symmetric permutation.
         let b = permute_symmetric(a, &self.perm);
 
-        // Dense n×n lower-triangular factorisation.
-        // Store only lower triangle (column-major for cache efficiency on column access).
-        // We use a flat row-major array: mat[i*n+j], i >= j.
-        let mut l: Vec<T> = vec![T::zero(); n * n];
+        // Compute elimination tree for the permuted matrix.
+        let parent = elimination_tree(&b);
 
-        // Scatter lower-triangular part of B into l.
+        // Build lower-triangular column access for B:
+        // col_ptr_lo[j]..col_ptr_lo[j+1] → (row, value) for entries B[row, j] with row > j.
+        let mut col_ptr_lo = vec![0usize; n + 1];
         for i in 0..n {
             for k in b.row_ptr()[i]..b.row_ptr()[i + 1] {
                 let j = b.col_idx()[k];
-                if j <= i {
-                    l[i * n + j] = b.values()[k];
+                if j < i { col_ptr_lo[j + 1] += 1; }
+            }
+        }
+        for i in 0..n { col_ptr_lo[i + 1] += col_ptr_lo[i]; }
+        let mut col_row_lo = vec![0usize; col_ptr_lo[n]];
+        let mut col_val_lo = vec![T::zero(); col_ptr_lo[n]];
+        {
+            let mut fill_pos = col_ptr_lo.clone();
+            for i in 0..n {
+                for k in b.row_ptr()[i]..b.row_ptr()[i + 1] {
+                    let j = b.col_idx()[k];
+                    if j < i {
+                        let p = fill_pos[j];
+                        col_row_lo[p] = i;
+                        col_val_lo[p] = b.values()[k];
+                        fill_pos[j] += 1;
+                    }
                 }
             }
         }
 
-        // Left-looking Cholesky column by column.
+        // ── Left-looking sparse Cholesky ──────────────────────────────────────
+        // L stored column-by-column in CSC during factorization.
+        let mut l_csc_col_ptr: Vec<usize> = vec![0usize; n + 1];
+        let mut l_csc_rows:    Vec<usize> = Vec::new();
+        let mut l_csc_vals:    Vec<T>     = Vec::new();
+
+        // Dense working vector (size n; only j..n used per column j).
+        let mut x: Vec<T>           = vec![T::zero(); n];
+        let mut touched: Vec<usize> = Vec::new();
+        let mut mark = vec![usize::MAX; n]; // mark[k] = j → visited in column j
+
         for j in 0..n {
-            // Update l[j, j]: subtract sum of l[j, k]^2 for k < j.
-            for k in 0..j {
-                let ljk = l[j * n + k];
-                l[j * n + j] -= ljk * ljk;
+            // ── Scatter A[j:n, j] into x ─────────────────────────────────────
+            // Diagonal entry B[j, j].
+            for k in b.row_ptr()[j]..b.row_ptr()[j + 1] {
+                if b.col_idx()[k] == j {
+                    x[j] = b.values()[k];
+                    touched.push(j);
+                    break;
+                }
             }
-            if l[j * n + j] <= T::zero() {
+            // Sub-diagonal entries B[i, j] for i > j.
+            for idx in col_ptr_lo[j]..col_ptr_lo[j + 1] {
+                let i = col_row_lo[idx];
+                x[i] = col_val_lo[idx];
+                touched.push(i);
+            }
+
+            // ── Compute reach set via DFS from lower entries of row j ─────────
+            // Lower entries of row j: B[j, k] with k < j.
+            let mut reach: Vec<usize> = Vec::new();
+            let mut dfs_stack: Vec<usize> = Vec::new();
+            for k in b.row_ptr()[j]..b.row_ptr()[j + 1] {
+                let col = b.col_idx()[k];
+                if col < j && mark[col] != j {
+                    dfs_stack.push(col);
+                }
+            }
+            while let Some(r) = dfs_stack.pop() {
+                if mark[r] == j { continue; }
+                mark[r] = j;
+                reach.push(r);
+                let p = parent[r];
+                if p < j && mark[p] != j {
+                    dfs_stack.push(p);
+                }
+            }
+            reach.sort_unstable(); // topological order
+
+            // ── Left-looking updates ──────────────────────────────────────────
+            for &k in &reach {
+                // Find L[j, k] in column k of L (CSC).
+                let ljk = find_in_col(&l_csc_rows, &l_csc_vals, &l_csc_col_ptr, k, j);
+                if ljk == T::zero() { continue; }
+
+                x[j] -= ljk * ljk;
+
+                for idx in l_csc_col_ptr[k]..l_csc_col_ptr[k + 1] {
+                    let i = l_csc_rows[idx];
+                    if i <= j { continue; }
+                    x[i] -= l_csc_vals[idx] * ljk;
+                    touched.push(i);
+                }
+            }
+
+            // ── Compute L[j,j] and column j of L ─────────────────────────────
+            if x[j] <= T::zero() {
+                for &t in &touched { x[t] = T::zero(); }
                 return Err(SolverError::SingularMatrix { row: j });
             }
-            let ljj = l[j * n + j].sqrt();
-            l[j * n + j] = ljj;
+            let ljj = x[j].sqrt();
 
-            // Update l[i, j] for i > j.
-            for i in (j + 1)..n {
-                for k in 0..j {
-                    let lik = l[i * n + k];
-                    let ljk = l[j * n + k];
-                    l[i * n + j] -= lik * ljk;
+            let col_start = l_csc_rows.len();
+            l_csc_rows.push(j); // diagonal
+            l_csc_vals.push(ljj);
+
+            // Sub-diagonal: only indices that are in touched and > j.
+            // Collect unique sub-diagonal touched entries.
+            touched.sort_unstable();
+            touched.dedup();
+            for &i in touched.iter().filter(|&&t| t > j) {
+                let lij = x[i] / ljj;
+                if lij != T::zero() {
+                    l_csc_rows.push(i);
+                    l_csc_vals.push(lij);
                 }
-                l[i * n + j] = l[i * n + j] / ljj;
+            }
+            l_csc_col_ptr[j + 1] = l_csc_col_ptr[j] + (l_csc_rows.len() - col_start);
+
+            // Clear x.
+            for &t in &touched { x[t] = T::zero(); }
+            x[j] = T::zero();
+            touched.clear();
+        }
+
+        // ── Convert L from CSC to CSR ─────────────────────────────────────────
+        let nnz = l_csc_rows.len();
+        let mut l_row_ptr  = vec![0usize; n + 1];
+        let mut l_col_idx  = vec![0usize; nnz];
+        let mut l_values   = vec![T::zero(); nnz];
+        let mut l_diag_pos = vec![0usize; n];
+
+        for &r in &l_csc_rows { l_row_ptr[r + 1] += 1; }
+        for i in 0..n { l_row_ptr[i + 1] += l_row_ptr[i]; }
+
+        let mut pos = l_row_ptr.clone();
+        for j in 0..n {
+            for k in l_csc_col_ptr[j]..l_csc_col_ptr[j + 1] {
+                let r = l_csc_rows[k];
+                let v = l_csc_vals[k];
+                let p = pos[r];
+                l_col_idx[p] = j;
+                l_values[p]  = v;
+                pos[r] += 1;
             }
         }
 
-        // Extract sparse L from the dense array (non-zeros only).
-        let mut l_coo: Vec<(usize, usize, T)> = Vec::new();
         for i in 0..n {
-            for j in 0..=i {
-                let v = l[i * n + j];
-                if v != T::zero() {
-                    l_coo.push((i, j, v));
-                }
+            for k in l_row_ptr[i]..l_row_ptr[i + 1] {
+                if l_col_idx[k] == i { l_diag_pos[i] = k; break; }
             }
         }
 
-        let (rp, ci, v, dp) = coo_to_csr_lower(n, &l_coo);
-        self.l_row_ptr  = rp;
-        self.l_col_idx  = ci;
-        self.l_values   = v;
-        self.l_diag_pos = dp;
+        self.l_row_ptr  = l_row_ptr;
+        self.l_col_idx  = l_col_idx;
+        self.l_values   = l_values;
+        self.l_diag_pos = l_diag_pos;
         self.factorized = true;
         Ok(())
     }
@@ -205,6 +314,23 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
     }
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Find value at `row` in column `col` of a CSC matrix. Returns zero if absent.
+#[inline]
+fn find_in_col<T: Scalar>(
+    rows: &[usize],
+    vals: &[T],
+    col_ptr: &[usize],
+    col: usize,
+    row: usize,
+) -> T {
+    for k in col_ptr[col]..col_ptr[col + 1] {
+        if rows[k] == row { return vals[k]; }
+    }
+    T::zero()
+}
+
 // ─── Backward solve Lᵀ x = b ─────────────────────────────────────────────────
 
 /// Solve `Lᵀ x = b` given lower-triangular `L` stored in CSR.
@@ -228,38 +354,10 @@ fn backward_solve_lt<T: Scalar>(
         }
         xs[i] = xs[i] / l_ii;
         let xi = xs[i];
-        // Subtract L[i, j] * xi from xs[j] for each j < i (column j of Lᵀ row i).
         for k in l_row_ptr[i]..l_diag_pos[i] {
             let j = l_col_idx[k];
             xs[j] -= l_values[k] * xi;
         }
     }
     Ok(())
-}
-
-// ─── COO → CSR helper ────────────────────────────────────────────────────────
-
-fn coo_to_csr_lower<T: Scalar>(
-    n: usize,
-    coo: &[(usize, usize, T)],
-) -> (Vec<usize>, Vec<usize>, Vec<T>, Vec<usize>) {
-    let mut sorted = coo.to_vec();
-    sorted.sort_unstable_by_key(|&(r, c, _)| (r, c));
-
-    let mut row_ptr  = vec![0usize; n + 1];
-    let mut col_idx  = Vec::with_capacity(coo.len());
-    let mut values   = Vec::with_capacity(coo.len());
-    let mut diag_pos = vec![0usize; n];
-
-    for &(r, _, _) in &sorted { row_ptr[r + 1] += 1; }
-    for i in 0..n { row_ptr[i + 1] += row_ptr[i]; }
-    for &(_, c, v) in &sorted { col_idx.push(c); values.push(v); }
-
-    for i in 0..n {
-        for k in row_ptr[i]..row_ptr[i + 1] {
-            if col_idx[k] == i { diag_pos[i] = k; break; }
-        }
-    }
-
-    (row_ptr, col_idx, values, diag_pos)
 }
