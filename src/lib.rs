@@ -13,6 +13,7 @@ pub mod iterative;
 pub mod amg;
 pub mod parallel;
 pub mod eigen;
+pub mod direct;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -53,4 +54,10 @@ pub use crate::eigen::{
     LanczosSvd, SvdResult,
     QuadraticEigen,
     NonlinearOperator, NepNewton,
+};
+
+pub use crate::direct::{
+    DirectSolver, DirectOptions, DirectSolverPrecond,
+    SparseLu, SparseCholesky,
+    ordering::{OrderingMethod, rcm, colamd},
 };
