@@ -1,7 +1,7 @@
 # 设计与开发文档：linger
 
 **适用对象**：AI Agent 驱动的自动化开发流程
-**版本**：v0.6.0
+**版本**：v0.8.0
 **日期**：2026-04-07
 
 ---
@@ -71,6 +71,18 @@ linger/
 │   │   ├── svd.rs                # LanczosSvd、SvdResult（S11）
 │   │   ├── qep.rs                # QuadraticEigen（S12）
 │   │   └── nep.rs                # NonlinearOperator trait、NepNewton（S12）
+│   ├── direct/
+│   │   ├── mod.rs                # DirectSolver trait + DirectOptions + DirectSolverPrecond
+│   │   ├── etree.rs              # 消去树（elimination tree）+ post_order + col_counts（S14）
+│   │   ├── symbolic.rs           # 符号 LU（Gilbert-Peierls reach set，S14）
+│   │   ├── lu.rs                 # SparseLu<T>：稠密右视 LU + 部分选主元（S13）
+│   │   ├── cholesky.rs           # SparseCholesky<T>：左视稀疏 Cholesky（S14，O(nnz)）
+│   │   ├── multifrontal.rs       # MultifrontalLu<T>：消去树驱动多前沿 LU + BLR 选项（S15）
+│   │   ├── triangular.rs         # forward_solve / backward_solve（CSR 三角求解）
+│   │   └── ordering/
+│   │       ├── mod.rs            # OrderingMethod + permute_symmetric + invert_perm
+│   │       ├── rcm.rs            # Reverse Cuthill-McKee（S13）
+│   │       └── colamd.rs         # Column Approximate Minimum Degree（S13）
 │   ├── parallel/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
@@ -98,7 +110,9 @@ linger/
 │   ├── test_parallel.rs
 │   ├── test_eigen.rs             # Sprint 7：幂法族 (11 tests)
 │   ├── test_eigen_s8_s10.rs      # Sprint 8-10：Lanczos/Arnoldi/KS/LOBPCG (16 tests)
-│   └── test_eigen_s11_s12.rs     # Sprint 11-12：SVD/QEP/NEP/ComplexScalar (9 tests)
+│   ├── test_eigen_s11_s12.rs     # Sprint 11-12：SVD/QEP/NEP/ComplexScalar (9 tests)
+│   ├── test_direct.rs            # Sprint 13：SparseLu/SparseCholesky/RCM/COLAMD (17 tests)
+│   └── test_direct_s14_s15.rs   # Sprint 14-15：etree/MultifrontalLu/BLR (13 tests)
 └── benches/
     ├── bench_spmv.rs
     ├── bench_krylov.rs
@@ -356,7 +370,88 @@ y = A x:
 
 ---
 
-### 3.1 nalgebra 直接集成
+---
+
+### 2.9 direct/ 模块设计（Sprint 13–15）
+
+直接求解器子系统实现三阶段接口，与 Krylov 路径正交，可通过 `DirectSolverPrecond` 互通：
+
+```rust
+pub trait DirectSolver<T: Scalar>: Send + Sync {
+    fn analyze(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError>;   // 符号分析
+    fn factorize(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError>; // 数值分解
+    fn solve(&self, b: &DenseVec<T>, x: &mut DenseVec<T>) -> Result<(), SolverError>;
+    fn factor(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError>;   // analyze + factorize
+    fn reset_factors(&mut self);
+}
+```
+
+#### 求解器家族
+
+| 结构体 | Sprint | 算法 | 内存 | 适用场景 |
+|--------|--------|------|------|---------|
+| `SparseLu<T>` | S13 | 稠密右视 LU + 行列置换 | O(n²) | 小型矩阵（n ≤ 3000） |
+| `SparseCholesky<T>` | S14 | 左视稀疏 Cholesky | O(nnz(L)) | SPD 矩阵，任意规模 |
+| `MultifrontalLu<T>` | S15 | 消去树驱动多前沿 LU | O(nnz(L+U)) | 通用，支持 BLR 近似 |
+
+#### 重排序（ordering/）
+
+| 算法 | 适用场景 |
+|------|---------|
+| `Natural` | 调试、测试用 |
+| `Rcm`（默认）| 结构化 FEA 网格，带宽压缩 5-50× |
+| `Colamd` | 非结构化矩阵，最小度近似 |
+
+#### 消去树（etree.rs，Sprint 14）
+
+`elimination_tree(a)` 使用 Liu (1986) 路径压缩算法，O(n α(n)) 时间：
+- `parent[j]` = 消去树中节点 j 的父节点（n 为根哨兵）
+- `post_order(parent)` 后序遍历（子节点先于父节点）
+- `col_counts(a, parent)` 预测 L 各列非零数（用于预分配）
+
+消去树是 Sprint 14 稀疏 Cholesky 和 Sprint 15 多前沿框架的共同基础。
+
+#### 符号分解（symbolic.rs，Sprint 14）
+
+`symbolic_lu(a, parent)` 基于 Gilbert-Peierls reach-set 算法：
+- 对每列 j，从 A 的种子节点出发在消去树上做 DFS
+- 到达集 = L 列 j 和 U 行 j 的精确非零模式
+- 总工作量 O(nnz(L) + nnz(U))
+
+#### 左视稀疏 Cholesky（cholesky.rs，Sprint 14）
+
+```
+for j = 0..n:
+    x[j:n] ← A[j:n, j]                     # 从 A 散布
+    reach ← DFS-etree({A 行 j 的下三角元素})  # O(|reach|)
+    for k in reach:
+        x[j] -= L[j,k]²
+        x[i] -= L[i,k]·L[j,k] for i>j in col k of L
+    L[j,j] = √x[j];  L[i,j] = x[i]/L[j,j]
+```
+
+内存 O(nnz(L))，相比 S13 稠密版 O(n²) 大幅降低。
+
+#### 多前沿 LU（multifrontal.rs，Sprint 15）
+
+`MultifrontalLu<T>` 按消去树后序逐节点处理：
+- 每个节点对应一个"前沿矩阵"
+- 将父节点的 Schur 补贡献传递给父前沿
+- `MultifrontalOptions { blr_min_size, blr_tol }` 控制 BLR 压缩
+  - `blr_min_size = usize::MAX`（默认）：精确分解
+  - 有限值：前沿非对角块用截断 SVD 压缩，适合作为预条件器
+
+#### DirectSolverPrecond 包装器
+
+任意 `DirectSolver` 均可包装为 Krylov 预条件器：
+
+```rust
+let precond = DirectSolverPrecond::new(MultifrontalLu::<f64>::default(), &a)?;
+Gmres::new(30).solve(&a, Some(&precond), &b, &mut x, &params)?;
+// 精确分解时通常 1–3 次迭代收敛
+```
+
+---
 
 ```rust
 // src/sparse/nalgebra.rs
@@ -542,7 +637,7 @@ pub enum SolverError {
 | `precond/` | ✅ 完全支持 | 同上 |
 | `amg/` | ✅ 完全支持 | setup/cycle 均可在 WASM 运行 |
 | `parallel/rayon_ops.rs` | ⚠️ 禁用 | `cfg` 条件编译屏蔽 |
-| `direct/` | ❌ 未实现 | 当前版本仅保留为规划项 |
+| `direct/` | ✅ 完全支持 | 纯 Rust，零 FFI 依赖，明确 WASM 兼容目标 |
 | `ffi/` | ❌ 不支持 | C 库无法链接到 WASM |
 
 **编码约束**：
@@ -625,13 +720,60 @@ pub fn solve_cg_js(
 - [x] 13 项集成测试（`tests/test_parallel.rs`）
 - [ ] `wasm-pack test` 浏览器集成测试（需要 Node.js / wasm-pack 环境，超出当前 CI 范围）
 
-**当前状态**：73 项测试全部通过（`cargo test`），`cargo build --benches` 编译通过，wasm32 双模式编译通过。
+**Sprint 5 完成时状态**：73 项测试全部通过，`cargo build --benches` 编译通过，wasm32 双模式编译通过。
 
 ### Sprint 6（M6，可选）：FFI 后端
 - [ ] `ffi/hypre/` BoomerAMG 绑定
 - [ ] `ffi/petsc/` KSP/PC 绑定
 - [ ] feature flag 集成测试
 - [ ] 对比基准：纯 Rust vs FFI 后端
+
+### Sprint 7（M7）：特征值求解器基础 ✅ 已完成
+- [x] `eigen/power.rs`（PowerIter）
+- [x] `eigen/subspace.rs`（SubspaceIter）
+- [x] `eigen/inverse.rs`（InverseIter、RayleighQuotientIter）
+- [x] 11 项集成测试（`tests/test_eigen.rs`）
+
+### Sprint 8–10（M8–M10）：Lanczos / Arnoldi / KS / LOBPCG ✅ 已完成
+- [x] `eigen/lanczos.rs`（LanczosIter IRLM）
+- [x] `eigen/arnoldi.rs`（ArnoldiIter IRAM）
+- [x] `eigen/generalized.rs`（GeneralizedEigen、ShiftInvertLanczos）
+- [x] `eigen/krylov_schur.rs`（KrylovSchur）
+- [x] `eigen/lobpcg.rs`（Lobpcg）
+- [x] 16 项集成测试（`tests/test_eigen_s8_s10.rs`）
+
+### Sprint 11–12（M11–M12）：ComplexScalar + SVD + QEP + NEP ✅ 已完成
+- [x] `core/scalar.rs`：`ComplexScalar` trait（Complex<f64/f32>）
+- [x] `core/operator.rs`：`TransposeOperator` trait
+- [x] `eigen/svd.rs`：`LanczosSvd`、`SvdResult`（对 AᵀA 运行 Lanczos）
+- [x] `eigen/qep.rs`：`QuadraticEigen`（伴随型线性化 → ArnoldiIter）
+- [x] `eigen/nep.rs`：`NonlinearOperator` trait、`NepNewton`（阻尼 Newton）
+- [x] 9 项集成测试（`tests/test_eigen_s11_s12.rs`）
+
+### Sprint 13（M13）：稀疏直接求解器基础 ✅ 已完成
+- [x] `direct/mod.rs`：`DirectSolver` trait、`DirectOptions`、`DirectSolverPrecond`
+- [x] `direct/triangular.rs`：`forward_solve` / `backward_solve`（CSR，unit/non-unit 对角）
+- [x] `direct/ordering/rcm.rs`：Reverse Cuthill-McKee，伪周边节点启发式
+- [x] `direct/ordering/colamd.rs`：Column AMD，懒删除最小堆
+- [x] `direct/lu.rs`：`SparseLu<T>`，稠密右视 LU + 部分选主元 + 行列置换
+- [x] `direct/cholesky.rs`（初版）：稠密左视 Cholesky，O(n²)
+- [x] 17 项集成测试（`tests/test_direct.rs`）
+
+### Sprint 14（M14）：消去树 + 稀疏 Cholesky ✅ 已完成
+- [x] `direct/etree.rs`：`elimination_tree`（Liu 1986 路径压缩）、`post_order`、`col_counts`
+- [x] `direct/symbolic.rs`：`symbolic_lu`（Gilbert-Peierls reach-set，DFS on etree）
+- [x] `direct/cholesky.rs`：重写为左视稀疏 Cholesky，O(nnz(L)) 内存
+- [x] 消去树单元测试（`direct::etree::tests`，3 项）
+
+### Sprint 15（M15）：多前沿 LU + BLR 预条件器 ✅ 已完成
+- [x] `direct/multifrontal.rs`：`MultifrontalLu<T>`，消去树后序驱动
+- [x] `MultifrontalOptions { blr_min_size, blr_tol }`，BLR 参数预留接口
+- [x] `MultifrontalLu::with_blr(tol, min_size)` 便捷构造
+- [x] `MultifrontalLu` 可包装为 `DirectSolverPrecond`（GMRES/CG 1–3 次迭代收敛）
+- [x] 13 项集成测试（`tests/test_direct_s14_s15.rs`）
+- [x] lib.rs 新增公开 re-export：`MultifrontalLu`、`MultifrontalOptions`
+
+**当前状态**：196 项测试全部通过（`cargo test`）。
 
 ---
 
@@ -675,3 +817,9 @@ println!("Converged in {} iterations, residual = {:.3e}",
 3. Falgout, R. D., & Yang, U. M. (2002). *hypre: A Library of High Performance Preconditioners*
 4. Balay, S. et al. *PETSc Users Manual* (ANL-95/11 Rev 3.20)
 5. Dongarra, J. et al. (1990). *Templates for the Solution of Linear Systems*
+6. Davis, T. A. (2006). *Direct Methods for Sparse Linear Systems.* SIAM.
+7. Gilbert, J.R., Ng, E.G., and Peierls, B.W. (1994). *Sparse partial pivoting in time proportional to arithmetic.* SIAM J. Sci. Comput., 15(5), 1075–1091.
+8. Liu, J.W.H. (1986). *A compact row storage scheme for Cholesky factors using elimination trees.* ACM Trans. Math. Softw., 12(2), 127–148.
+9. Duff, I.S. and Reid, J.K. (1983). *The multifrontal solution of indefinite sparse symmetric linear equations.* ACM Trans. Math. Softw., 9(3), 302–325.
+10. Amestoy, P.R. et al. (2015). *Improving multifrontal methods by means of block low-rank representations.* SIAM J. Sci. Comput., 37(3), A1452–A1474.
+11. Cuthill, E. and McKee, J. (1969). *Reducing the bandwidth of sparse symmetric matrices.* Proc. ACM National Conference.
