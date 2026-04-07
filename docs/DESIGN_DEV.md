@@ -1,8 +1,8 @@
 # 设计与开发文档：linger
 
 **适用对象**：AI Agent 驱动的自动化开发流程
-**版本**：v0.5.0
-**日期**：2026-03-31
+**版本**：v0.6.0
+**日期**：2026-04-07
 
 ---
 
@@ -17,15 +17,15 @@ linger/
 │   ├── lib.rs                    # crate root，re-exports 公开 API
 │   ├── core/
 │   │   ├── mod.rs
-│   │   ├── scalar.rs             # Scalar trait（f32/f64 泛型边界）
+│   │   ├── scalar.rs             # Scalar trait（f32/f64）+ ComplexScalar trait（Complex<f32/f64>）
 │   │   ├── vector.rs             # Vector trait + 默认实现
-│   │   ├── operator.rs           # LinearOperator trait
+│   │   ├── operator.rs           # LinearOperator trait + TransposeOperator trait
 │   │   ├── preconditioner.rs     # Preconditioner trait
 │   │   ├── solver.rs             # KrylovSolver trait + SolverParams + SolverResult
 │   │   └── error.rs              # SolverError 枚举
 │   ├── sparse/
 │   │   ├── mod.rs
-│   │   ├── csr.rs                # 自有 CsrMatrix<T>
+│   │   ├── csr.rs                # 自有 CsrMatrix<T>（impl LinearOperator + TransposeOperator）
 │   │   ├── csc.rs                # 自有 CscMatrix<T>
 │   │   ├── coo.rs                # CooMatrix<T>（装配阶段）
 │   │   ├── bsr.rs                # BlockSparseRow<T>
@@ -58,6 +58,19 @@ linger/
 │   │   ├── smoother.rs           # 平滑器（Jacobi/GS/Chebyshev）
 │   │   ├── cycle.rs              # V/W/F-cycle 实现
 │   │   └── setup.rs              # AMG 层次建立（setup phase）
+│   ├── eigen/
+│   │   ├── mod.rs                # EigenSolver/Params/Result/Which + matfree_gmres + 辅助函数
+│   │   ├── power.rs              # PowerIter（S7）
+│   │   ├── subspace.rs           # SubspaceIter（S7）
+│   │   ├── inverse.rs            # InverseIter、RayleighQuotientIter（S7）
+│   │   ├── lanczos.rs            # LanczosIter IRLM（S8）
+│   │   ├── arnoldi.rs            # ArnoldiIter IRAM（S8）
+│   │   ├── generalized.rs        # GeneralizedEigen、ShiftInvertLanczos（S9）
+│   │   ├── krylov_schur.rs       # KrylovSchur（S10）
+│   │   ├── lobpcg.rs             # Lobpcg（S10）
+│   │   ├── svd.rs                # LanczosSvd、SvdResult（S11）
+│   │   ├── qep.rs                # QuadraticEigen（S12）
+│   │   └── nep.rs                # NonlinearOperator trait、NepNewton（S12）
 │   ├── parallel/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
@@ -77,11 +90,15 @@ linger/
 │   ├── common/
 │   │   └── mod.rs                # 共用测试辅助（MMS 制造解）
 │   ├── test_sparse_ops.rs
-│   ├── test_direct_solvers.rs
 │   ├── test_krylov.rs
 │   ├── test_precond.rs
+│   ├── test_sprint3.rs
 │   ├── test_amg.rs
-│   └── test_integration.rs       # 完整 FEA 线性系统端到端
+│   ├── test_amg_internals.rs
+│   ├── test_parallel.rs
+│   ├── test_eigen.rs             # Sprint 7：幂法族 (11 tests)
+│   ├── test_eigen_s8_s10.rs      # Sprint 8-10：Lanczos/Arnoldi/KS/LOBPCG (16 tests)
+│   └── test_eigen_s11_s12.rs     # Sprint 11-12：SVD/QEP/NEP/ComplexScalar (9 tests)
 └── benches/
     ├── bench_spmv.rs
     ├── bench_krylov.rs
@@ -94,29 +111,35 @@ linger/
 
 ### 2.1 core/scalar.rs
 
-定义数值泛型边界，所有算法对 `T: Scalar` 泛型：
+定义数值泛型边界，所有算法对 `T: Scalar` 泛型。Sprint 11 新增 `ComplexScalar`：
 
 ```rust
 use num_traits::{Float, NumAssign, Zero, One};
-use std::fmt::Debug;
 
-pub trait Scalar:
-    Float + NumAssign + Zero + One + Copy + Debug + Send + Sync + 'static
-{
-    fn sqrt(self) -> Self;
-    fn abs(self) -> Self;
+pub trait Scalar: Float + NumAssign + Zero + One + Copy + Debug + Send + Sync + 'static {
     fn machine_epsilon() -> Self;
+    fn from_f64(v: f64) -> Self;
 }
 
-impl Scalar for f64 {
-    fn machine_epsilon() -> Self { f64::EPSILON }
-    // ...
+/// 覆盖复数类型的 trait（Scalar 自动实现 ComplexScalar）
+pub trait ComplexScalar: NumAssign + Zero + One + Copy + Debug + Send + Sync + 'static {
+    type Real: Scalar;   // 实部类型
+    fn from_f64(v: f64) -> Self;
+    fn real(self) -> Self::Real;
+    fn imag(self) -> Self::Real;
+    fn abs(self) -> Self::Real;  // 模
+    fn conj(self) -> Self;
+    fn sqrt(self) -> Self;
+    fn is_finite(self) -> bool;
+    fn machine_epsilon() -> Self::Real;
 }
 
-impl Scalar for f32 {
-    fn machine_epsilon() -> Self { f32::EPSILON }
-    // ...
-}
+// blanket impl：所有 Scalar 自动实现 ComplexScalar（Real = Self）
+impl<T: Scalar> ComplexScalar for T { ... }
+
+// 显式 impl：
+impl ComplexScalar for Complex<f64> { type Real = f64; ... }
+impl ComplexScalar for Complex<f32> { type Real = f32; ... }
 ```
 
 ### 2.2 core/vector.rs
@@ -255,7 +278,83 @@ AMG 分三个阶段：
 
 ---
 
-## 3. 适配层设计
+### 2.8 eigen/ 模块设计（Sprint 7–12）
+
+特征值子系统建立在统一的 trait 体系上：
+
+```rust
+pub trait EigenSolver<T: Scalar> {
+    fn solve<Op: LinearOperator<Vector = DenseVec<T>>>(
+        &self, op: &Op, params: &EigenParams<T>,
+    ) -> Result<EigenResult<T>, SolverError>;
+}
+```
+
+#### 算法分层
+
+| 层次 | 算法 | Sprint | 适用场景 |
+|------|------|--------|---------|
+| 基础迭代 | PowerIter、SubspaceIter | S7 | 最大特征值，初始探测 |
+| 移位反迭代 | InverseIter、RayleighQuotientIter | S7 | 指定区域单特征值 |
+| Krylov 子空间 | LanczosIter (IRLM)、ArnoldiIter (IRAM) | S8 | 多特征值；对称/非对称 |
+| 广义特征值 | ShiftInvertLanczos、GeneralizedEigen | S9 | `Ax = λBx` |
+| 鲁棒重启 | KrylovSchur、Lobpcg | S10 | 生产级；FEA 模态 |
+| SVD | LanczosSvd | S11 | 最大奇异值/向量 |
+| QEP | QuadraticEigen | S12 | 阻尼结构动力学 |
+| NEP | NepNewton | S12 | 非线性特征值，Newton |
+
+#### core/operator.rs 扩展（S11）
+
+```rust
+pub trait TransposeOperator: LinearOperator {
+    fn apply_transpose(&self, x: &Self::Vector, y: &mut Self::Vector);
+}
+
+// CsrMatrix<T> 实现 TransposeOperator（scatter-based Aᵀ x）
+```
+
+#### SVD 设计（eigen/svd.rs）
+
+对 `AᵀA` 运行 `LanczosIter`，σᵢ = √λᵢ，左奇异向量 uᵢ = A vᵢ / σᵢ。
+`AtAOperator` 包装器透明组合两次 `apply` + `apply_transpose`。
+
+```rust
+// 关键约束：Op 必须同时实现 LinearOperator 和 TransposeOperator
+pub fn solve<T, Op>(&self, op: &Op, k: usize, tol: T, max_iter: usize, vecs: bool)
+    -> Result<SvdResult<T>, SolverError>
+where Op: LinearOperator<Vector = DenseVec<T>> + TransposeOperator
+```
+
+#### QEP 线性化（eigen/qep.rs）
+
+伴随型线性化（companion form）：
+
+```
+A = [[0, I], [-K, -C]],  B = I
+
+y = A x:
+  x = [x₁; x₂]
+  y[0..n] = x₂
+  y[n..2n] = -Kx₁ - Cx₂
+```
+
+`QepCompanion<K, C>` 实现 `LinearOperator`，传给 `ArnoldiIter` 求 2n 维特征值。
+结果截取前 n 分量作为物理特征向量。
+
+#### NEP Newton（eigen/nep.rs）
+
+```
+每步：
+  r = T(λ)x
+  δλ = -(xᵀr) / (xᵀT'(λ)x)   — Rayleigh 泛函更新
+  求解 T(λ+ε)w = x             — 正则化反迭代（ε = 1e-6·(1+|λ|)）
+  x ← w / ‖w‖
+  λ ← λ + δλ（带阻尼）
+```
+
+`T'(λ)` 默认使用中心有限差分；用户可重写 `apply_dt` 提供精确导数。
+
+---
 
 ### 3.1 nalgebra 直接集成
 

@@ -130,6 +130,23 @@ linger
 | MPI 接口抽象（trait） | 为分布式预留 | P1 |
 | rsmpi 集成 | 实际 MPI 绑定 | P2 |
 
+#### 2.2.7 特征值求解器（Sprint 7–12，已完成）
+
+| 模块 | 内容 | Sprint |
+|------|------|--------|
+| `eigen/power.rs` | PowerIter、SubspaceIter | S7 |
+| `eigen/inverse.rs` | InverseIter、RayleighQuotientIter | S7 |
+| `eigen/lanczos.rs` | LanczosIter (IRLM)，对称算子 | S8 |
+| `eigen/arnoldi.rs` | ArnoldiIter (IRAM)，通用算子 | S8 |
+| `eigen/generalized.rs` | ShiftInvertLanczos、GeneralizedEigen (Ax=λBx) | S9 |
+| `eigen/krylov_schur.rs` | KrylovSchur，鲁棒 Schur 向量重启 | S10 |
+| `eigen/lobpcg.rs` | Lobpcg，块 CG for SPD | S10 |
+| `core/scalar.rs` | ComplexScalar trait，Complex<f32/f64> 支持 | S11 |
+| `core/operator.rs` | TransposeOperator trait，CsrMatrix 实现 | S11 |
+| `eigen/svd.rs` | LanczosSvd，部分 SVD via AᵀA | S11 |
+| `eigen/qep.rs` | QuadraticEigen，(K+λC+λ²M)x=0 线性化 | S12 |
+| `eigen/nep.rs` | NonlinearOperator trait + NepNewton | S12 |
+
 ---
 
 ## 3. 接口设计规范
@@ -238,6 +255,7 @@ let result = solver.solve(&matrix, &rhs, &mut x)?;
 | `rayon` | 数据并行 | >= 1.10 |
 | `thiserror` | 错误类型 | >= 2.0 |
 | `num-traits` | 泛型数值 trait | >= 0.2 |
+| `num-complex` | Complex<f32/f64> 类型 | >= 0.4 |
 
 ### 4.2 可选依赖（feature-gated）
 
@@ -270,12 +288,13 @@ mkl = ["dep:intel-mkl-src"]
 wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]
-rayon = { version = "1.10", optional = true }
-thiserror = "2"
-num-traits = "0.2"
+rayon       = { version = "1.10", optional = true }
+thiserror   = "2"
+num-traits  = "0.2"
+num-complex = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nalgebra = { version = "0.33", features = [] }
+nalgebra        = { version = "0.33", features = [] }
 nalgebra-sparse = "0.4"
 ```
 
@@ -303,10 +322,12 @@ nalgebra-sparse = "0.4"
 
 ## 7. 阶段里程碑
 
-| 里程碑 | 内容 | 条件 |
+| 里程碑 | 内容 | 状态 |
 |--------|------|------|
-| M1 | 稀疏矩阵格式 + trait 抽象 + 直接 nalgebra 集成 | P0 完成 |
-| M2 | CG / GMRES / BiCGSTAB + Jacobi/ILU(0) | M1 完成 |
-| M3 | ILUT / SPAI / AMG（SA-AMG） | M2 完成 |
-| M4 | rayon 并行化 + 性能基准 | M2 完成 |
-| M5 | HYPRE/PETSc FFI 可选后端 | M3 完成 |
+| M1 | 稀疏矩阵格式 + trait 抽象 + 直接 nalgebra 集成 | ✓ 完成 |
+| M2 | CG / GMRES / BiCGSTAB + Jacobi/ILU(0) | ✓ 完成 |
+| M3 | ILUT / SPAI / AMG（SA-AMG） | ✓ 完成 |
+| M4 | rayon 并行化 + 性能基准 | ✓ 完成 |
+| M5 | 特征值框架：幂法族 + IRLM + IRAM + KS + LOBPCG | ✓ 完成 (S7–S10) |
+| M6 | ComplexScalar + SVD + QEP + NEP | ✓ 完成 (S11–S12) |
+| M7 | HYPRE/PETSc FFI 可选后端 | 规划中 |

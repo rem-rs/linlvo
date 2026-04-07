@@ -130,15 +130,15 @@ assert!(result.converged);
 ```
 linger/
 ├── core/
-│   ├── scalar.rs          Scalar trait (f32 / f64 generic bound)
+│   ├── scalar.rs          Scalar trait (f32/f64) + ComplexScalar trait (Complex<f32/f64>)
 │   ├── vector.rs          Vector trait + DenseVec<T>
-│   ├── operator.rs        LinearOperator trait
+│   ├── operator.rs        LinearOperator trait + TransposeOperator trait
 │   ├── preconditioner.rs  Preconditioner trait
 │   ├── solver.rs          KrylovSolver trait, SolverParams, SolverResult
 │   └── error.rs           SolverError enum
 ├── sparse/
 │   ├── coo.rs             CooMatrix<T>  — assembly format
-│   ├── csr.rs             CsrMatrix<T>  — primary operator format
+│   ├── csr.rs             CsrMatrix<T>  — primary operator (impl LinearOperator + TransposeOperator)
 │   ├── csc.rs             CscMatrix<T>  — obtained via csr.transpose()
 │   ├── bsr.rs             BsrMatrix<T>  — block sparse row + BsrBuilder
 │   ├── ops.rs             SpMV helpers
@@ -167,6 +167,18 @@ linger/
 │   ├── smoother.rs        Weighted Jacobi / Gauss-Seidel sweeps
 │   ├── cycle.rs           V-cycle / W-cycle
 │   └── setup.rs           AmgHierarchy::build (Galerkin RAP)
+├── eigen/
+│   ├── power.rs           PowerIter — largest-magnitude single eigenpair
+│   ├── subspace.rs        SubspaceIter — k largest eigenpairs
+│   ├── inverse.rs         InverseIter, RayleighQuotientIter
+│   ├── lanczos.rs         LanczosIter (IRLM) — symmetric operators
+│   ├── arnoldi.rs         ArnoldiIter (IRAM) — general operators
+│   ├── generalized.rs     GeneralizedEigen (Ax=λBx), ShiftInvertLanczos
+│   ├── krylov_schur.rs    KrylovSchur — robust restart (Stewart 2001)
+│   ├── lobpcg.rs          Lobpcg — block CG for SPD (Knyazev 2001)
+│   ├── svd.rs             LanczosSvd — partial SVD via Lanczos on AᵀA
+│   ├── qep.rs             QuadraticEigen — (K+λC+λ²M)x=0 via companion linearisation
+│   └── nep.rs             NonlinearOperator trait + NepNewton
 ├── parallel/
 │   └── rayon_ops.rs       parallel_spmv, parallel_axpy, parallel_dot, …
 └── wasm.rs                WasmCsrMatrix, WasmCgSolver, WasmGmresSolver
@@ -174,7 +186,104 @@ linger/
 
 ---
 
-## Core types
+## Eigenvalue solvers
+
+All eigenvalue algorithms implement `EigenSolver<T>` and accept any `LinearOperator`.
+
+```rust
+use linger::{
+    EigenParams, EigenWhich,
+    LanczosIter, ArnoldiIter, KrylovSchur, Lobpcg,
+    LanczosSvd, QuadraticEigen,
+    NonlinearOperator, NepNewton,
+};
+```
+
+### Standard eigenvalue problems (`Ax = λx`)
+
+| Struct | Best for | Notes |
+|--------|----------|-------|
+| `PowerIter` | Largest-magnitude single eigenpair | Simple, no restarts |
+| `SubspaceIter` | k largest eigenpairs | Orthogonal iteration |
+| `InverseIter` | Nearest to a shift | Shift-invert via matrix-free GMRES |
+| `RayleighQuotientIter` | Single eigenpair, cubic convergence | Adaptive shift |
+| `LanczosIter` | k eigenpairs, **symmetric** operators | IRLM; thick restart |
+| `ArnoldiIter` | k eigenpairs, any operator | IRAM; full Hessenberg |
+| `KrylovSchur` | k eigenpairs, any operator (robust) | Stewart 2001; deflation |
+| `Lobpcg` | k smallest, **SPD** operators | Best with AMG precond |
+
+```rust
+let a = laplacian_csr(200);
+let params = EigenParams::new(6, EigenWhich::SmallestAlgebraic);
+let res = LanczosIter::default().solve(&a, &params).unwrap();
+println!("λ = {:?}", res.eigenvalues);
+```
+
+### Generalised eigenvalue problems (`Ax = λBx`)
+
+```rust
+use linger::{GeneralizedEigen, ShiftInvertLanczos};
+
+// ShiftInvertLanczos: shift near σ → targets eigenvalues closest to σ
+let solver = ShiftInvertLanczos::<f64>::new(0.0);  // σ = 0 → smallest eigenvalues
+let res = solver.solve(&a, &params).unwrap();
+```
+
+### Singular Value Decomposition (SVD)
+
+`LanczosSvd` computes the k largest singular values via Lanczos on AᵀA.
+Requires the operator to implement [`TransposeOperator`] — `CsrMatrix` does.
+
+```rust
+let svd = LanczosSvd::default();
+let res = svd.solve(&a, /*k=*/4, /*tol=*/1e-10, /*max_iter=*/500, /*vecs=*/true).unwrap();
+println!("σ = {:?}", res.singular_values);
+// res.left_vectors  → U columns
+// res.right_vectors → V columns
+```
+
+### Quadratic Eigenvalue Problem — QEP (`(K + λC + λ²M)x = 0`)
+
+Structural dynamics modal analysis with damping.  Linearises to a 2n × 2n
+companion standard EVP and delegates to `ArnoldiIter`.
+
+```rust
+let qep = QuadraticEigen::new(4);   // 4 eigenpairs
+let mut params = EigenParams::new(4, EigenWhich::LargestMagnitude);
+let res = qep.solve(&k_mat, &c_mat, &m_mat, &params).unwrap();
+```
+
+### Nonlinear Eigenvalue Problem — NEP (`T(λ)x = 0`)
+
+```rust
+struct MyNep { /* ... */ }
+
+impl NonlinearOperator<f64> for MyNep {
+    fn nrows(&self) -> usize { /* ... */ }
+    fn apply_t(&self, lam: f64, v: &DenseVec<f64>, out: &mut DenseVec<f64>) { /* T(λ)v */ }
+    // apply_dt: defaults to central finite difference — override for exact derivative
+}
+
+let solver = NepNewton::new(/*shift=*/2.9, /*tol=*/1e-9, /*max_iter=*/200);
+let (lam, x) = solver.solve(&my_nep).unwrap();
+```
+
+### `ComplexScalar` trait
+
+The `ComplexScalar` trait extends numeric support to `Complex<f32>` and
+`Complex<f64>`.  Every `Scalar` type also implements `ComplexScalar`
+(real numbers are a special case).
+
+```rust
+use linger::{Complex, ComplexScalar};
+
+let z: Complex<f64> = Complex::new(3.0, 4.0);
+let modulus: f64 = ComplexScalar::abs(z);   // 5.0
+let conj            = ComplexScalar::conj(z); // 3 - 4i
+let re: f64         = ComplexScalar::real(z); // 3.0
+```
+
+---
 
 ### `CsrMatrix<T>`
 
@@ -382,17 +491,20 @@ Note: native `nalgebra` integration is excluded from wasm32 builds. The core CSR
 ## Running tests and benchmarks
 
 ```bash
-# All tests (121 tests across 8 suites)
+# All tests (154 tests across 11 suites)
 cargo test
 
 # Individual suites
-cargo test --test test_sparse_ops       # CSR/CSC structure operations (26 tests)
-cargo test --test test_krylov           # Core Krylov solvers (15 tests)
-cargo test --test test_precond          # Basic preconditioners (11 tests)
-cargo test --test test_sprint3          # Advanced precond + FGMRES/LGMRES (21 tests)
-cargo test --test test_amg              # AMG hierarchy and cycles (10 tests)
-cargo test --test test_amg_internals    # AMG sub-modules + ILU(k) (22 tests)
-cargo test --test test_parallel         # Parallel ops + BSR format (13 tests)
+cargo test --test test_sparse_ops        # CSR/CSC structure operations (26 tests)
+cargo test --test test_krylov            # Core Krylov solvers (15 tests)
+cargo test --test test_precond           # Basic preconditioners (11 tests)
+cargo test --test test_sprint3           # Advanced precond + FGMRES/LGMRES (21 tests)
+cargo test --test test_amg               # AMG hierarchy and cycles (10 tests)
+cargo test --test test_amg_internals     # AMG sub-modules + ILU(k) (22 tests)
+cargo test --test test_parallel          # Parallel ops + BSR format (13 tests)
+cargo test --test test_eigen             # Eigenvalue solvers Sprint 7 (11 tests)
+cargo test --test test_eigen_s8_s10      # Eigenvalue solvers Sprint 8-10 (16 tests)
+cargo test --test test_eigen_s11_s12     # SVD, QEP, NEP, ComplexScalar (9 tests)
 
 # Criterion benchmarks (HTML report in target/criterion/)
 cargo bench --bench bench_spmv
