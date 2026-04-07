@@ -12,6 +12,7 @@ pub mod precond;
 pub mod iterative;
 pub mod amg;
 pub mod parallel;
+pub mod eigen;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -39,4 +40,12 @@ pub use crate::parallel::{
     parallel_spmv, parallel_spmv_add,
     parallel_axpy, parallel_axpby,
     parallel_dot, parallel_norm2,
+};
+
+pub use crate::eigen::{
+    EigenParams, EigenResult, EigenSolver, EigenWhich,
+    PowerIter, SubspaceIter, InverseIter, RayleighQuotientIter,
+    LanczosIter, ArnoldiIter,
+    GeneralizedEigen, ShiftInvertLanczos,
+    KrylovSchur, Lobpcg,
 };
