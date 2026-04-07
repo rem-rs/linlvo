@@ -18,6 +18,7 @@ wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]
 num-traits  = "0.2"
+num-complex = "0.4"
 thiserror   = "2"
 rayon       = { version = "1.10", optional = true }
 

@@ -1,4 +1,4 @@
-//! Eigenvalue solvers — Sprint 7 / 8 / 9 / 10.
+//! Eigenvalue solvers — Sprint 7 / 8 / 9 / 10 / 11 / 12.
 //!
 //! | Sprint | Algorithms |
 //! |--------|-----------|
@@ -6,6 +6,8 @@
 //! | 8 | [`LanczosIter`] (IRLM), [`ArnoldiIter`] (IRAM) |
 //! | 9 | [`GeneralizedEigen`], [`ShiftInvertLanczos`] |
 //! | 10 | [`KrylovSchur`], [`Lobpcg`] |
+//! | 11 | [`LanczosSvd`], [`SvdResult`] |
+//! | 12 | [`QuadraticEigen`], [`NonlinearOperator`], [`NepNewton`] |
 //!
 //! All algorithms operate through the [`LinearOperator`] trait so they work
 //! with any CSR, nalgebra, or matrix-free operator.
@@ -18,6 +20,9 @@ pub mod arnoldi;
 pub mod generalized;
 pub mod krylov_schur;
 pub mod lobpcg;
+pub mod svd;
+pub mod qep;
+pub mod nep;
 
 pub use power::PowerIter;
 pub use inverse::{InverseIter, RayleighQuotientIter};
@@ -27,6 +32,9 @@ pub use arnoldi::ArnoldiIter;
 pub use generalized::{GeneralizedEigen, ShiftInvertLanczos};
 pub use krylov_schur::KrylovSchur;
 pub use lobpcg::Lobpcg;
+pub use svd::{LanczosSvd, SvdResult};
+pub use qep::QuadraticEigen;
+pub use nep::{NonlinearOperator, NepNewton};
 
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
 

@@ -333,3 +333,19 @@ impl<T: Scalar> LinearOperator for CsrMatrix<T> {
     fn nrows(&self) -> usize { self.nrows }
     fn ncols(&self) -> usize { self.ncols }
 }
+
+impl<T: Scalar> crate::core::operator::TransposeOperator for CsrMatrix<T> {
+    fn apply_transpose(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
+        // y = Aᵀ x : scatter each row contribution
+        let ys = y.as_mut_slice();
+        for v in ys.iter_mut() { *v = T::zero(); }
+        let xs = x.as_slice();
+        for i in 0..self.nrows {
+            let xi = xs[i];
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                let j = self.col_idx[k];
+                ys[j] += self.values[k] * xi;
+            }
+        }
+    }
+}

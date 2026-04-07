@@ -21,12 +21,14 @@ pub mod wasm;
 
 pub use crate::core::{
     error::SolverError,
-    operator::LinearOperator,
+    operator::{LinearOperator, TransposeOperator},
     preconditioner::Preconditioner,
-    scalar::Scalar,
+    scalar::{Scalar, ComplexScalar},
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
+
+pub use num_complex::Complex;
 
 pub use crate::precond::{
     JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
@@ -48,4 +50,7 @@ pub use crate::eigen::{
     LanczosIter, ArnoldiIter,
     GeneralizedEigen, ShiftInvertLanczos,
     KrylovSchur, Lobpcg,
+    LanczosSvd, SvdResult,
+    QuadraticEigen,
+    NonlinearOperator, NepNewton,
 };

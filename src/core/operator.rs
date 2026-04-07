@@ -19,3 +19,11 @@ pub trait LinearOperator: Send + Sync {
     /// Number of columns of the operator.
     fn ncols(&self) -> usize;
 }
+
+/// Extension trait for operators that also support transposed application
+/// `y ← Aᵀ·x`.  Required by SVD solvers and any algorithm that needs both
+/// A and Aᵀ without materialising either.
+pub trait TransposeOperator: LinearOperator {
+    /// Compute  `y = Aᵀ · x`.
+    fn apply_transpose(&self, x: &Self::Vector, y: &mut Self::Vector);
+}
