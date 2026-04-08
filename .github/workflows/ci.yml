@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Test + Clippy (native, stable) ─────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: cargo test (default features)
+        run: cargo test --all-targets
+
+      - name: cargo test (no default features)
+        run: cargo test --no-default-features --lib --tests
+
+      - name: cargo clippy
+        # Deny all clippy lints except pre-existing style/unused issues.
+        run: >
+          cargo clippy --all-targets --
+          -D clippy::correctness
+          -D clippy::suspicious
+          -A clippy::all
+
+  # ── Bench build check (no harness run) ─────────────────────────────────────
+  bench-build:
+    name: Bench build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-bench-
+
+      - name: cargo build --benches
+        run: cargo build --benches
+
+  # ── WASM cross-compile ──────────────────────────────────────────────────────
+  wasm:
+    name: WASM cross-compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-wasm-
+
+      - name: cargo build --target wasm32 (no-default-features + wasm feature)
+        run: >
+          cargo build
+          --target wasm32-unknown-unknown
+          --no-default-features
+          --features wasm
+          --lib
