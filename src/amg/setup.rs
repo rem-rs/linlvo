@@ -77,10 +77,28 @@ pub struct AmgLevel<T> {
 }
 
 /// Full AMG hierarchy.
-#[derive(Clone)]
 pub struct AmgHierarchy<T> {
     pub levels:  Vec<AmgLevel<T>>,
     pub config:  AmgConfig,
+    /// Convergence rate from the most recent `apply_cycle` call:
+    /// ‖r_after‖ / ‖r_before‖ at the finest level.
+    /// `NaN` if `apply_cycle` has never been called.
+    ///
+    /// Uses `AtomicU64` (bit-cast) so `AmgHierarchy` remains `Sync`
+    /// (required by the `Preconditioner` trait bound via `AmgPrecond`).
+    pub last_cycle_rate: std::sync::atomic::AtomicU64,
+}
+
+impl<T: Clone> Clone for AmgHierarchy<T> {
+    fn clone(&self) -> Self {
+        AmgHierarchy {
+            levels: self.levels.clone(),
+            config: self.config.clone(),
+            last_cycle_rate: std::sync::atomic::AtomicU64::new(
+                self.last_cycle_rate.load(std::sync::atomic::Ordering::Relaxed)
+            ),
+        }
+    }
 }
 
 impl<T: Scalar> AmgHierarchy<T> {
@@ -146,7 +164,7 @@ impl<T: Scalar> AmgHierarchy<T> {
             levels.push(AmgLevel { a: a_remaining, p: None, r: None, spectral_radius: None });
         }
 
-        AmgHierarchy { levels, config }
+        AmgHierarchy { levels, config, last_cycle_rate: std::sync::atomic::AtomicU64::new(f64::NAN.to_bits()) }
     }
 
     pub fn n_levels(&self) -> usize { self.levels.len() }
@@ -254,6 +272,17 @@ impl<T: Scalar> AmgHierarchy<T> {
             let n_coarse = w[1].a.nrows() as f64;
             if n_coarse == 0.0 { f64::INFINITY } else { n_fine / n_coarse }
         }).collect()
+    }
+
+    /// Per-cycle convergence rate from the most recent [`apply_cycle`] call.
+    ///
+    /// Returns `‖r_after‖₂ / ‖r_before‖₂` where the residual is computed at
+    /// the finest level: `r = b - A x`.  A value close to 0 indicates rapid
+    /// convergence; a value close to 1 indicates slow convergence.
+    ///
+    /// Returns `NaN` if `apply_cycle` has not yet been called.
+    pub fn convergence_rate(&self) -> f64 {
+        f64::from_bits(self.last_cycle_rate.load(std::sync::atomic::Ordering::Relaxed))
     }
 }
 

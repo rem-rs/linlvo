@@ -25,8 +25,38 @@ pub enum CycleType { V, W, F }
 
 impl<T: Scalar> AmgHierarchy<T> {
     /// Apply one AMG cycle as a preconditioner:  `x ← M⁻¹ b`  (x starts at 0).
+    ///
+    /// Records ‖b - A x_after‖ / ‖b - A x_before‖ in `self.last_cycle_rate`
+    /// (accessible via [`convergence_rate()`]).
     pub fn apply_cycle(&self, b: &DenseVec<T>, x: &mut DenseVec<T>, cycle: CycleType) {
+        let a0 = &self.levels[0].a;
+        let n = b.len();
+
+        // Helper: compute ‖b - A·x‖ as f64.
+        let residual_norm = |a: &crate::sparse::CsrMatrix<T>, x: &DenseVec<T>, b: &DenseVec<T>| -> f64 {
+            let mut ax = DenseVec::zeros(n);
+            a.apply(x, &mut ax);
+            let mut res = DenseVec::zeros(n);
+            {
+                let rs = res.as_mut_slice();
+                let bs = b.as_slice(); let axs = ax.as_slice();
+                for i in 0..n { rs[i] = bs[i] - axs[i]; }
+            }
+            let nrm = res.norm2(); // returns T
+            num_traits::ToPrimitive::to_f64(&nrm).unwrap_or(f64::INFINITY)
+        };
+
+        let r_before = residual_norm(a0, x, b);
+
         vcycle(self, 0, b, x, cycle);
+
+        let r_after = residual_norm(a0, x, b);
+
+        let rate = if r_before < 1e-300 { 0.0 } else { r_after / r_before };
+        self.last_cycle_rate.store(
+            rate.to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
