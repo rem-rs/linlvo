@@ -1,8 +1,8 @@
 # 设计与开发文档：linger
 
 **适用对象**：AI Agent 驱动的自动化开发流程
-**版本**：v0.8.0
-**日期**：2026-04-07
+**版本**：v0.9.0
+**日期**：2026-04-08
 
 ---
 
@@ -73,16 +73,20 @@ linger/
 │   │   └── nep.rs                # NonlinearOperator trait、NepNewton（S12）
 │   ├── direct/
 │   │   ├── mod.rs                # DirectSolver trait + DirectOptions + DirectSolverPrecond
-│   │   ├── etree.rs              # 消去树（elimination tree）+ post_order + col_counts（S14）
-│   │   ├── symbolic.rs           # 符号 LU（Gilbert-Peierls reach set，S14）
-│   │   ├── lu.rs                 # SparseLu<T>：稠密右视 LU + 部分选主元（S13）
-│   │   ├── cholesky.rs           # SparseCholesky<T>：左视稀疏 Cholesky（S14，O(nnz)）
+│   │   │                         # 新增导出：SymbolicCholesky, symbolic_cholesky
+│   │   ├── etree.rs              # 消去树（elimination_tree）+ post_order + col_counts（已修正，S14/B2）
+│   │   ├── symbolic.rs           # 符号 LU（symbolic_lu，S14）+ 符号 Cholesky（symbolic_cholesky，B2）
+│   │   ├── lu.rs                 # SparseLu<T>：稠密右视 LU + 部分主元 + 迭代精化（A2）
+│   │   ├── cholesky.rs           # SparseCholesky<T>：左视稀疏 Cholesky + 迭代精化（A2）
 │   │   ├── multifrontal.rs       # MultifrontalLu<T>：消去树驱动多前沿 LU + BLR 选项（S15）
 │   │   ├── triangular.rs         # forward_solve / backward_solve（CSR 三角求解）
 │   │   └── ordering/
 │   │       ├── mod.rs            # OrderingMethod + permute_symmetric + invert_perm
 │   │       ├── rcm.rs            # Reverse Cuthill-McKee（S13）
-│   │       └── colamd.rs         # Column Approximate Minimum Degree（S13）
+│   │       ├── colamd.rs         # Column Approximate Minimum Degree（S13）
+│   │       └── nd.rs             # NodeNd 多层嵌套剖分（B1，纯 Rust，无外部依赖）
+│   ├── builder.rs                # SolverBuilder fluent API（C2）
+│   ├── wasm.rs                   # WASM bindings（C1 扩展：WasmLuSolver 等）
 │   ├── parallel/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
@@ -760,7 +764,7 @@ pub fn solve_cg_js(
 - [x] 17 项集成测试（`tests/test_direct.rs`）
 
 ### Sprint 14（M14）：消去树 + 稀疏 Cholesky ✅ 已完成
-- [x] `direct/etree.rs`：`elimination_tree`（Liu 1986 路径压缩）、`post_order`、`col_counts`
+- [x] `direct/etree.rs`：`elimination_tree`（Liu 1986 路径压缩）、`post_order`、`col_counts`（mark-and-sweep，Davis 2006，已修正）
 - [x] `direct/symbolic.rs`：`symbolic_lu`（Gilbert-Peierls reach-set，DFS on etree）
 - [x] `direct/cholesky.rs`：重写为左视稀疏 Cholesky，O(nnz(L)) 内存
 - [x] 消去树单元测试（`direct::etree::tests`，3 项）
@@ -773,7 +777,48 @@ pub fn solve_cg_js(
 - [x] 13 项集成测试（`tests/test_direct_s14_s15.rs`）
 - [x] lib.rs 新增公开 re-export：`MultifrontalLu`、`MultifrontalOptions`
 
-**当前状态**：196 项测试全部通过（`cargo test`）。
+### B1：纯 Rust 嵌套剖分（NodeNd）✅ 已完成
+- [x] `direct/ordering/nd.rs`：完整多层嵌套剖分
+  - HEM 多层粗化（Heavy-Edge Matching，target=60）
+  - BFS 双极着色（双端 BFS 找最远点对）
+  - 顶点分隔符提取 + FM 贪心细化（最多 5 轮，balance_slack=0.20）
+  - 递归嵌套剖分（MAX_DEPTH=64，小图退回 AMD）
+- [x] `OrderingMethod::NodeNd` enum 变体，三个求解器（SparseLu/SparseCholesky/MultifrontalLu）集成
+- [x] `Ordering::NodeNd` 在 `builder.rs` SolverBuilder 中映射
+- [x] 14 项集成测试（`tests/test_ordering_nd.rs`）
+
+### C1+C2：WASM 直接求解器 API + SolverBuilder ✅ 已完成
+- [x] `src/wasm.rs`：`WasmLuSolver`、`WasmCholeskySolver`、`WasmMultifrontalSolver`（wasm-bindgen）
+- [x] `src/builder.rs`：`SolverBuilder` fluent API
+  - `SolveMethod::{Cg, Gmres{restart}, BiCgStab, Direct(DirectBackend)}`
+  - `PrecondChoice::{None, Jacobi, Ilu0, Icc0, DirectLu(DirectBackend)}`
+  - `Ordering::{Natural, Rcm, Colamd, NodeNd}`
+  - `solve_auto(a, b, spd_hint)` 便捷入口
+- [x] 15 项集成测试（`tests/test_builder_c2.rs`）
+
+### A2：迭代精化激活 ✅ 已完成
+- [x] `direct/lu.rs`：`SparseLu::solve()` 末尾循环：`r=b−Ax` → 复用 L,U 求解 `Aδx=r` → `x+=δx`
+- [x] `direct/cholesky.rs`：`SparseCholesky::solve()` 同上，SPD 路径
+- [x] `refine_steps>0` 时在 `factorize()` 中保存 A 副本（`a_stored: Option<CsrMatrix<T>>`）
+- [x] 7 项集成测试（`tests/test_refinement.rs`）
+
+### B2：符号 Cholesky 精确模式预测 ✅ 已完成
+- [x] `direct/symbolic.rs`：新增 `symbolic_cholesky()` 函数（左视 DFS 达到集，O(nnz(L))）
+- [x] `SymbolicCholesky` 结构体：CSC 格式 L 列模式 + `col_count` + `parent`
+- [x] `direct/etree.rs`：修正 `col_counts()` 算法（替换为正确的 mark-and-sweep，Davis 2006 Algorithm 4.7）
+- [x] `direct/mod.rs`：公开导出 `SymbolicCholesky`、`symbolic_cholesky`
+- [x] 13 项集成测试（`tests/test_symbolic_cholesky.rs`）
+
+### A1：直接法性能基准 ✅ 已完成
+- [x] `benches/bench_direct.rs`：6 组 Criterion 基准
+  - `SparseLu/factorize`、`SparseLu/solve`（1D/2D Laplacian）
+  - `SparseCholesky/factorize`（1D/2D，n=50-400）
+  - `MultifrontalLu/factorize`（1D，n=30-100）
+  - `Cholesky/ordering`（Natural/Rcm/Colamd/NodeNd 对比，16×16 网格）
+  - `SparseLu/refinement`（refine_steps 0-3 开销对比）
+- [x] `Cargo.toml` 新增 `[[bench]] name = "bench_direct" harness = false`
+
+**当前状态**：全部测试通过（`cargo test`）。`cargo bench --bench bench_direct -- --test` 全部 Success。
 
 ---
 
