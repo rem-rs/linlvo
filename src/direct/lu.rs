@@ -8,17 +8,13 @@
 //!
 //! ## Algorithm
 //!
-//! Right-looking dense Gaussian elimination on the reordered matrix `B = A[Q,Q]`.
-//! A flat n×n working matrix is used for the numeric factorization, making
-//! correctness straightforward.
+//! Sparse right-looking Gaussian elimination with partial pivoting.
+//! The working matrix is maintained as `n` sparse rows (sorted `Vec<(col, val)>`).
+//! Each elimination step updates only the non-zero entries, giving O(nnz(L+U))
+//! memory throughout — no O(n²) dense matrix is allocated.
 //!
-//! The symbolic analysis phase (elimination tree + symbolic LU) is computed
-//! before factorization and used for pattern prediction. Future work will
-//! replace the dense numeric phase with a sparse left-looking implementation
-//! that uses the symbolic pattern for O(nnz(L+U)) storage.
-//!
-//! Memory: O(n²) for the dense working matrix. Practical limit: n ≈ 10^4.
-//! For larger matrices, use [`MultifrontalLu`](super::multifrontal::MultifrontalLu).
+//! Memory: O(nnz(L) + nnz(U)).  Practical limit: n ≈ 10^6 for sparse matrices.
+//! For very large fill or dense problems, use [`MultifrontalLu`](super::multifrontal::MultifrontalLu).
 
 #![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
@@ -27,8 +23,6 @@ use crate::direct::{
     DirectSolver, DirectOptions,
     ordering::{OrderingMethod, permute_symmetric, rcm, colamd, nd},
     triangular::{forward_solve, backward_solve},
-    etree::elimination_tree,
-    symbolic::symbolic_lu,
 };
 
 // ─── Public struct ────────────────────────────────────────────────────────────
@@ -158,75 +152,70 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         // Apply symmetric permutation B = A[perm_q, perm_q].
         let b = permute_symmetric(a, &self.perm_q);
 
-        // Compute elimination tree and symbolic factorization.
-        // These are used for pre-allocation and will be fully utilized
-        // in a future sparse left-looking implementation.
-        let _parent = elimination_tree(&b);
-        let _sym = symbolic_lu(&b, &_parent);
+        // ── Sparse right-looking GE with partial pivoting (O(nnz) memory) ───────
+        //
+        // The working matrix is stored as n sparse rows (sorted Vec<(col, val)>).
+        // Each pivot step:
+        //   1. Find pivot row (max |entry at col j| in rows j..n-1).
+        //   2. Swap rows.
+        //   3. For each row i > j with a non-zero at col j:
+        //      mult = row_i[j] / row_j[j];  store mult in row_i[j];
+        //      row_i[k] -= mult * row_j[k] for k > j  (sparse axpy).
+        //
+        // Memory: O(nnz(L) + nnz(U)) throughout — no n×n allocation.
 
-        // ── Dense working matrix approach (O(n²) memory) ────────────────────────
-        // The symbolic pattern from _sym is computed but not yet used for
-        // the numeric factorization. This is a transitional implementation
-        // that validates the symbolic analysis while keeping the proven
-        // dense factorization for correctness.
-
-        let mut mat: Vec<T> = vec![T::zero(); n * n];
-        let mut pivot_row = vec![0usize; n];
-
-        // Scatter B into the dense matrix.
+        // Scatter B into sparse rows.
+        let mut rows: Vec<Vec<(usize, T)>> = (0..n).map(|_| Vec::new()).collect();
         for i in 0..n {
             for k in b.row_ptr()[i]..b.row_ptr()[i + 1] {
-                let j = b.col_idx()[k];
-                mat[i * n + j] = b.values()[k];
+                rows[i].push((b.col_idx()[k], b.values()[k]));
             }
+            rows[i].sort_unstable_by_key(|&(c, _)| c);
         }
 
-        // Row permutation tracking.
         let mut row_perm: Vec<usize> = (0..n).collect();
-        let mut row_pos:  Vec<usize> = (0..n).collect();
-
         let thresh = self.options.pivot_threshold;
 
         for j in 0..n {
-            let pivot_pos = find_pivot_col(&mat, n, j, thresh);
-            pivot_row[j] = row_perm[pivot_pos];
-
+            // ── Partial pivot: find row with largest |entry at col j| in j..n ───
+            let pivot_pos = find_pivot_sparse(&rows, n, j, thresh);
             if pivot_pos != j {
-                for k in 0..n {
-                    mat.swap(j * n + k, pivot_pos * n + k);
-                }
+                rows.swap(j, pivot_pos);
                 row_perm.swap(j, pivot_pos);
-                row_pos[row_perm[j]]         = j;
-                row_pos[row_perm[pivot_pos]] = pivot_pos;
             }
 
-            let u_jj = mat[j * n + j];
+            let u_jj = get_entry(&rows[j], j).unwrap_or(T::zero());
             if u_jj.abs() < T::machine_epsilon() * T::from_f64(1e6) {
                 return Err(SolverError::SingularMatrix { row: j });
             }
 
+            // ── Update rows below the pivot ──────────────────────────────────────
+            // Snapshot the pivot row's upper part (cols > j) for the axpy.
+            let pivot_upper: Vec<(usize, T)> = rows[j]
+                .iter()
+                .filter(|&&(c, _)| c > j)
+                .cloned()
+                .collect();
+
             for i in (j + 1)..n {
-                let mult = mat[i * n + j] / u_jj;
-                mat[i * n + j] = mult;
-                for k in (j + 1)..n {
-                    let uval = mat[j * n + k];
-                    mat[i * n + k] -= mult * uval;
+                if let Some(mult) = get_entry(&rows[i], j) {
+                    let mult = mult / u_jj;
+                    set_entry(&mut rows[i], j, mult); // in-place: store L multiplier
+                    sparse_axpy(&mut rows[i], &pivot_upper, -mult, j);
                 }
             }
         }
 
-        // Extract sparse L and U from the dense factored matrix.
+        // ── Extract sparse L and U from factored rows ────────────────────────────
         let mut l_coo: Vec<(usize, usize, T)> = Vec::new();
         let mut u_coo: Vec<(usize, usize, T)> = Vec::new();
 
         for i in 0..n {
-            for j in 0..i {
-                let v = mat[i * n + j];
-                if v != T::zero() { l_coo.push((i, j, v)); }
-            }
-            for j in i..n {
-                let v = mat[i * n + j];
-                if v != T::zero() { u_coo.push((i, j, v)); }
+            for &(j, v) in &rows[i] {
+                if v != T::zero() {
+                    if j < i { l_coo.push((i, j, v)); }
+                    else      { u_coo.push((i, j, v)); }
+                }
             }
         }
 
@@ -350,110 +339,66 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// CSC matrix structure for temporary use during factorization.
-#[allow(dead_code)]
-struct CscMatrix<T: Scalar> {
+// ─── Sparse row helpers ───────────────────────────────────────────────────────
+
+/// Get the value at column `col` from a sorted sparse row, or None.
+fn get_entry<T: Scalar>(row: &[(usize, T)], col: usize) -> Option<T> {
+    row.binary_search_by_key(&col, |&(c, _)| c)
+        .ok()
+        .map(|idx| row[idx].1)
+}
+
+/// Set the value at column `col` in a sorted sparse row (must already exist).
+fn set_entry<T: Scalar>(row: &mut Vec<(usize, T)>, col: usize, val: T) {
+    if let Ok(idx) = row.binary_search_by_key(&col, |&(c, _)| c) {
+        row[idx].1 = val;
+    }
+}
+
+/// Sparse axpy: row += scale * pivot_upper, only for cols > skip_below.
+/// Merges new entries from pivot_upper into the sorted sparse row.
+fn sparse_axpy<T: Scalar>(
+    row: &mut Vec<(usize, T)>,
+    pivot_upper: &[(usize, T)],
+    scale: T,
+    skip_below: usize,
+) {
+    if scale == T::zero() || pivot_upper.is_empty() { return; }
+    // Merge pivot_upper entries into row (both sorted by col).
+    // Collect positions for update-in-place.
+    let mut inserts: Vec<(usize, T)> = Vec::new();
+    for &(c, pv) in pivot_upper {
+        if c <= skip_below { continue; }
+        let delta = scale * pv;
+        match row.binary_search_by_key(&c, |&(cc, _)| cc) {
+            Ok(idx) => row[idx].1 += delta,
+            Err(_)  => inserts.push((c, delta)),
+        }
+    }
+    if !inserts.is_empty() {
+        row.extend_from_slice(&inserts);
+        row.sort_unstable_by_key(|&(c, _)| c);
+    }
+}
+
+/// Find pivot row: row with max |entry at col j| among rows[j..n].
+/// Respects threshold pivoting: if diagonal is large enough, prefer it.
+fn find_pivot_sparse<T: Scalar>(
+    rows: &[Vec<(usize, T)>],
     n: usize,
-    col_ptr: Vec<usize>,
-    row_idx: Vec<usize>,
-    values: Vec<T>,
-}
-
-/// Convert CSC to CSR format (for L after column-wise factorization).
-#[allow(dead_code)]
-fn csc_to_csr<T: Scalar>(
-    n: usize,
-    col_ptr: &[usize],
-    row_idx: &[usize],
-    values: &[T],
-) -> (Vec<usize>, Vec<usize>, Vec<T>, Vec<usize>) {
-    // Count entries per row.
-    let mut row_counts = vec![0usize; n];
-    for &row in row_idx {
-        row_counts[row] += 1;
-    }
-
-    // Build row pointers.
-    let mut row_ptr = vec![0usize; n + 1];
-    for i in 0..n { row_ptr[i + 1] = row_ptr[i] + row_counts[i]; }
-
-    // Fill in column indices and values.
-    let nnz = values.len();
-    let mut col_idx = vec![0usize; nnz];
-    let mut vals = vec![T::zero(); nnz];
-    let mut next = row_ptr.clone();
-
-    for col in 0..n {
-        for k in col_ptr[col]..col_ptr[col + 1] {
-            let row = row_idx[k];
-            let pos = next[row];
-            col_idx[pos] = col;
-            vals[pos] = values[k];
-            next[row] += 1;
-        }
-    }
-
-    // Sort column indices within each row and find diagonal positions.
-    let mut diag_pos = vec![0usize; n];
-    for i in 0..n {
-        let start = row_ptr[i];
-        let end = row_ptr[i + 1];
-        // Sort by column index.
-        let mut pairs: Vec<(usize, T)> = (start..end)
-            .map(|k| (col_idx[k], vals[k]))
-            .collect();
-        pairs.sort_by_key(|(c, _)| *c);
-        for (idx, (c, v)) in pairs.iter().enumerate() {
-            col_idx[start + idx] = *c;
-            vals[start + idx] = *v;
-            if *c == i { diag_pos[i] = start + idx; }
-        }
-    }
-
-    (row_ptr, col_idx, vals, diag_pos)
-}
-
-/// Convert CSR to CSC format for column access during factorization.
-#[allow(dead_code)]
-fn csc_from_csr<T: Scalar>(csr: &CsrMatrix<T>) -> CscMatrix<T> {
-    let n = csr.nrows();
-    let nnz = csr.col_idx().len();
-
-    let mut col_ptr = vec![0usize; n + 1];
-    let mut row_idx = vec![0usize; nnz];
-    let mut values = vec![T::zero(); nnz];
-
-    // Count entries per column.
-    for &c in csr.col_idx() {
-        col_ptr[c + 1] += 1;
-    }
-    // Cumulative sum.
-    for i in 0..n { col_ptr[i + 1] += col_ptr[i]; }
-
-    // Scatter entries.
-    let mut pos = col_ptr.clone();
-    for i in 0..n {
-        for k in csr.row_ptr()[i]..csr.row_ptr()[i + 1] {
-            let j = csr.col_idx()[k];
-            row_idx[pos[j]] = i;
-            values[pos[j]] = csr.values()[k];
-            pos[j] += 1;
-        }
-    }
-
-    CscMatrix { n, col_ptr, row_idx, values }
-}
-
-fn find_pivot_col<T: Scalar>(mat: &[T], n: usize, j: usize, threshold: f64) -> usize {
+    j: usize,
+    threshold: f64,
+) -> usize {
     let mut best   = j;
-    let mut best_v = mat[j * n + j].abs();
+    let mut best_v = get_entry(&rows[j], j).unwrap_or(T::zero()).abs();
     for i in (j + 1)..n {
-        let v = mat[i * n + j].abs();
+        let v = get_entry(&rows[i], j).unwrap_or(T::zero()).abs();
         if v > best_v { best_v = v; best = i; }
     }
     if threshold < 1.0 - 1e-12 {
+        let diag_v = get_entry(&rows[j], j).unwrap_or(T::zero()).abs();
         let thresh = T::from_f64(threshold) * best_v;
-        if mat[j * n + j].abs() >= thresh { return j; }
+        if diag_v >= thresh { return j; }
     }
     best
 }
