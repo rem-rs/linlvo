@@ -111,6 +111,9 @@ pub struct MultifrontalLu<T: Scalar> {
 
     factorized: bool,
     analyzed:   bool,
+
+    /// Cached symbolic ordering size — used by reuse_symbolic.
+    symbolic_n: Option<usize>,
 }
 
 impl<T: Scalar> Default for MultifrontalLu<T> {
@@ -126,8 +129,12 @@ impl<T: Scalar> MultifrontalLu<T> {
             u_row_ptr: vec![], u_col_idx: vec![], u_values: vec![], u_diag_pos: vec![],
             perm_p: vec![],
             factorized: false, analyzed: false,
+            symbolic_n: None,
         }
     }
+
+    /// Returns the column permutation `Q` (perm_q[new] = old) after analysis.
+    pub fn perm_q(&self) -> &[usize] { &self.perm_q }
 
     /// Enable BLR compression with the given tolerance and minimum front size.
     pub fn with_blr(tol: f64, min_size: usize) -> Self {
@@ -149,6 +156,17 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
                 op_rows: n, op_cols: a.ncols(), rhs_len: n,
             });
         }
+
+        // reuse_symbolic: skip ordering if already analyzed with the same size.
+        if self.opts.base.reuse_symbolic {
+            if let Some(cached_n) = self.symbolic_n {
+                if cached_n == n && self.analyzed {
+                    self.factorized = false;
+                    return Ok(());
+                }
+            }
+        }
+
         self.n = n;
         let base = &self.opts.base;
         self.perm_q = match &base.ordering {
@@ -157,6 +175,7 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
             OrderingMethod::Colamd => colamd(a),
             OrderingMethod::NodeNd => nd(a),
         };
+        self.symbolic_n = Some(n);
         self.analyzed   = true;
         self.factorized = false;
         Ok(())
@@ -368,6 +387,7 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
         self.u_row_ptr.clear(); self.u_col_idx.clear(); self.u_values.clear(); self.u_diag_pos.clear();
         self.perm_p.clear();
         self.factorized = false;
+        self.symbolic_n = None;
     }
 }
 

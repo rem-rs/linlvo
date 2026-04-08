@@ -78,6 +78,11 @@ pub struct SparseLu<T: Scalar> {
 
     factorized: bool,
     analyzed:   bool,
+
+    /// Cached symbolic ordering size — used by reuse_symbolic.
+    /// When `options.reuse_symbolic` is true, `analyze` is skipped if
+    /// the incoming matrix has the same size as the cached analysis.
+    symbolic_n: Option<usize>,
 }
 
 impl<T: Scalar> Default for SparseLu<T> {
@@ -94,8 +99,15 @@ impl<T: Scalar> SparseLu<T> {
             perm_p: vec![],
             a_stored: None,
             factorized: false, analyzed: false,
+            symbolic_n: None,
         }
     }
+
+    /// Returns the column permutation `Q` (perm_q[new] = old) after analysis.
+    pub fn perm_q(&self) -> &[usize] { &self.perm_q }
+
+    /// Returns the row permutation `P` (perm_p[step] = original_row) after factorization.
+    pub fn perm_p(&self) -> &[usize] { &self.perm_p }
 }
 
 // ─── DirectSolver impl ───────────────────────────────────────────────────────
@@ -108,6 +120,18 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
                 op_rows: n, op_cols: a.ncols(), rhs_len: n,
             });
         }
+
+        // reuse_symbolic: skip ordering if already analyzed with the same size.
+        if self.options.reuse_symbolic {
+            if let Some(cached_n) = self.symbolic_n {
+                if cached_n == n && self.analyzed {
+                    // Keep existing perm_q; just reset numeric factors.
+                    self.factorized = false;
+                    return Ok(());
+                }
+            }
+        }
+
         self.n = n;
         self.perm_q = match &self.options.ordering {
             OrderingMethod::Natural => (0..n).collect(),
@@ -115,6 +139,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             OrderingMethod::Colamd => colamd(a),
             OrderingMethod::NodeNd => nd(a),
         };
+        self.symbolic_n = Some(n);
         self.analyzed   = true;
         self.factorized = false;
         Ok(())
@@ -302,6 +327,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         self.perm_p.clear();
         self.a_stored = None;
         self.factorized = false;
+        self.symbolic_n = None;
     }
 }
 

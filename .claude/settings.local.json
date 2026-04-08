@@ -2,7 +2,23 @@
   "permissions": {
     "allow": [
       "Bash(grep -E \"^test |^running|FAILED|passed|failed|ok$\")",
-      "Bash(rustup target:*)"
+      "Bash(rustup target:*)",
+      "Bash(git -C c:/Users/lilu/works/linger diff --stat HEAD)",
+      "Bash(git -C c:/Users/lilu/works/linger status --short)",
+      "Bash(git -C c:/Users/lilu/works/linger add src/eigen/ src/lib.rs tests/test_eigen.rs tests/test_eigen_s8_s10.rs docs/eigenvalue-comparison.md)",
+      "Bash(git -C c:/Users/lilu/works/linger commit -m ':*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(wc -l /c/Users/lilu/works/linger/src/precond/*.rs /c/Users/lilu/works/linger/src/sparse/*.rs)",
+      "WebFetch(domain:portal.nersc.gov)",
+      "Bash(grep -E \"^\\(test |FAILED|error\\\\[|ok$\\)\")",
+      "Read(//c/Users/lilu/works/linger/**)",
+      "Bash(wc -l src/direct/*.rs src/direct/ordering/*.rs)",
+      "Bash(cargo bench:*)",
+      "Bash(grep -n \"pub fn new\\\\|pub struct Jacobi\\\\|pub struct Ilu0\\\\|pub struct Icc0\" src/precond/*.rs)",
+      "Read(//c/Users/lilu/**)",
+      "Bash(grep -l \"ordering\\\\|rcm\\\\|colamd\" /c/Users/lilu/works/linger/tests/*.rs)",
+      "Bash(grep \"-->.*symbolic\")"
     ]
   }
 }

@@ -54,6 +54,9 @@ pub struct SparseCholesky<T: Scalar> {
 
     factorized: bool,
     analyzed:   bool,
+
+    /// Cached symbolic ordering size — used by reuse_symbolic.
+    symbolic_n: Option<usize>,
 }
 
 impl<T: Scalar> Default for SparseCholesky<T> {
@@ -68,8 +71,12 @@ impl<T: Scalar> SparseCholesky<T> {
             l_row_ptr: vec![], l_col_idx: vec![], l_values: vec![], l_diag_pos: vec![],
             a_stored: None,
             factorized: false, analyzed: false,
+            symbolic_n: None,
         }
     }
+
+    /// Returns the permutation `P` (perm[new] = old) after analysis.
+    pub fn perm(&self) -> &[usize] { &self.perm }
 }
 
 // ─── DirectSolver impl ───────────────────────────────────────────────────────
@@ -82,6 +89,17 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
                 op_rows: n, op_cols: a.ncols(), rhs_len: n,
             });
         }
+
+        // reuse_symbolic: skip ordering if already analyzed with the same size.
+        if self.options.reuse_symbolic {
+            if let Some(cached_n) = self.symbolic_n {
+                if cached_n == n && self.analyzed {
+                    self.factorized = false;
+                    return Ok(());
+                }
+            }
+        }
+
         self.n = n;
         self.perm = match &self.options.ordering {
             OrderingMethod::Natural => (0..n).collect(),
@@ -90,6 +108,7 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
             OrderingMethod::NodeNd => nd(a),
         };
         self.inv_perm = invert_perm(&self.perm);
+        self.symbolic_n = Some(n);
         self.analyzed   = true;
         self.factorized = false;
         Ok(())
@@ -366,6 +385,7 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
         self.l_values.clear();  self.l_diag_pos.clear();
         self.a_stored = None;
         self.factorized = false;
+        self.symbolic_n = None;
     }
 }
 
