@@ -10,6 +10,7 @@
 //! |--------|-----------|--------------|
 //! | [`SparseLu`] | Gilbert-Peierls supernodal-free LU + partial pivoting | General square matrices |
 //! | [`SparseCholesky`] | Left-looking incomplete Cholesky | SPD matrices |
+//! | [`SparseLdlt`] | Left-looking sparse LDLᵀ | Symmetric (indefinite) matrices |
 //!
 //! # Reordering
 //!
@@ -40,10 +41,12 @@ pub mod symbolic;
 mod triangular;
 mod lu;
 mod cholesky;
+mod ldlt;
 mod multifrontal;
 
 pub use lu::SparseLu;
 pub use cholesky::SparseCholesky;
+pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
