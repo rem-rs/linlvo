@@ -34,6 +34,7 @@ nalgebra-sparse = "0.4"
 
 [dev-dependencies]
 approx   = "0.5"
+proptest = "1.5"
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

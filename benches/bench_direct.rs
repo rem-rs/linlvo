@@ -1,20 +1,24 @@
 //! Criterion benchmarks for sparse direct solvers.
 //!
-//! Measures factorization and solve time for SparseLu, SparseCholesky, and
-//! MultifrontalLu across different problem sizes and orderings.
+//! Measures factorization and solve time for SparseLu, SparseCholesky, SparseLdlt,
+//! and MultifrontalLu across different problem sizes and orderings.
 //!
 //! Small-scale (n ≤ 400): all three solvers, various orderings.
 //! Medium-scale (n = 1000–5000): SparseCholesky and MultifrontalLu with RCM/NodeNd.
 //! Large-scale 2D (grid ≤ 70×70 ≈ 4900 DOF): ordering comparison on structured grids.
+//! BLR: compress_block timing and MultifrontalLu with/without BLR at multiple sizes.
+//! Direct preconditioner: LU/Cholesky/LDLt wrapped as GMRES preconditioners.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use linger::{
     direct::{
-        DirectSolver, DirectOptions, SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
-        ordering::OrderingMethod,
+        DirectSolver, DirectOptions, DirectSolverPrecond,
+        SparseLu, SparseCholesky, SparseLdlt, MultifrontalLu, MultifrontalOptions,
+        compress_block, ordering::OrderingMethod,
     },
+    iterative::Gmres,
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec,
+    DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
 
 // ─── matrix generators ────────────────────────────────────────────────────────
@@ -368,6 +372,209 @@ fn bench_ordering_medium_2d(c: &mut Criterion) {
 
 // ─── Criterion entry points ───────────────────────────────────────────────────
 
+// ─── SparseLdlt factorization ─────────────────────────────────────────────────
+
+fn bench_ldlt_factorize(c: &mut Criterion) {
+    let mut group = c.benchmark_group("SparseLdlt/factorize");
+
+    for &n in &[50usize, 100, 200, 400] {
+        let a = laplacian_1d(n);
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("1D/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SparseLdlt::<f64>::new(DirectOptions {
+                    ordering: OrderingMethod::Rcm,
+                    ..Default::default()
+                });
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    for &n in &[8usize, 12, 16] {
+        let a = laplacian_2d(n);
+        let nn = n * n;
+        group.throughput(Throughput::Elements(nn as u64));
+        group.bench_with_input(BenchmarkId::new("2D/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SparseLdlt::<f64>::new(DirectOptions {
+                    ordering: OrderingMethod::Rcm,
+                    ..Default::default()
+                });
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── SparseLdlt solve ─────────────────────────────────────────────────────────
+
+fn bench_ldlt_solve(c: &mut Criterion) {
+    let mut group = c.benchmark_group("SparseLdlt/solve");
+
+    for &n in &[50usize, 100, 200] {
+        let a = laplacian_1d(n);
+        let b = ones_rhs(n);
+        let mut solver = SparseLdlt::<f64>::new(DirectOptions {
+            ordering: OrderingMethod::Rcm,
+            ..Default::default()
+        });
+        solver.factor(&a).unwrap();
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("1D/n", n), &n, |bench, _| {
+            bench.iter(|| {
+                let mut x = DenseVec::zeros(n);
+                solver.solve(black_box(&b), black_box(&mut x)).unwrap();
+                black_box(x)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── BLR compress_block timing ───────────────────────────────────────────────
+
+fn bench_blr_compress(c: &mut Criterion) {
+    let mut group = c.benchmark_group("BLR/compress_block");
+
+    // Use a simple low-rank matrix: A = u vᵀ  (rank-1 but nontrivially sized).
+    for &(m, n) in &[(16usize, 16usize), (32, 32), (64, 64)] {
+        let u: Vec<f64> = (0..m).map(|i| (i as f64 + 1.0) / m as f64).collect();
+        let v: Vec<f64> = (0..n).map(|j| ((j as f64) * 0.7 + 1.0) / n as f64).collect();
+        let mut a = vec![0.0f64; m * n];
+        for i in 0..m { for j in 0..n { a[i*n+j] = u[i] * v[j]; } }
+
+        group.throughput(Throughput::Elements((m * n) as u64));
+        group.bench_with_input(BenchmarkId::new("rank1", format!("{m}x{n}")), &(m, n), |b, _| {
+            b.iter(|| {
+                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-8))
+            });
+        });
+    }
+
+    // Full-rank dense block (worst case: no compression possible).
+    for &(m, n) in &[(16usize, 16usize), (32, 32)] {
+        let a: Vec<f64> = (0..m*n).map(|i| {
+            let x = (i as f64 * 1.6180339887 + 0.5772156649).fract();
+            x - 0.5
+        }).collect();
+        group.bench_with_input(BenchmarkId::new("full_rank", format!("{m}x{n}")), &(m, n), |b, _| {
+            b.iter(|| {
+                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-12))
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── MultifrontalLu: exact vs BLR factorize ──────────────────────────────────
+
+fn bench_multifrontal_blr(c: &mut Criterion) {
+    let mut group = c.benchmark_group("MultifrontalLu/blr");
+    group.sample_size(10);
+
+    for &n in &[100usize, 200, 400] {
+        let a = laplacian_1d(n);
+        group.throughput(Throughput::Elements(n as u64));
+
+        // Exact (BLR disabled).
+        group.bench_with_input(BenchmarkId::new("exact/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = MultifrontalLu::<f64>::default();
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+
+        // BLR with loose tolerance (aggressive compression).
+        group.bench_with_input(BenchmarkId::new("blr_1e-4/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = MultifrontalLu::<f64>::with_blr(1e-4, n / 8 + 1);
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+
+        // BLR with tight tolerance (near-exact, exercises full code path).
+        group.bench_with_input(BenchmarkId::new("blr_1e-10/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = MultifrontalLu::<f64>::with_blr(1e-10, n / 8 + 1);
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── Direct solver as GMRES preconditioner ───────────────────────────────────
+
+fn bench_direct_precond(c: &mut Criterion) {
+    let mut group = c.benchmark_group("direct_precond_gmres");
+    let p = SolverParams { rtol: 1e-8, max_iter: 300, verbose: VerboseLevel::Silent, ..Default::default() };
+
+    for &n in &[50usize, 100, 200] {
+        let a = laplacian_1d(n);
+        let b = ones_rhs(n);
+
+        // No preconditioner.
+        group.bench_with_input(BenchmarkId::new("none/n", n), &n, |bench, _| {
+            bench.iter(|| {
+                let mut x = DenseVec::zeros(n);
+                Gmres::<f64>::new(30).solve(black_box(&a), None, black_box(&b), black_box(&mut x), &p).unwrap();
+                black_box(x)
+            });
+        });
+
+        // SparseLu preconditioner (exact).
+        {
+            let precond = DirectSolverPrecond::new(SparseLu::<f64>::default(), &a).unwrap();
+            group.bench_with_input(BenchmarkId::new("lu_precond/n", n), &n, |bench, _| {
+                bench.iter(|| {
+                    let mut x = DenseVec::zeros(n);
+                    Gmres::<f64>::new(30).solve(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &p).unwrap();
+                    black_box(x)
+                });
+            });
+        }
+
+        // SparseLdlt preconditioner (exact).
+        {
+            let precond = DirectSolverPrecond::new(SparseLdlt::<f64>::default(), &a).unwrap();
+            group.bench_with_input(BenchmarkId::new("ldlt_precond/n", n), &n, |bench, _| {
+                bench.iter(|| {
+                    let mut x = DenseVec::zeros(n);
+                    Gmres::<f64>::new(30).solve(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &p).unwrap();
+                    black_box(x)
+                });
+            });
+        }
+
+        // BLR MultifrontalLu as preconditioner.
+        {
+            let blr_solver = MultifrontalLu::<f64>::with_blr(1e-8, n / 8 + 1);
+            let precond = DirectSolverPrecond::new(blr_solver, &a).unwrap();
+            group.bench_with_input(BenchmarkId::new("blr_precond/n", n), &n, |bench, _| {
+                bench.iter(|| {
+                    let mut x = DenseVec::zeros(n);
+                    Gmres::<f64>::new(30).solve(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &p).unwrap();
+                    black_box(x)
+                });
+            });
+        }
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_lu_factorize,
@@ -380,5 +587,10 @@ criterion_group!(
     bench_ordering_medium_2d,
     bench_refinement_overhead,
     bench_cholesky_solve_medium,
+    bench_ldlt_factorize,
+    bench_ldlt_solve,
+    bench_blr_compress,
+    bench_multifrontal_blr,
+    bench_direct_precond,
 );
 criterion_main!(benches);

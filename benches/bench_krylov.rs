@@ -2,6 +2,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use linger::{
+    direct::{DirectSolverPrecond, SparseLdlt},
     iterative::{BiCgStab, ConjugateGradient, Gmres},
     precond::{Icc0Precond, Ilu0Precond, IlukPrecond, JacobiPrecond},
     sparse::{CooMatrix, CsrMatrix},
@@ -120,6 +121,17 @@ fn bench_preconditioners(c: &mut Criterion) {
             let mut x = DenseVec::zeros(n);
             ConjugateGradient::<f64>::default()
                 .solve(black_box(&a), Some(&icc), black_box(&b), black_box(&mut x), &params)
+                .unwrap();
+        });
+    });
+
+    // SparseLdlt (exact sparse LDLᵀ) as preconditioner.
+    group.bench_function("ldlt_exact", |bench| {
+        let precond = DirectSolverPrecond::new(SparseLdlt::<f64>::default(), &a).unwrap();
+        bench.iter(|| {
+            let mut x = DenseVec::zeros(n);
+            ConjugateGradient::<f64>::default()
+                .solve(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &params)
                 .unwrap();
         });
     });
