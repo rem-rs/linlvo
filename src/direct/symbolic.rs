@@ -284,31 +284,25 @@ pub fn symbolic_lu<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> SymbolicLu 
 
         // L column j: lower-triangular non-zeros directly from A plus fill
         // propagated through e-tree from those entries upward.
-        // For a well-ordered matrix (RCM/AMD), the direct entries from A suffice
-        // for the symbolic bound. Full fill prediction requires the etree walk
-        // from each l_pattern entry toward the root, collecting nodes > j.
         //
-        // Full symbolic L column j: start DFS from each i in l_pattern,
-        // walk DOWN the e-tree (children toward leaves, since parent[k] > k for
-        // lower-triangular e-trees ordered bottom-to-top... actually parent[k] < k
-        // is not guaranteed for lower-triangular e-trees; we need the subtree).
+        // For column j of L, we need all rows k > j such that L[k,j] != 0.
+        // The pattern is computed by reachability: start from each seed i in
+        // l_pattern (rows where A[i,j] != 0, i > j), walk UP the e-tree
+        // (toward larger indices since parent[x] > x), and collect all nodes
+        // k > j encountered along the path.
         //
-        // Simpler correct bound: use the column-count propagation.
-        // For implementation simplicity we use the direct A entries + transitive
-        // closure through the elimination tree path from each l_pattern entry
-        // to the next ancestor > j.
-        //
-        // For the dense-fallback numeric phase, an upper bound (superset) is safe.
-        // We use: l_col j = all row indices i > j such that row i of A has any
-        // non-zero in columns 0..=j. This is a slight overestimate but safe.
+        // This is the Gilbert-Peierls symbolic factorization algorithm.
 
+        // Mark nodes visited for this column to avoid duplicates.
         for &i in &l_pattern {
-            l_col_rows[j].push(i);
+            let mut r = i;
+            while r > j && r < n && mark[r] != j {
+                mark[r] = j;
+                l_col_rows[j].push(r);
+                r = parent[r];
+                if r >= n { break; }
+            }
         }
-        // Fill from reach: for each i > j already in the pattern, if i connects
-        // to some k > j through the e-tree walk, include k too.
-        // (We skip this for Sprint 14 — the numeric phase uses a dense column
-        // working vector, so the symbolic pattern only controls pre-allocation.)
 
         l_col_rows[j].sort_unstable();
         l_col_rows[j].dedup();
