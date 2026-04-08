@@ -64,6 +64,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
         let norm_b_f = if norm_b == T::zero() { T::one() } else { norm_b };
         let tol = T::from_f64(params.rtol);
         let atol = T::from_f64(params.atol);
+        let mut residual_history: Vec<f64> = Vec::new();
 
         let mut history = if params.verbose == VerboseLevel::Iterations {
             Some(Vec::new())
@@ -95,7 +96,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
 
         if beta1 < T::machine_epsilon() {
             return Ok(SolverResult {
-                converged: true, iterations: 0, final_residual: 0.0, history,
+                converged: true, iterations: 0, final_residual: 0.0, residual_history: vec![], history,
             });
         }
 
@@ -205,6 +206,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
             // ── Convergence check ─────────────────────────────────────────────
             let res   = phibar.abs() / norm_b_f;
             let res_f = to_f64(res);
+            residual_history.push(res_f);
             if let Some(ref mut h) = history { h.push(res_f); }
             if params.verbose == VerboseLevel::Iterations {
                 println!("    MINRES iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
@@ -214,7 +216,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
                     println!("  MINRES converged iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                 }
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, history,
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history,
                 });
             }
         }

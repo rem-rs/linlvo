@@ -82,6 +82,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
 
         let norm_b = b.norm2();
         let norm_b_f = if norm_b == T::zero() { T::one() } else { norm_b };
+        let mut residual_history: Vec<f64> = Vec::new();
 
         // r = b − A x₀
         let mut r = b.zero_like();
@@ -124,8 +125,9 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                     if params.verbose != VerboseLevel::Silent {
                         println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
                     }
+                    residual_history.push(res_f);
                     return Ok(SolverResult {
-                        converged: true, iterations: k + 1, final_residual: res_f, history,
+                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history,
                     });
                 }
             }
@@ -137,8 +139,9 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  CG converged (p·Ap≈0) iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
                 }
+                residual_history.push(res_f);
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, history,
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history,
                 });
             }
             let alpha = rz / pap;
@@ -174,6 +177,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
 
             let res = r.norm2() / norm_b_f;
             let res_f = to_f64(res);
+            residual_history.push(res_f);
             if let Some(ref mut h) = history { h.push(res_f); }
             if params.verbose == VerboseLevel::Iterations {
                 println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
@@ -187,6 +191,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                     converged: true,
                     iterations: k + 1,
                     final_residual: to_f64(res),
+                    residual_history: residual_history.clone(),
                     history,
                 });
             }

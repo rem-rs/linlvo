@@ -56,8 +56,13 @@ pub struct SolverResult {
     pub iterations: usize,
     /// `‖b − A·x‖₂ / ‖b‖₂` at exit (or `‖b − A·x‖₂` if `‖b‖ = 0`).
     pub final_residual: f64,
+    /// Per-iteration relative residual history, always populated.
+    /// `residual_history[k]` is the relative residual after iteration `k`.
+    /// Use this to plot or inspect the convergence curve.
+    pub residual_history: Vec<f64>,
     /// Per-iteration residual history (populated only when
-    /// `verbose == VerboseLevel::Iterations`).
+    /// `verbose == VerboseLevel::Iterations`).  Kept for backwards
+    /// compatibility; prefer `residual_history`.
     pub history: Option<Vec<f64>>,
 }
 

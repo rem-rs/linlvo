@@ -90,6 +90,7 @@ impl KrylovSolver for RichardsonSolver {
             None
         };
 
+        let mut residual_history: Vec<f64> = Vec::new();
         let mut z = DenseVec::zeros(n);   // preconditioned residual
 
         for k in 0..params.max_iter {
@@ -116,6 +117,7 @@ impl KrylovSolver for RichardsonSolver {
             if let Some(ref mut h) = history {
                 h.push(res);
             }
+            residual_history.push(res);
             if params.verbose == VerboseLevel::Iterations {
                 println!("    iter {:4}  ‖r‖/‖b‖ = {res:.6e}", k + 1);
             }
@@ -130,6 +132,7 @@ impl KrylovSolver for RichardsonSolver {
                     converged: true,
                     iterations: k + 1,
                     final_residual,
+                    residual_history: residual_history.clone(),
                     history,
                 });
             }

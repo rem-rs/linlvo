@@ -95,6 +95,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
         let atol     = T::from_f64(params.atol);
         let m        = self.restart;
         let k        = self.aug_dim;
+        let mut residual_history: Vec<f64> = Vec::new();
 
         let mut history = if params.verbose == VerboseLevel::Iterations {
             Some(Vec::new())
@@ -123,7 +124,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  LGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), history });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history });
             }
             if total_iters >= params.max_iter { break; }
 
@@ -180,6 +181,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
 
                 let res   = g[j + 1].abs() / norm_b_f;
                 let res_f = to_f64(res);
+                residual_history.push(res_f);
                 if let Some(ref mut hist) = history { hist.push(res_f); }
                 if params.verbose == VerboseLevel::Iterations {
                     println!("    LGMRES (aug) iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", total_iters);
@@ -222,6 +224,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
 
                     let res   = g[j + 1].abs() / norm_b_f;
                     let res_f = to_f64(res);
+                    residual_history.push(res_f);
                     if let Some(ref mut hist) = history { hist.push(res_f); }
                     if params.verbose == VerboseLevel::Iterations {
                         println!("    LGMRES iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", total_iters);
@@ -277,7 +280,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  LGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), history });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history });
             }
 
             if total_iters >= params.max_iter { break; }

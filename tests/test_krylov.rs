@@ -258,3 +258,77 @@ fn pcg_ssor_vs_unpreconditioned_fewer_iters() {
         "SSOR-PCG ({} iters) should be faster than unpreconditioned CG ({} iters)",
         r2.iterations, r1.iterations);
 }
+
+// ─── residual_history tests (L1) ─────────────────────────────────────────────
+
+#[test]
+fn residual_history_always_populated_cg() {
+    let n = 20;
+    let (a, _, b_vec_raw) = common::make_poisson_1d::<f64>(n);
+    let b = DenseVec::from_vec(b_vec_raw);
+    let cg = ConjugateGradient::<f64>::default();
+    let params = default_params(1e-10, 500);
+    let mut x = DenseVec::zeros(n);
+    let result = cg.solve(&a, None, &b, &mut x, &params).unwrap();
+    assert!(result.converged);
+    // history must have exactly iterations entries
+    assert_eq!(result.residual_history.len(), result.iterations);
+    // residuals must be non-increasing (CG on SPD, with tolerance)
+    for w in result.residual_history.windows(2) {
+        assert!(w[1] <= w[0] * 1.01, "residual should be non-increasing: {} -> {}", w[0], w[1]);
+    }
+    // last entry should match final_residual
+    assert!((result.residual_history.last().unwrap() - result.final_residual).abs() < 1e-14);
+}
+
+#[test]
+fn residual_history_always_populated_gmres() {
+    let n = 20;
+    let (a, _, b_vec_raw) = common::make_poisson_1d::<f64>(n);
+    let b = DenseVec::from_vec(b_vec_raw);
+    let gmres = Gmres::<f64>::default();
+    let params = default_params(1e-10, 500);
+    let mut x = DenseVec::zeros(n);
+    let result = gmres.solve(&a, None, &b, &mut x, &params).unwrap();
+    assert!(result.converged);
+    assert!(!result.residual_history.is_empty());
+    assert_eq!(result.residual_history.len(), result.iterations);
+}
+
+#[test]
+fn residual_history_always_populated_bicgstab() {
+    let n = 20;
+    let (a, _, b_vec_raw) = common::make_poisson_1d::<f64>(n);
+    let b = DenseVec::from_vec(b_vec_raw);
+    let solver = BiCgStab::<f64>::default();
+    let params = default_params(1e-10, 500);
+    let mut x = DenseVec::zeros(n);
+    let result = solver.solve(&a, None, &b, &mut x, &params).unwrap();
+    assert!(result.converged);
+    assert!(!result.residual_history.is_empty());
+}
+
+#[test]
+fn residual_history_independent_of_verbose() {
+    // residual_history must be populated even when verbose = Silent
+    let n = 15;
+    let (a, _, b_vec_raw) = common::make_poisson_1d::<f64>(n);
+    let b = DenseVec::from_vec(b_vec_raw);
+    let cg = ConjugateGradient::<f64>::default();
+    let params_silent = SolverParams { verbose: VerboseLevel::Silent, ..default_params(1e-10, 200) };
+    let params_verbose = SolverParams { verbose: VerboseLevel::Iterations, ..default_params(1e-10, 200) };
+
+    let mut x1 = DenseVec::zeros(n);
+    let r1 = cg.solve(&a, None, &b, &mut x1, &params_silent).unwrap();
+    let mut x2 = DenseVec::zeros(n);
+    let r2 = cg.solve(&a, None, &b, &mut x2, &params_verbose).unwrap();
+
+    // Both should have residual_history
+    assert!(!r1.residual_history.is_empty());
+    assert!(!r2.residual_history.is_empty());
+    // history (Option) should be None for silent, Some for verbose
+    assert!(r1.history.is_none());
+    assert!(r2.history.is_some());
+    // residual_history should match history when verbose
+    assert_eq!(r1.residual_history, r2.residual_history);
+}
