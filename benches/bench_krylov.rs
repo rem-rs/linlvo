@@ -4,7 +4,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use linger::{
     direct::{DirectSolverPrecond, SparseLdlt},
     iterative::{BiCgStab, ConjugateGradient, Gmres},
-    precond::{Icc0Precond, Ilu0Precond, IlukPrecond, JacobiPrecond},
+    precond::{Icc0Precond, Ilu0Precond, IlukPrecond, IldltPrecond, JacobiPrecond},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
@@ -121,6 +121,17 @@ fn bench_preconditioners(c: &mut Criterion) {
             let mut x = DenseVec::zeros(n);
             ConjugateGradient::<f64>::default()
                 .solve(black_box(&a), Some(&icc), black_box(&b), black_box(&mut x), &params)
+                .unwrap();
+        });
+    });
+
+    // ILDLᵀ(0) — incomplete LDLᵀ for symmetric matrices.
+    group.bench_function("ildlt0", |bench| {
+        let ildlt = IldltPrecond::<f64>::from_csr(&a).unwrap();
+        bench.iter(|| {
+            let mut x = DenseVec::zeros(n);
+            ConjugateGradient::<f64>::default()
+                .solve(black_box(&a), Some(&ildlt), black_box(&b), black_box(&mut x), &params)
                 .unwrap();
         });
     });

@@ -34,7 +34,7 @@ pub use num_complex::Complex;
 
 pub use crate::precond::{
     JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
-    IlukPrecond, IlutPrecond, Icc0Precond, SpaiPrecond,
+    IlukPrecond, IlutPrecond, Icc0Precond, IldltPrecond, SpaiPrecond,
     AdditivePrecond, MultiplicativePrecond,
 };
 pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres};
