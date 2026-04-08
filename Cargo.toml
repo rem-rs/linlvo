@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name    = "bench_amg"
 harness = false
+
+[[bench]]
+name    = "bench_direct"
+harness = false

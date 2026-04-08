@@ -46,6 +46,7 @@ pub use lu::SparseLu;
 pub use cholesky::SparseCholesky;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
 pub use triangular::{forward_solve, backward_solve};
+pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
 
 use crate::core::{error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec};
 use crate::sparse::CsrMatrix;

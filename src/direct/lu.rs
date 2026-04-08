@@ -17,7 +17,7 @@
 //! The elimination tree (`etree` module) and symbolic factorisation
 //! (`symbolic` module) are used in Sprint 15's multifrontal method.
 
-use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
@@ -73,6 +73,9 @@ pub struct SparseLu<T: Scalar> {
     /// Row permutation from partial pivoting: perm_p[step] = original_row.
     perm_p: Vec<usize>,
 
+    /// Stored copy of the factored matrix A (needed for iterative refinement).
+    a_stored: Option<CsrMatrix<T>>,
+
     factorized: bool,
     analyzed:   bool,
 }
@@ -89,6 +92,7 @@ impl<T: Scalar> SparseLu<T> {
             l_row_ptr: vec![], l_col_idx: vec![], l_values: vec![], l_diag_pos: vec![],
             u_row_ptr: vec![], u_col_idx: vec![], u_values: vec![], u_diag_pos: vec![],
             perm_p: vec![],
+            a_stored: None,
             factorized: false, analyzed: false,
         }
     }
@@ -196,6 +200,9 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         self.u_values   = uv;
         self.u_diag_pos = udp;
         self.perm_p     = row_perm;
+        if self.options.refine_steps > 0 {
+            self.a_stored = Some(a.clone());
+        }
         self.factorized = true;
         Ok(())
     }
@@ -245,6 +252,47 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             for i in 0..n { xs[self.perm_q[i]] = zs[i]; }
         }
 
+        // Step 5: iterative refinement — x_{k+1} = x_k + A^{-1}(b - A x_k)
+        if self.options.refine_steps > 0 {
+            if let Some(ref a) = self.a_stored {
+                for _ in 0..self.options.refine_steps {
+                    // Compute residual r = b - A x.
+                    let mut r = DenseVec::zeros(n);
+                    a.apply(x, &mut r);
+                    {
+                        let rs = r.as_mut_slice();
+                        let bs = b.as_slice();
+                        for i in 0..n { rs[i] = bs[i] - rs[i]; }
+                    }
+
+                    // Solve A δx = r (reuse stored factors).
+                    let mut pb = DenseVec::zeros(n);
+                    {
+                        let rs  = r.as_slice();
+                        let pbs = pb.as_mut_slice();
+                        for j in 0..n { pbs[j] = rs[self.perm_p[j]]; }
+                    }
+                    let mut dy = DenseVec::zeros(n);
+                    forward_solve(
+                        &self.l_row_ptr, &self.l_col_idx, &self.l_values,
+                        &self.l_diag_pos, true, &pb, &mut dy,
+                    )?;
+                    let mut dz = DenseVec::zeros(n);
+                    backward_solve(
+                        &self.u_row_ptr, &self.u_col_idx, &self.u_values,
+                        &self.u_diag_pos, &dy, &mut dz,
+                    )?;
+
+                    // x += Q^{-1} dz
+                    {
+                        let dzs = dz.as_slice();
+                        let xs  = x.as_mut_slice();
+                        for i in 0..n { xs[self.perm_q[i]] += dzs[i]; }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -252,6 +300,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
         self.l_row_ptr.clear(); self.l_col_idx.clear(); self.l_values.clear(); self.l_diag_pos.clear();
         self.u_row_ptr.clear(); self.u_col_idx.clear(); self.u_values.clear(); self.u_diag_pos.clear();
         self.perm_p.clear();
+        self.a_stored = None;
         self.factorized = false;
     }
 }

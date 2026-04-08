@@ -27,6 +27,110 @@
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 
+/// Pre-computed symbolic Cholesky factorisation result.
+///
+/// Stores the non-zero sparsity pattern of L (lower triangular, including diagonal)
+/// in CSC (column-sparse) format.  Column j pattern includes all rows >= j.
+#[derive(Debug, Clone)]
+pub struct SymbolicCholesky {
+    pub n: usize,
+    /// CSC column pointers: `l_col_ptr[j]..l_col_ptr[j+1]` → row indices in col j.
+    /// Row indices are in ascending order.  The diagonal (row == j) is included.
+    pub l_col_ptr: Vec<usize>,
+    pub l_row_idx: Vec<usize>,
+    /// Exact column counts (number of non-zeros per column, including diagonal).
+    pub col_count: Vec<usize>,
+    /// Parent array from the elimination tree.
+    pub parent: Vec<usize>,
+}
+
+/// Compute the exact symbolic Cholesky factorisation pattern of `a`.
+///
+/// Implements a left-looking symbolic Cholesky:
+///
+/// For each column j (0-indexed):
+///   1. Seeds = { i : A[i,j] != 0, i > j }  (direct lower-triangle entries of A[:,j])
+///   2. Reach set R = DFS from upper-triangle entries of row j through the e-tree
+///      → gives columns k < j where L[j,k] != 0.
+///   3. col_j = {j} ∪ seeds ∪ ⋃_{k ∈ R} (col_k restricted to rows > j).
+///
+/// The reach set is computed the same way as in `SparseCholesky::factorize`,
+/// using DFS on the parent array and mark-and-sweep.
+///
+/// # Complexity
+/// O(nnz(L)) total — proportional to the output size.
+pub fn symbolic_cholesky<T: crate::core::scalar::Scalar>(
+    a: &CsrMatrix<T>,
+    parent: &[usize],
+) -> SymbolicCholesky {
+    let n = a.nrows();
+
+    // Build column access for the lower triangle of A.
+    // col_lo[j] = list of rows i > j with A[i,j] != 0.
+    let mut col_lo: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for k in a.row_ptr()[i]..a.row_ptr()[i + 1] {
+            let j = a.col_idx()[k];
+            if j < i { col_lo[j].push(i); }
+        }
+    }
+
+    // L patterns stored as CSC during computation (column lists).
+    let mut l_cols: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut mark = vec![usize::MAX; n]; // mark[r] = j if visited for column j
+
+    for j in 0..n {
+        // ── Step 1: collect upper-triangle entries of row j ──────────────────
+        // These seed the DFS for the reach set (columns k < j where L[j,k] != 0).
+        let mut reach: Vec<usize> = Vec::new();
+        for k in a.row_ptr()[j]..a.row_ptr()[j + 1] {
+            let col = a.col_idx()[k];
+            if col >= j { continue; } // skip diagonal and upper triangle
+            // DFS up the e-tree from col, stopping at j.
+            let mut r = col;
+            while r < j && mark[r] != j {
+                mark[r] = j;
+                reach.push(r);
+                let p = parent[r];
+                if p >= j { break; }
+                r = p;
+            }
+        }
+        reach.sort_unstable(); // topological order (smaller = earlier in etree)
+
+        // ── Step 2: collect sub-diagonal entries of column j in A ─────────────
+        // These directly appear in col j of L.
+        let mut pattern: Vec<bool> = vec![false; n];
+        pattern[j] = true; // diagonal
+
+        for &i in &col_lo[j] { pattern[i] = true; }
+
+        // ── Step 3: for each k in reach, add col k of L (rows > j) to pattern ─
+        for &k in &reach {
+            // L[j,k] != 0 — union col k of L restricted to rows > j.
+            for &i in &l_cols[k] {
+                if i > j { pattern[i] = true; }
+            }
+        }
+
+        // ── Collect pattern into sorted vec ───────────────────────────────────
+        let mut col_j: Vec<usize> = Vec::new();
+        col_j.push(j);
+        for i in (j + 1)..n {
+            if pattern[i] { col_j.push(i); }
+        }
+        l_cols[j] = col_j;
+    }
+
+    // Build CSC arrays.
+    let mut l_col_ptr = vec![0usize; n + 1];
+    for j in 0..n { l_col_ptr[j + 1] = l_col_ptr[j] + l_cols[j].len(); }
+    let col_count: Vec<usize> = l_cols.iter().map(|v| v.len()).collect();
+    let l_row_idx: Vec<usize> = l_cols.into_iter().flatten().collect();
+
+    SymbolicCholesky { n, l_col_ptr, l_row_idx, col_count, parent: parent.to_vec() }
+}
+
 /// Pre-computed symbolic factorisation result.
 ///
 /// Stores the non-zero sparsity patterns of L (lower triangular) and U

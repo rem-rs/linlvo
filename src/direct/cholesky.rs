@@ -22,7 +22,7 @@
 //!
 //! Davis, T. A. (2006). *Direct Methods for Sparse Linear Systems.* SIAM.
 
-use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
@@ -49,6 +49,9 @@ pub struct SparseCholesky<T: Scalar> {
     l_values:   Vec<T>,
     l_diag_pos: Vec<usize>,
 
+    /// Stored copy of the factored matrix A (needed for iterative refinement).
+    a_stored: Option<CsrMatrix<T>>,
+
     factorized: bool,
     analyzed:   bool,
 }
@@ -63,6 +66,7 @@ impl<T: Scalar> SparseCholesky<T> {
             options, n: 0,
             perm: vec![], inv_perm: vec![],
             l_row_ptr: vec![], l_col_idx: vec![], l_values: vec![], l_diag_pos: vec![],
+            a_stored: None,
             factorized: false, analyzed: false,
         }
     }
@@ -255,6 +259,9 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
         self.l_col_idx  = l_col_idx;
         self.l_values   = l_values;
         self.l_diag_pos = l_diag_pos;
+        if self.options.refine_steps > 0 {
+            self.a_stored = Some(a.clone());
+        }
         self.factorized = true;
         Ok(())
     }
@@ -305,12 +312,59 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
             for i in 0..n { xs[self.perm[i]] = zs[i]; }
         }
 
+        // Step 5: iterative refinement — x_{k+1} = x_k + A^{-1}(b - A x_k)
+        if self.options.refine_steps > 0 {
+            if let Some(ref a) = self.a_stored {
+                for _ in 0..self.options.refine_steps {
+                    // Compute residual r = b - A x.
+                    let mut r = DenseVec::zeros(n);
+                    a.apply(x, &mut r);
+                    {
+                        let rs = r.as_mut_slice();
+                        let bs = b.as_slice();
+                        for i in 0..n { rs[i] = bs[i] - rs[i]; }
+                    }
+
+                    // Apply permutation P to r.
+                    let mut pr = DenseVec::zeros(n);
+                    {
+                        let rs  = r.as_slice();
+                        let prs = pr.as_mut_slice();
+                        for i in 0..n { prs[i] = rs[self.perm[i]]; }
+                    }
+
+                    // Forward solve L dy = Pr.
+                    let mut dy = DenseVec::zeros(n);
+                    forward_solve(
+                        &self.l_row_ptr, &self.l_col_idx, &self.l_values,
+                        &self.l_diag_pos, false, &pr, &mut dy,
+                    )?;
+
+                    // Backward solve Lᵀ dz = dy.
+                    let mut dz = DenseVec::zeros(n);
+                    backward_solve_lt(
+                        n,
+                        &self.l_row_ptr, &self.l_col_idx, &self.l_values,
+                        &self.l_diag_pos, &dy, &mut dz,
+                    )?;
+
+                    // x += P^{-T} dz  (same as xs[perm[i]] += dz[i])
+                    {
+                        let dzs = dz.as_slice();
+                        let xs  = x.as_mut_slice();
+                        for i in 0..n { xs[self.perm[i]] += dzs[i]; }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
     fn reset_factors(&mut self) {
         self.l_row_ptr.clear(); self.l_col_idx.clear();
         self.l_values.clear();  self.l_diag_pos.clear();
+        self.a_stored = None;
         self.factorized = false;
     }
 }

@@ -108,40 +108,54 @@ pub fn post_order(parent: &[usize]) -> Vec<usize> {
 /// `col_count[j]` = number of non-zeros in column j of L (including diagonal).
 /// Used to pre-allocate sparse factor storage before numerical factorisation.
 ///
-/// Uses the "row subtree" algorithm of Gilbert, Li, Ng, Peierls (1994).
+/// Uses the mark-and-sweep algorithm of Gilbert, Li, Ng, Peierls (1994):
+/// for each row `i`, walk upward from each lower-triangle seed j via parent
+/// links, marking visited nodes and incrementing their count, until a
+/// previously-marked node is encountered (which means the rest of the path
+/// was already counted for this row).
 pub fn col_counts<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> Vec<usize> {
     let n = a.nrows();
     let mut count = vec![1usize; n]; // diagonal always non-zero
-    let mut ancestor = (0..n).collect::<Vec<_>>();
+    let mut mark = vec![n; n]; // mark[j] = i means j already visited for row i
 
     for i in 0..n {
+        mark[i] = i; // mark the diagonal (so walks stop here)
         for k in a.row_ptr()[i]..a.row_ptr()[i + 1] {
-            let j = a.col_idx()[k];
-            if j >= i { continue; }
+            let mut j = a.col_idx()[k];
+            if j >= i { continue; } // only strict lower triangle
 
-            // Find root via path compression.
-            let mut r = j;
-            loop {
-                let a = ancestor[r];
-                if a == r { break; }
-                r = a;
-            }
-
-            // Walk from j to r, counting and path-compressing.
-            let mut x = j;
-            while x != r {
-                count[x] += 1;
-                let next = ancestor[x];
-                ancestor[x] = r;
-                x = next;
-            }
-            // Union: attach r to parent[r] (if exists).
-            if r < n && parent[r] < n {
-                ancestor[r] = parent[r];
+            // Walk upward in the etree from j toward i, counting unvisited nodes.
+            while mark[j] != i {
+                mark[j] = i;
+                count[j] += 1;
+                j = parent[j]; // parent[j] > j in this etree convention
+                if j >= n { break; } // reached sentinel root
             }
         }
     }
     count
+}
+
+/// Path-halving find: returns the root of `x`'s set, with path compression.
+fn find_root(ancestor: &mut Vec<usize>, mut x: usize) -> usize {
+    loop {
+        let p = ancestor[x];
+        if p == x { return x; }
+        // Path halving: ancestor[x] = ancestor[p]
+        let pp = ancestor[p];
+        ancestor[x] = pp;
+        x = p;
+    }
+}
+
+fn find_root_u(anc: &mut Vec<usize>, mut x: usize) -> usize {
+    loop {
+        let p = anc[x];
+        if p == x { return x; }
+        let pp = anc[p];
+        anc[x] = pp;
+        x = p;
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
