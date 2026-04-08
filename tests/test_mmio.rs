@@ -1,8 +1,8 @@
-//! Integration tests for the Matrix Market (.mtx) reader.
+//! Integration tests for the Matrix Market (.mtx) reader/writer.
 //!
 //! All tests use in-memory string parsing — no .mtx files need to exist on disk.
 
-use linger::sparse::{read_matrix_market_str, read_matrix_market_coo_str, MmioError};
+use linger::sparse::{read_matrix_market_str, read_matrix_market_coo_str, write_matrix_market_str, MmioError};
 
 // ─── helper ───────────────────────────────────────────────────────────────────
 
@@ -341,4 +341,93 @@ fn laplacian_1d_round_trip() {
     assert!((get_val(&a, 0, 0).unwrap() - 2.0).abs() < 1e-14);
     assert!((get_val(&a, 1, 0).unwrap() + 1.0).abs() < 1e-14);
     assert!((get_val(&a, 0, 1).unwrap() + 1.0).abs() < 1e-14);
+}
+
+// ─── write tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn write_roundtrip_general() {
+    let mtx = "\
+%%MatrixMarket matrix coordinate real general
+3 3 4
+1 1 1.0
+1 3 2.0
+2 2 3.0
+3 1 4.0
+";
+    let a = read_matrix_market_str(mtx).unwrap();
+    let s = write_matrix_market_str(&a).unwrap();
+    let b = read_matrix_market_str(&s).unwrap();
+    assert_eq!(a.nrows(), b.nrows());
+    assert_eq!(a.ncols(), b.ncols());
+    assert_eq!(a.nnz(), b.nnz());
+    for (v1, v2) in a.values().iter().zip(b.values().iter()) {
+        assert!((v1 - v2).abs() < 1e-14);
+    }
+}
+
+#[test]
+fn write_header_format() {
+    use linger::sparse::{CooMatrix, CsrMatrix};
+    let mut coo = CooMatrix::new(2, 2);
+    coo.push(0, 0, 1.5);
+    coo.push(1, 1, 2.5);
+    let a = CsrMatrix::from_coo(&coo);
+    let s = write_matrix_market_str(&a).unwrap();
+    assert!(s.starts_with("%%MatrixMarket matrix coordinate real general\n"));
+}
+
+#[test]
+fn write_1based_indices() {
+    use linger::sparse::{CooMatrix, CsrMatrix};
+    let mut coo = CooMatrix::new(3, 3);
+    coo.push(2, 1, 7.0); // 0-based → should appear as "3 2 7.0" in file
+    let a = CsrMatrix::from_coo(&coo);
+    let s = write_matrix_market_str(&a).unwrap();
+    assert!(s.contains("3 2"), "expected 1-based index '3 2' in output:\n{s}");
+}
+
+#[test]
+fn write_filters_structural_zeros() {
+    // Build a matrix that has a stored 0 value.
+    use linger::sparse::{CooMatrix, CsrMatrix};
+    let mut coo = CooMatrix::new(2, 2);
+    coo.push(0, 0, 0.0); // structural zero
+    coo.push(1, 1, 5.0);
+    let a = CsrMatrix::from_coo(&coo);
+    let s = write_matrix_market_str(&a).unwrap();
+    let b = read_matrix_market_str(&s).unwrap();
+    // The 0.0 entry should have been omitted.
+    assert_eq!(b.nnz(), 1);
+}
+
+#[test]
+fn write_empty_matrix() {
+    use linger::sparse::{CooMatrix, CsrMatrix};
+    let coo: CooMatrix<f64> = CooMatrix::new(0, 0);
+    let a = CsrMatrix::from_coo(&coo);
+    let s = write_matrix_market_str(&a).unwrap();
+    let b = read_matrix_market_str(&s).unwrap();
+    assert_eq!(b.nrows(), 0);
+    assert_eq!(b.nnz(), 0);
+}
+
+#[test]
+fn write_roundtrip_poisson_1d() {
+    use linger::sparse::{CooMatrix, CsrMatrix};
+    let n = 50;
+    let mut coo = CooMatrix::new(n, n);
+    for i in 0..n {
+        coo.push(i, i, 2.0);
+        if i > 0     { coo.push(i, i - 1, -1.0); }
+        if i < n - 1 { coo.push(i, i + 1, -1.0); }
+    }
+    let a = CsrMatrix::from_coo(&coo);
+    let s = write_matrix_market_str(&a).unwrap();
+    let b = read_matrix_market_str(&s).unwrap();
+    assert_eq!(a.nrows(), b.nrows());
+    assert_eq!(a.nnz(), b.nnz());
+    // Check a diagonal entry survived the roundtrip.
+    assert!((get_val(&b, 0, 0).unwrap() - 2.0).abs() < 1e-14);
+    assert!((get_val(&b, 1, 0).unwrap() + 1.0).abs() < 1e-14);
 }

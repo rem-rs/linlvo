@@ -2,6 +2,10 @@
 //!
 //! Measures factorization and solve time for SparseLu, SparseCholesky, and
 //! MultifrontalLu across different problem sizes and orderings.
+//!
+//! Small-scale (n ≤ 400): all three solvers, various orderings.
+//! Medium-scale (n = 1000–5000): SparseCholesky and MultifrontalLu with RCM/NodeNd.
+//! Large-scale 2D (grid ≤ 70×70 ≈ 4900 DOF): ordering comparison on structured grids.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use linger::{
@@ -234,6 +238,134 @@ fn bench_refinement_overhead(c: &mut Criterion) {
     group.finish();
 }
 
+// ─── SparseCholesky medium-scale (1D Laplacian, n = 500–5000) ────────────────
+
+fn bench_cholesky_medium(c: &mut Criterion) {
+    let mut group = c.benchmark_group("SparseCholesky/medium");
+    // Use longer measurement time for larger problems.
+    group.sample_size(10);
+
+    for &n in &[500usize, 1000, 2000, 5000] {
+        let a = laplacian_1d(n);
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("1D_Rcm/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SparseCholesky::<f64>::new(DirectOptions {
+                    ordering: OrderingMethod::Rcm,
+                    ..Default::default()
+                });
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("1D_NodeNd/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SparseCholesky::<f64>::new(DirectOptions {
+                    ordering: OrderingMethod::NodeNd,
+                    ..Default::default()
+                });
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── SparseCholesky medium-scale solve (factor + solve together) ──────────────
+
+fn bench_cholesky_solve_medium(c: &mut Criterion) {
+    let mut group = c.benchmark_group("SparseCholesky/solve_medium");
+    group.sample_size(10);
+
+    for &n in &[500usize, 1000, 2000, 5000] {
+        let a = laplacian_1d(n);
+        let b = ones_rhs(n);
+        let mut solver = SparseCholesky::<f64>::new(DirectOptions {
+            ordering: OrderingMethod::Rcm,
+            ..Default::default()
+        });
+        solver.factor(&a).unwrap();
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("1D_Rcm/n", n), &n, |bench, _| {
+            bench.iter(|| {
+                let mut x = DenseVec::zeros(n);
+                solver.solve(black_box(&b), black_box(&mut x)).unwrap();
+                black_box(x)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── MultifrontalLu medium-scale (1D Laplacian, n = 200–2000) ────────────────
+
+fn bench_multifrontal_medium(c: &mut Criterion) {
+    let mut group = c.benchmark_group("MultifrontalLu/medium");
+    group.sample_size(10);
+
+    for &n in &[200usize, 500, 1000, 2000] {
+        let a = laplacian_1d(n);
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("1D_Rcm/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = MultifrontalLu::<f64>::with_options(MultifrontalOptions {
+                    base: DirectOptions {
+                        ordering: OrderingMethod::Rcm,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ─── Ordering comparison on medium 2D grids ──────────────────────────────────
+
+fn bench_ordering_medium_2d(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Cholesky/ordering_medium_2d");
+    group.sample_size(10);
+
+    // Grid sizes: 20×20=400, 32×32=1024, 50×50=2500, 70×70=4900
+    for &n in &[20usize, 32, 50, 70] {
+        let a = laplacian_2d(n);
+        let nn = n * n;
+        group.throughput(Throughput::Elements(nn as u64));
+
+        for (name, ordering) in &[
+            ("Rcm",    OrderingMethod::Rcm),
+            ("Colamd", OrderingMethod::Colamd),
+            ("NodeNd", OrderingMethod::NodeNd),
+        ] {
+            let ord = ordering.clone();
+            group.bench_with_input(
+                BenchmarkId::new(format!("grid{}x{}", n, n), name),
+                name,
+                |b, _| {
+                    b.iter(|| {
+                        let mut s = SparseCholesky::<f64>::new(DirectOptions {
+                            ordering: ord.clone(),
+                            ..Default::default()
+                        });
+                        s.factor(black_box(&a)).unwrap();
+                        black_box(s)
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 // ─── Criterion entry points ───────────────────────────────────────────────────
 
 criterion_group!(
@@ -241,8 +373,12 @@ criterion_group!(
     bench_lu_factorize,
     bench_lu_solve,
     bench_cholesky_factorize,
+    bench_cholesky_medium,
     bench_multifrontal_factorize,
+    bench_multifrontal_medium,
     bench_ordering_comparison,
+    bench_ordering_medium_2d,
     bench_refinement_overhead,
+    bench_cholesky_solve_medium,
 );
 criterion_main!(benches);

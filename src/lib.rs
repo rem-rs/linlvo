@@ -39,7 +39,7 @@ pub use crate::precond::{
 };
 pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType};
-pub use crate::sparse::{BsrMatrix, BsrBuilder, read_matrix_market, read_matrix_market_coo, read_matrix_market_str, read_matrix_market_coo_str, MmioError};
+pub use crate::sparse::{BsrMatrix, BsrBuilder, read_matrix_market, read_matrix_market_coo, read_matrix_market_str, read_matrix_market_coo_str, write_matrix_market, write_matrix_market_str, MmioError};
 pub use crate::parallel::{
     parallel_spmv, parallel_spmv_add,
     parallel_axpy, parallel_axpby,

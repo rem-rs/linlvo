@@ -11,4 +11,9 @@ pub use bsr::{BsrMatrix, BsrBuilder};
 pub use coo::CooMatrix;
 pub use csc::CscMatrix;
 pub use csr::CsrMatrix;
-pub use mmio::{read_matrix_market, read_matrix_market_coo, read_matrix_market_str, read_matrix_market_coo_str, MmioError};
+pub use mmio::{
+    read_matrix_market, read_matrix_market_coo,
+    read_matrix_market_str, read_matrix_market_coo_str,
+    write_matrix_market, write_matrix_market_str,
+    MmioError,
+};
