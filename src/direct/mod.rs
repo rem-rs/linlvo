@@ -38,6 +38,7 @@
 pub mod ordering;
 pub mod etree;
 pub mod symbolic;
+pub mod blr;
 mod triangular;
 mod lu;
 mod cholesky;
@@ -48,6 +49,7 @@ pub use lu::SparseLu;
 pub use cholesky::SparseCholesky;
 pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
+pub use blr::{BlrBlock, compress_block};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
 
