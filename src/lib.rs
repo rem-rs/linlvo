@@ -37,7 +37,7 @@ pub use crate::precond::{
     IlukPrecond, IlutPrecond, Icc0Precond, IldltPrecond, SpaiPrecond,
     AdditivePrecond, MultiplicativePrecond,
 };
-pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres};
+pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType, LevelInfo};
 pub use crate::sparse::{
     BsrMatrix, BsrBuilder,
