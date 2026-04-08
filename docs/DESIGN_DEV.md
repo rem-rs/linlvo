@@ -30,6 +30,7 @@ linger/
 │   │   ├── coo.rs                # CooMatrix<T>（装配阶段）
 │   │   ├── bsr.rs                # BlockSparseRow<T>
 │   │   ├── ops.rs                # SpMV、稀疏 AXPY 等操作
+│   │   ├── mmio.rs               # Matrix Market .mtx 文件读取
 │   │   └── nalgebra.rs           # 直接为 nalgebra_sparse::CsrMatrix 实现 LinearOperator
 │   ├── iterative/
 │   │   ├── mod.rs
@@ -116,11 +117,18 @@ linger/
 │   ├── test_eigen_s8_s10.rs      # Sprint 8-10：Lanczos/Arnoldi/KS/LOBPCG (16 tests)
 │   ├── test_eigen_s11_s12.rs     # Sprint 11-12：SVD/QEP/NEP/ComplexScalar (9 tests)
 │   ├── test_direct.rs            # Sprint 13：SparseLu/SparseCholesky/RCM/COLAMD (17 tests)
-│   └── test_direct_s14_s15.rs   # Sprint 14-15：etree/MultifrontalLu/BLR (13 tests)
+│   ├── test_direct_s14_s15.rs   # Sprint 14-15：etree/MultifrontalLu/BLR (13 tests)
+│   ├── test_ordering_nd.rs      # B1：NodeNd 嵌套剖分排序 (14 tests)
+│   ├── test_builder_c2.rs       # C1+C2：SolverBuilder + WASM API (15 tests)
+│   ├── test_refinement.rs       # A2：迭代精化 (7 tests)
+│   ├── test_symbolic_cholesky.rs # B2：符号 Cholesky (13 tests)
+│   ├── test_mmio.rs             # C3：Matrix Market 读取 (14 tests)
+│   └── test_reuse_symbolic.rs   # B3：reuse_symbolic 缓存 (10 tests)
 └── benches/
     ├── bench_spmv.rs
     ├── bench_krylov.rs
-    └── bench_amg.rs
+    ├── bench_amg.rs
+    └── bench_direct.rs         # A1：直接法基准测试
 ```
 
 ---
@@ -808,6 +816,29 @@ pub fn solve_cg_js(
 - [x] `direct/etree.rs`：修正 `col_counts()` 算法（替换为正确的 mark-and-sweep，Davis 2006 Algorithm 4.7）
 - [x] `direct/mod.rs`：公开导出 `SymbolicCholesky`、`symbolic_cholesky`
 - [x] 13 项集成测试（`tests/test_symbolic_cholesky.rs`）
+
+### C3：Matrix Market 文件读取器 ✅ 已完成
+- [x] `sparse/mmio.rs`：`read_matrix_market()`、`read_matrix_market_coo()`
+  - 解析 `%%MatrixMarket matrix coordinate real general/symmetric/pattern` 头
+  - 支持对称矩阵自动展开（下三角→完整）
+  - 1-based 索引转 0-based
+- [x] `sparse/mod.rs`：公开导出 `mmio` 模块及函数
+- [x] `lib.rs`：公开 re-export `read_matrix_market`、`read_matrix_market_coo`、`MmioError`
+- [x] 14 项集成测试（`tests/test_mmio.rs`）
+
+### B3：reuse_symbolic 性能优化 ✅ 已完成
+- [x] `direct/lu.rs`：`SparseLu` 新增 `symbolic_n` 缓存字段
+  - `analyze()` 当 `reuse_symbolic=true` 且矩阵尺寸匹配时跳过重排序
+- [x] `direct/cholesky.rs`：`SparseCholesky` 同上
+- [x] `direct/multifrontal.rs`：`MultifrontalLu` 同上
+- [x] 新增公开访问器：`SparseLu::perm_q()`、`SparseLu::perm_p()`、`SparseCholesky::perm()`、`MultifrontalLu::perm_q()`
+- [x] 10 项集成测试（`tests/test_reuse_symbolic.rs`）
+
+### A3：稀疏右视 LU（Symbolic 基础）✅ 已完成
+- [x] `direct/symbolic.rs`：修复 `symbolic_lu()` L 列模式计算
+  - 原实现仅用 A 的直接下三角项，现通过 etree 父链接传播 fill（Gilbert-Peierls）
+- [x] `direct/lu.rs`：引入 `elimination_tree`、`symbolic_lu` 导入
+  - `factorize()` 现在先计算 symbolic 模式（为后续 O(nnz) 左视数值分解做准备）
 
 ### A1：直接法性能基准 ✅ 已完成
 - [x] `benches/bench_direct.rs`：6 组 Criterion 基准
