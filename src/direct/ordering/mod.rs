@@ -3,13 +3,16 @@
 //! A good permutation P is applied before factorisation so that the reordered
 //! matrix P A Pᵀ produces far less fill in L and U.  For structured FEA meshes
 //! RCM reduces bandwidth (and thus fill) by 5-50×; COLAMD is better for
-//! unstructured matrices.
+//! unstructured matrices; and Nested Dissection (ND) achieves 2-5× fewer
+//! non-zeros than COLAMD for large unstructured 3-D FEA problems.
 
 pub mod rcm;
 pub mod colamd;
+pub mod nd;
 
 pub use rcm::rcm;
 pub use colamd::colamd;
+pub use nd::nd;
 
 /// Fill-reducing ordering strategy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -22,6 +25,12 @@ pub enum OrderingMethod {
     /// Column Approximate Minimum Degree (COLAMD): better for unstructured
     /// matrices; O(nnz) expected.
     Colamd,
+    /// Multilevel Nested Dissection (pure-Rust METIS NodeND equivalent).
+    ///
+    /// For large unstructured FEA meshes this typically achieves 2-5× fewer
+    /// non-zeros in L/U compared to COLAMD, at the cost of a longer analysis
+    /// phase.  Fully WASM-compatible (zero external dependencies).
+    NodeNd,
 }
 
 /// Apply a symmetric permutation `perm` to a CSR matrix, returning a new CSR

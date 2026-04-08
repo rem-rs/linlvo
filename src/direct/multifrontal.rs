@@ -31,7 +31,7 @@ use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
-    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd},
+    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd, nd},
     etree::{elimination_tree, post_order},
 };
 
@@ -155,6 +155,7 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
             OrderingMethod::Natural => (0..n).collect(),
             OrderingMethod::Rcm    => rcm(a),
             OrderingMethod::Colamd => colamd(a),
+            OrderingMethod::NodeNd => nd(a),
         };
         self.analyzed   = true;
         self.factorized = false;

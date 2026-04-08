@@ -69,7 +69,10 @@ pub fn colamd<T: Scalar>(a: &CsrMatrix<T>) -> Vec<usize> {
 /// After elimination of node `v`, the degrees of `v`'s uneliminated
 /// neighbours are updated using the *absorbed* degree model:
 ///   d(w) ← |adj(w) ∪ adj(v)| - |eliminated| - 1
-fn amd_order(n: usize, adj: &[Vec<usize>]) -> Vec<usize> {
+///
+/// Exposed as `pub(crate)` so the nested-dissection base case can reuse it
+/// without duplicating the implementation.
+pub(crate) fn amd_order(n: usize, adj: &[Vec<usize>]) -> Vec<usize> {
     // Initial degree = number of uneliminated neighbours.
     let mut degree: Vec<usize> = adj.iter().map(|nbrs| nbrs.len()).collect();
     let mut eliminated = vec![false; n];

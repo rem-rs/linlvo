@@ -14,6 +14,7 @@ pub mod amg;
 pub mod parallel;
 pub mod eigen;
 pub mod direct;
+pub mod builder;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -59,5 +60,10 @@ pub use crate::eigen::{
 pub use crate::direct::{
     DirectSolver, DirectOptions, DirectSolverPrecond,
     SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
-    ordering::{OrderingMethod, rcm, colamd},
+    ordering::{OrderingMethod, rcm, colamd, nd},
+};
+
+pub use crate::builder::{
+    SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering as SolverOrdering,
+    solve_auto,
 };

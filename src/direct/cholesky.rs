@@ -26,7 +26,7 @@ use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
-    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd},
+    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd, nd},
     triangular::forward_solve,
     etree::elimination_tree,
 };
@@ -83,6 +83,7 @@ impl<T: Scalar> DirectSolver<T> for SparseCholesky<T> {
             OrderingMethod::Natural => (0..n).collect(),
             OrderingMethod::Rcm    => rcm(a),
             OrderingMethod::Colamd => colamd(a),
+            OrderingMethod::NodeNd => nd(a),
         };
         self.inv_perm = invert_perm(&self.perm);
         self.analyzed   = true;
