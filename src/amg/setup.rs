@@ -150,4 +150,128 @@ impl<T: Scalar> AmgHierarchy<T> {
     }
 
     pub fn n_levels(&self) -> usize { self.levels.len() }
+
+    // ─── Level diagnostics ────────────────────────────────────────────────────
+
+    /// Number of degrees of freedom at level `l` (0 = finest).
+    ///
+    /// Returns `None` if `l >= n_levels()`.
+    pub fn level_ndof(&self, l: usize) -> Option<usize> {
+        self.levels.get(l).map(|lev| lev.a.nrows())
+    }
+
+    /// Number of non-zeros in the operator at level `l`.
+    ///
+    /// Returns `None` if `l >= n_levels()`.
+    pub fn level_nnz(&self, l: usize) -> Option<usize> {
+        self.levels.get(l).map(|lev| lev.a.col_idx().len())
+    }
+
+    /// Operator complexity: ratio of total non-zeros across all levels to
+    /// the finest-level non-zeros.
+    ///
+    /// A value close to 1 indicates little overhead; typical values are 1.2–2.0
+    /// for SA-AMG on structured problems.  Returns `0.0` if the hierarchy is
+    /// empty.
+    ///
+    /// Formula: `sum_{l} nnz(A_l) / nnz(A_0)`.
+    pub fn operator_complexity(&self) -> f64 {
+        if self.levels.is_empty() { return 0.0; }
+        let fine_nnz = self.level_nnz(0).unwrap_or(1) as f64;
+        if fine_nnz == 0.0 { return 0.0; }
+        let total: f64 = self.levels.iter()
+            .map(|lev| lev.a.col_idx().len() as f64)
+            .sum();
+        total / fine_nnz
+    }
+
+    /// Grid complexity: ratio of total DOFs across all levels to the finest
+    /// level DOFs.
+    ///
+    /// Formula: `sum_{l} n_l / n_0`.
+    pub fn grid_complexity(&self) -> f64 {
+        if self.levels.is_empty() { return 0.0; }
+        let fine_n = self.level_ndof(0).unwrap_or(1) as f64;
+        if fine_n == 0.0 { return 0.0; }
+        let total: f64 = self.levels.iter()
+            .map(|lev| lev.a.nrows() as f64)
+            .sum();
+        total / fine_n
+    }
+
+    /// Summary of the AMG hierarchy as a vector of [`LevelInfo`] structs,
+    /// one per level (finest to coarsest).
+    ///
+    /// Use this for logging, debugging, or asserting hierarchy properties in tests.
+    pub fn level_info(&self) -> Vec<LevelInfo> {
+        self.levels.iter().enumerate().map(|(l, lev)| {
+            let ndof = lev.a.nrows();
+            let nnz  = lev.a.col_idx().len();
+            let avg_nnz_per_row = if ndof == 0 { 0.0 } else { nnz as f64 / ndof as f64 };
+            let has_prolongation = lev.p.is_some();
+            LevelInfo {
+                level: l,
+                ndof,
+                nnz,
+                avg_nnz_per_row,
+                is_coarsest: !has_prolongation,
+            }
+        }).collect()
+    }
+
+    /// Print a compact table of level information to stdout.
+    ///
+    /// Example output:
+    /// ```text
+    /// AMG hierarchy: 4 levels
+    ///   level  n_dof     nnz   avg_nz/row  coarsest?
+    ///       0   1000    2998         3.00      no
+    ///       1    333    1001         3.00      no
+    ///       2    111     333         3.00      no
+    ///       3     37     109         2.95     yes
+    /// operator complexity: 1.48    grid complexity: 1.48
+    /// ```
+    pub fn print_info(&self) {
+        let infos = self.level_info();
+        println!("AMG hierarchy: {} levels", infos.len());
+        println!("  {:>6}  {:>6}  {:>7}  {:>12}  {:>9}", "level", "n_dof", "nnz", "avg_nz/row", "coarsest?");
+        for info in &infos {
+            println!("  {:>6}  {:>6}  {:>7}  {:>12.2}  {:>9}",
+                info.level, info.ndof, info.nnz, info.avg_nnz_per_row,
+                if info.is_coarsest { "yes" } else { "no" });
+        }
+        println!("operator complexity: {:.2}    grid complexity: {:.2}",
+            self.operator_complexity(), self.grid_complexity());
+    }
+
+    /// Coarsening ratios between consecutive levels.
+    ///
+    /// `coarsen_ratios()[l]` = n_{l} / n_{l+1}  (≥ 1.0, since coarsening reduces).
+    /// An empty `Vec` is returned for a single-level hierarchy.
+    pub fn coarsen_ratios(&self) -> Vec<f64> {
+        self.levels.windows(2).map(|w| {
+            let n_fine   = w[0].a.nrows() as f64;
+            let n_coarse = w[1].a.nrows() as f64;
+            if n_coarse == 0.0 { f64::INFINITY } else { n_fine / n_coarse }
+        }).collect()
+    }
+}
+
+// ─── Diagnostic types ─────────────────────────────────────────────────────────
+
+/// Per-level AMG diagnostic data.
+///
+/// Returned by [`AmgHierarchy::level_info`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct LevelInfo {
+    /// Level index (0 = finest).
+    pub level:           usize,
+    /// Number of degrees of freedom at this level.
+    pub ndof:            usize,
+    /// Number of non-zeros in the operator A at this level.
+    pub nnz:             usize,
+    /// Average non-zeros per row: `nnz / ndof`.
+    pub avg_nnz_per_row: f64,
+    /// True iff this is the coarsest level (no prolongation stored).
+    pub is_coarsest:     bool,
 }

@@ -8,7 +8,7 @@ pub mod setup;
 pub mod smoother;
 pub mod strength;
 
-pub use setup::{AmgConfig, AmgHierarchy, CoarsenStrategy, AmgLevel};
+pub use setup::{AmgConfig, AmgHierarchy, CoarsenStrategy, AmgLevel, LevelInfo};
 pub use smoother::SmootherType;
 pub use cycle::CycleType;
 
