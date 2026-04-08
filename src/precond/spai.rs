@@ -24,6 +24,7 @@
 //!   PETSc: `PCSPAI`
 //!   HYPRE: (no direct equivalent; use `EUCLID` or `Parasails`)
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
 };

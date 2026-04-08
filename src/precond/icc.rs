@@ -17,6 +17,7 @@
 //!   PETSc: `PCICC` with `PCFactorSetLevels(pc, 0)`
 //!   HYPRE: `HYPRE_BoomerAMGSetRelaxType` (Cholesky smoother)
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
 };

@@ -18,6 +18,7 @@
 //! Cuthill, E. and McKee, J. (1969).  *Reducing the bandwidth of sparse
 //! symmetric matrices.*  Proceedings of the ACM National Conference.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 use std::collections::VecDeque;
@@ -117,7 +118,7 @@ fn find_start_in_component(
     let n = adj.len();
     let mut tmp_visited = vec![false; n];
     // Copy the real visited state so we don't traverse already-placed nodes.
-    for i in 0..n { tmp_visited[i] = visited[i]; }
+    tmp_visited.copy_from_slice(visited);
 
     let mut last_level: Vec<usize> = vec![seed];
     let mut queue: VecDeque<usize> = VecDeque::new();

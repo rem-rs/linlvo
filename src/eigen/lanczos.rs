@@ -110,8 +110,8 @@ impl<T: Scalar> EigenSolver<T> for LanczosIter {
                 let mut final_residuals = Vec::with_capacity(nev);
                 for &wi in wanted {
                     let mut x = DenseVec::zeros(n);
-                    for j in 0..ncv {
-                        x.axpy(ritz_vecs[wi][j], &v_cols[j]);
+                    for (j, v_col) in v_cols.iter().enumerate() {
+                        x.axpy(ritz_vecs[wi][j], v_col);
                     }
                     normalise(&mut x);
                     let mut ax = DenseVec::zeros(n);
@@ -135,7 +135,7 @@ impl<T: Scalar> EigenSolver<T> for LanczosIter {
             for (ki, &wi) in wanted.iter().enumerate() {
                 if residuals[ki] < params.tol {
                     let mut x = DenseVec::zeros(n);
-                    for j in 0..ncv { x.axpy(ritz_vecs[wi][j], &v_cols[j]); }
+                    for (j, v_col) in v_cols.iter().enumerate() { x.axpy(ritz_vecs[wi][j], v_col); }
                     normalise(&mut x);
                     converged_vecs.push(x);
                 }
@@ -194,6 +194,7 @@ impl<T: Scalar> EigenSolver<T> for LanczosIter {
 /// - `V` = `target` orthonormal Lanczos vectors
 /// - `alpha`, `beta` = tridiagonal entries
 /// - `f` = unnormalised residual vector after the last step
+#[allow(clippy::type_complexity)]
 fn lanczos_extend<T, Op>(
     op: &Op,
     v_init: &[DenseVec<T>],
@@ -240,6 +241,7 @@ where
         f = w;
 
         // Full re-orthogonalisation against all previous vectors (avoids loss)
+        #[allow(clippy::needless_range_loop)]
         for k in 0..=j {
             let proj = dot(f.as_slice(), v[k].as_slice());
             let fs = f.as_mut_slice();
@@ -256,6 +258,7 @@ where
                 // Lucky breakdown — pad with random vector
                 let mut r = DenseVec::zeros(n);
                 fill_random(&mut r, 17 + j as u64);
+                #[allow(clippy::needless_range_loop)]
                 for k in 0..=j {
                     let proj = dot(r.as_slice(), v[k].as_slice());
                     let rs = r.as_mut_slice();
@@ -313,6 +316,7 @@ pub(crate) fn tridiag_eig<T: Scalar>(alpha: &[T], beta: &[T]) -> (Vec<T>, Vec<Ve
 }
 
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn givens_rot<T: Scalar>(a: T, b: T) -> (T, T) {
     let r = (a * a + b * b).sqrt();
     if r < T::from_f64(1e-15) { (T::one(), T::zero()) } else { (a / r, -b / r) }
@@ -323,12 +327,12 @@ pub(crate) fn givens_rot<T: Scalar>(a: T, b: T) -> (T, T) {
 /// Apply `p = ncv - nev` implicit QR steps with the given shifts to T,
 /// accumulating the product rotation Q.
 /// Returns `(new_alpha, new_beta, Q_flat)` where Q_flat is row-major ncv×ncv.
+#[allow(dead_code)]
 fn implicit_qr_restart<T: Scalar>(
     alpha: &[T],
     beta: &[T],
     shifts: &[T],
-    nev: usize,
-    ncv: usize,
+    _nev: usize,    ncv: usize,
 ) -> (Vec<T>, Vec<T>, Vec<T>) {
     let mut d = alpha.to_vec();
     let mut e = beta.to_vec();
@@ -385,6 +389,7 @@ fn implicit_qr_restart<T: Scalar>(
 /// Reduce dense symmetric matrix `a` (row-major n×n) to tridiagonal form,
 /// then apply the QR algorithm to get eigenvalues + eigenvectors.
 /// Returns `(eigenvalues, eigenvectors_row_major)`.
+#[allow(dead_code)]
 pub(crate) fn tridiag_from_sym<T: Scalar>(a: &[T], n: usize) -> (Vec<T>, Vec<T>) {
     // Copy to working storage
     let mut m = a.to_vec();
@@ -398,7 +403,7 @@ pub(crate) fn tridiag_from_sym<T: Scalar>(a: &[T], n: usize) -> (Vec<T>, Vec<T>)
         for i in k + 1..n { sigma += m[i * n + k] * m[i * n + k]; }
         if sigma < T::from_f64(1e-28) { continue; }
         let alpha = if m[(k + 1) * n + k] > T::zero() { -sigma.sqrt() } else { sigma.sqrt() };
-        let r = ((alpha * alpha - m[(k + 1) * n + k] * alpha)).sqrt();
+        let r = (alpha * alpha - m[(k + 1) * n + k] * alpha).sqrt();
         if r < T::from_f64(1e-15) { continue; }
         let mut v = vec![T::zero(); n];
         v[k + 1] = (m[(k + 1) * n + k] - alpha) / (T::from_f64(2.0) * r);
@@ -468,7 +473,7 @@ pub(crate) fn tridiag_from_sym<T: Scalar>(a: &[T], n: usize) -> (Vec<T>, Vec<T>)
 
 // ─── Sort Ritz values by EigenWhich ──────────────────────────────────────────
 
-pub(crate) fn sort_ritz<T: Scalar>(order: &mut Vec<usize>, vals: &[T], which: EigenWhich) {
+pub(crate) fn sort_ritz<T: Scalar>(order: &mut [usize], vals: &[T], which: EigenWhich) {
     match which {
         EigenWhich::LargestMagnitude | EigenWhich::BothEnds =>
             order.sort_by(|&a, &b| vals[b].abs().partial_cmp(&vals[a].abs()).unwrap()),

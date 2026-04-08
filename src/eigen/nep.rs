@@ -128,7 +128,7 @@ impl<T: Scalar> NepNewton<T> {
                 } else {
                     delta_lam
                 };
-                lam = lam + damped;
+                lam += damped;
             }
         }
 

@@ -19,8 +19,8 @@ use crate::core::{
     scalar::Scalar,
     vector::{DenseVec, Vector},
 };
-use super::{EigenParams, EigenWhich, fill_random, dot, normalise};
-use super::lanczos::{LanczosIter, sort_ritz};
+use super::{EigenParams, EigenWhich};
+use super::lanczos::LanczosIter;
 use super::EigenSolver;
 
 // ─── SvdResult ────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ impl LanczosSvd {
         let ncv = self.ncv.unwrap_or_else(|| n.min(nev + nev.max(20)));
         let lanczos = LanczosIter { ncv: Some(ncv), seed: self.seed };
 
-        let mut params: EigenParams<T> = EigenParams {
+        let params: EigenParams<T> = EigenParams {
             n_eigenvalues: nev,
             which: EigenWhich::LargestAlgebraic,
             tol,
@@ -108,7 +108,7 @@ impl LanczosSvd {
         // Convert λᵢ → σᵢ; sort descending
         let mut pairs: Vec<(T, DenseVec<T>)> = eigen.eigenvalues
             .into_iter()
-            .zip(eigen.eigenvectors.into_iter())
+            .zip(eigen.eigenvectors)
             .map(|(lam, v)| {
                 let sigma = if lam > T::zero() { lam.sqrt() } else { T::zero() };
                 (sigma, v)

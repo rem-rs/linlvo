@@ -40,6 +40,7 @@
 //!   PETSc: `KSPSetType(ksp, KSPLGMRES)` with `KSPLGMRESSetAugDim`
 //!   HYPRE: (no direct equivalent; use FGMRES)
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError,
     operator::LinearOperator,
@@ -314,11 +315,12 @@ fn gram_schmidt<T: Scalar>(v: &[DenseVec<T>], w: &mut DenseVec<T>, n: usize) -> 
 
 /// Apply previously accumulated Givens rotations to column j of H, then
 /// compute and apply a new rotation; update the g vector.
+#[allow(clippy::ptr_arg)]
 fn apply_givens_and_update<T: Scalar>(
     h:  &mut Vec<Vec<T>>,
     cs: &mut Vec<T>,
     sn: &mut Vec<T>,
-    g:  &mut Vec<T>,
+    g:  &mut [T],
     j:  usize,
 ) {
     let hj = h.last_mut().unwrap();

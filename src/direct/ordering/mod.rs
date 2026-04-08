@@ -6,6 +6,8 @@
 //! unstructured matrices; and Nested Dissection (ND) achieves 2-5× fewer
 //! non-zeros than COLAMD for large unstructured 3-D FEA problems.
 
+#![allow(clippy::needless_range_loop)]
+
 pub mod rcm;
 pub mod colamd;
 pub mod nd;

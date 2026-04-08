@@ -7,8 +7,9 @@
 //!
 //! Convergence: `|h_{m+1,m}| |s_k[m-1]| / |θ_k| < tol` (Sorensen 1992).
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
-use super::{EigenParams, EigenResult, EigenSolver, EigenWhich, fill_random, residual_norm, dot, normalise, orthogonalise_against};
+use super::{EigenParams, EigenResult, EigenSolver, fill_random, residual_norm, dot, normalise, orthogonalise_against};
 use super::lanczos::sort_ritz; // reuse sort helper
 
 // ─── ArnoldiIter ─────────────────────────────────────────────────────────────
@@ -89,7 +90,7 @@ impl<T: Scalar> EigenSolver<T> for ArnoldiIter {
                 for &wi in &wanted {
                     let lam = ritz_vals[wi];
                     let mut x = DenseVec::zeros(n);
-                    for j in 0..ncv { x.axpy(ritz_vecs[wi][j], &v_cols[j]); }
+                    for (j, v_col) in v_cols.iter().enumerate() { x.axpy(ritz_vecs[wi][j], v_col); }
                     normalise(&mut x);
                     let mut ax = DenseVec::zeros(n);
                     op.apply(&x, &mut ax);
@@ -249,7 +250,7 @@ pub(crate) fn hessenberg_eig<T: Scalar>(h: &[T], n: usize) -> (Vec<T>, Vec<Vec<T
 fn hessenberg_implicit_restart<T: Scalar>(
     h: &[T],
     shifts: &[T],
-    nev: usize,
+    _nev: usize,
     ncv: usize,
 ) -> (Vec<T>, Vec<T>) {
     let mut a = h.to_vec();

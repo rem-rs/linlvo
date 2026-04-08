@@ -106,7 +106,6 @@ impl<T: Scalar> EigenSolver<T> for InverseIter<T> {
         let inner_rtol = T::from_f64(self.inner_rtol);
 
         let mut ax = DenseVec::zeros(n);
-        let mut lambda = T::zero();
         let mut res_norm = T::zero();
 
         for iter in 0..params.max_iter {
@@ -118,7 +117,7 @@ impl<T: Scalar> EigenSolver<T> for InverseIter<T> {
             normalise(&mut x);
 
             op.apply(&x, &mut ax);
-            lambda = rayleigh_quotient(&ax, &x);
+            let lambda = rayleigh_quotient(&ax, &x);
             res_norm = residual_norm(&ax, &x, lambda);
 
             let lam_abs = if lambda.abs() > T::from_f64(1e-14) { lambda.abs() } else { T::one() };
@@ -201,7 +200,6 @@ impl<T: Scalar> EigenSolver<T> for RayleighQuotientIter<T> {
         let mut sigma = self.initial_shift;
         let inner_rtol = T::from_f64(self.inner_rtol);
 
-        let mut lambda = sigma;
         let mut res_norm = T::zero();
 
         for iter in 0..params.max_iter {
@@ -214,7 +212,7 @@ impl<T: Scalar> EigenSolver<T> for RayleighQuotientIter<T> {
             normalise(&mut x);
 
             op.apply(&x, &mut ax);
-            lambda = rayleigh_quotient(&ax, &x);
+            let lambda = rayleigh_quotient(&ax, &x);
             res_norm = residual_norm(&ax, &x, lambda);
             sigma = lambda;
 

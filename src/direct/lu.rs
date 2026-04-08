@@ -20,14 +20,15 @@
 //! Memory: O(n²) for the dense working matrix. Practical limit: n ≈ 10^4.
 //! For larger matrices, use [`MultifrontalLu`](super::multifrontal::MultifrontalLu).
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
-    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd, nd},
+    ordering::{OrderingMethod, permute_symmetric, rcm, colamd, nd},
     triangular::{forward_solve, backward_solve},
     etree::elimination_tree,
-    symbolic::{symbolic_lu, SymbolicLu},
+    symbolic::symbolic_lu,
 };
 
 // ─── Public struct ────────────────────────────────────────────────────────────
@@ -350,6 +351,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// CSC matrix structure for temporary use during factorization.
+#[allow(dead_code)]
 struct CscMatrix<T: Scalar> {
     n: usize,
     col_ptr: Vec<usize>,
@@ -358,6 +360,7 @@ struct CscMatrix<T: Scalar> {
 }
 
 /// Convert CSC to CSR format (for L after column-wise factorization).
+#[allow(dead_code)]
 fn csc_to_csr<T: Scalar>(
     n: usize,
     col_ptr: &[usize],
@@ -411,6 +414,7 @@ fn csc_to_csr<T: Scalar>(
 }
 
 /// Convert CSR to CSC format for column access during factorization.
+#[allow(dead_code)]
 fn csc_from_csr<T: Scalar>(csr: &CsrMatrix<T>) -> CscMatrix<T> {
     let n = csr.nrows();
     let nnz = csr.col_idx().len();
@@ -472,7 +476,7 @@ fn coo_to_csr<T: Scalar>(
 
     let mut diag_pos = vec![0usize; n];
     if lower {
-        for i in 0..n { diag_pos[i] = row_ptr[i]; }
+        diag_pos.copy_from_slice(&row_ptr[..n]);
     } else {
         for i in 0..n {
             for k in row_ptr[i]..row_ptr[i + 1] {

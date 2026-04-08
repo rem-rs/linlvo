@@ -11,6 +11,7 @@
 //!   PETSc: `PCILU` with `PCFactorSetLevels(pc, 0)`
 //!   HYPRE: `HYPRE_EuclidCreate` with level 0
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
 };

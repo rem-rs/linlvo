@@ -36,6 +36,7 @@
 //! George, A. and Liu, J. W. H. (1981).  *Computer Solution of Large Sparse
 //! Positive Definite Systems.*  Prentice-Hall.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 use std::collections::VecDeque;
@@ -159,7 +160,6 @@ fn hem_coarsen(local_adj: &[Vec<usize>]) -> Coarsening {
 /// Coarsen repeatedly until `|coarse| <= target` or no further contraction.
 fn hem_coarsen_multilevel(local_adj: &[Vec<usize>], target: usize) -> Vec<Coarsening> {
     let mut levels: Vec<Coarsening> = Vec::new();
-    let mut current: &[Vec<usize>];
     // We need ownership so use a temporary Vec.
     let mut owned: Vec<Vec<usize>> = local_adj.to_vec();
 
@@ -436,9 +436,9 @@ fn nd_recurse(
 
     // Walk coarsening levels in reverse.
     let mut n_fine = n;
-    let mut a_mask:   Vec<bool>;
-    let mut b_mask:   Vec<bool>;
-    let mut sep_mask: Vec<bool>;
+    let a_mask:   Vec<bool>;
+    let b_mask:   Vec<bool>;
+    let sep_mask: Vec<bool>;
 
     {
         // Start at the coarsest resolution and work backwards.

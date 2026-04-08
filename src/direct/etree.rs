@@ -25,6 +25,7 @@
 //! *Sparse partial pivoting in time proportional to arithmetic.*
 //! SIAM J. Sci. Comput., 15(5), 1075-1091.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 
@@ -137,7 +138,8 @@ pub fn col_counts<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> Vec<usize> {
 }
 
 /// Path-halving find: returns the root of `x`'s set, with path compression.
-fn find_root(ancestor: &mut Vec<usize>, mut x: usize) -> usize {
+#[allow(dead_code)]
+fn find_root(ancestor: &mut [usize], mut x: usize) -> usize {
     loop {
         let p = ancestor[x];
         if p == x { return x; }
@@ -148,7 +150,8 @@ fn find_root(ancestor: &mut Vec<usize>, mut x: usize) -> usize {
     }
 }
 
-fn find_root_u(anc: &mut Vec<usize>, mut x: usize) -> usize {
+#[allow(dead_code)]
+fn find_root_u(anc: &mut [usize], mut x: usize) -> usize {
     loop {
         let p = anc[x];
         if p == x { return x; }

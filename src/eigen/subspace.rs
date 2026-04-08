@@ -132,7 +132,7 @@ impl<T: Scalar> EigenSolver<T> for SubspaceIter {
         }
 
         // Non-convergence — return best estimates + error
-        let converged_count = (0..k).filter(|&j| {
+        let _converged_count = (0..k).filter(|&j| {
             let lam_abs = if lambdas[j].abs() > T::from_f64(1e-14) { lambdas[j].abs() } else { T::one() };
             res_norms[j] / lam_abs < params.tol
         }).count();
@@ -151,7 +151,7 @@ impl<T: Scalar> EigenSolver<T> for SubspaceIter {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-fn sort_by_which<T: Scalar>(pairs: &mut Vec<(T, DenseVec<T>, T)>, which: EigenWhich) {
+fn sort_by_which<T: Scalar>(pairs: &mut [(T, DenseVec<T>, T)], which: EigenWhich) {
     match which {
         EigenWhich::LargestMagnitude | EigenWhich::BothEnds =>
             pairs.sort_by(|a, b| b.0.abs().partial_cmp(&a.0.abs()).unwrap()),

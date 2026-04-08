@@ -3,6 +3,7 @@
 //! Both routines operate on a CSR-stored triangular factor together with a
 //! diagonal-position index and an optional row/column permutation.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, scalar::Scalar, vector::DenseVec};
 
 // ─── Forward solve  L x = b ──────────────────────────────────────────────────
@@ -15,6 +16,8 @@ use crate::core::{error::SolverError, scalar::Scalar, vector::DenseVec};
 ///
 /// `perm` maps external row indices to internal order.  Pass `None` if no
 /// permutation was applied.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn forward_solve_csr(
     n: usize,
     row_ptr: &[usize],
@@ -52,6 +55,8 @@ pub(crate) fn forward_solve_csr(
 ///
 /// `U` is upper-triangular; entries with `col_idx > row` are the strict
 /// upper part; the diagonal is in `diag_val`.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn backward_solve_csr(
     n: usize,
     row_ptr: &[usize],

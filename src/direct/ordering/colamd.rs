@@ -25,6 +25,7 @@
 //! Amestoy, P. R., Davis, T. A., Duff, I. S. (1996).  *An approximate minimum
 //! degree ordering algorithm.*  SIAM J. Matrix Anal. Appl. 17(4):886-905.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 use std::collections::BinaryHeap;

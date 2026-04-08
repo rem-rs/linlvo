@@ -14,6 +14,7 @@
 //!   PETSc: `PCSOR` with `PCSORSetSymmetric` / `PCSORSetOmega`
 //!   HYPRE: `HYPRE_BoomerAMGSetRelaxType` (SOR=6, SSOR=9)
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
 };

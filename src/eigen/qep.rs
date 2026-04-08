@@ -23,8 +23,8 @@
 //! 2n × 2n dense pencil directly to the `hessenberg_eig` path inside
 //! `ArnoldiIter`.  We therefore materialise a dense helper operator.
 
-use crate::core::{error::SolverError, operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
-use super::{EigenParams, EigenResult, EigenSolver, fill_random, dot, normalise};
+use crate::core::{error::SolverError, operator::LinearOperator, scalar::Scalar, vector::DenseVec};
+use super::{EigenParams, EigenResult, EigenSolver, normalise};
 use super::arnoldi::ArnoldiIter;
 
 // ─── QuadraticEigen ───────────────────────────────────────────────────────────

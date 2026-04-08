@@ -12,6 +12,7 @@
 //!
 //! **Reference**: Ruge & Stüben 1987; Stuben 2001 (survey).
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 

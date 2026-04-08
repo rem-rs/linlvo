@@ -12,8 +12,9 @@
 //! Works for **any** square operator; for symmetric operators the Schur form
 //! is diagonal and this reduces to thick-restart Lanczos.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
-use super::{EigenParams, EigenResult, EigenSolver, EigenWhich, fill_random, residual_norm, dot, normalise, orthogonalise_against};
+use super::{EigenParams, EigenResult, EigenSolver, fill_random, residual_norm, normalise, orthogonalise_against};
 use super::arnoldi::{arnoldi_extend, hessenberg_eig};
 use super::lanczos::sort_ritz;
 
@@ -157,6 +158,7 @@ impl<T: Scalar> EigenSolver<T> for KrylovSchur {
 }
 
 /// Extract final `EigenResult` from Schur data.
+#[allow(clippy::too_many_arguments)]
 fn extract_result<T: Scalar, Op: LinearOperator<Vector = DenseVec<T>>>(
     op:          &Op,
     v_cols:      &[DenseVec<T>],

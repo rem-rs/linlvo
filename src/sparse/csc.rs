@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};
 use crate::sparse::csr::CsrMatrix;
 

@@ -23,6 +23,7 @@
 //!   cuSPARSE: `CUSPARSE_FORMAT_ELL`
 //!   ELLPACK-R: extension with per-row nnz for reduced padding
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};
 use crate::sparse::{CooMatrix, CsrMatrix};
 

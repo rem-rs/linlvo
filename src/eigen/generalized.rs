@@ -244,7 +244,7 @@ impl<T: Scalar> GeneralizedEigen<T> {
         };
 
         // Params for the standard sub-problem: LM (largest ν = closest λ to σ)
-        let mut inner_params = EigenParams {
+        let inner_params = EigenParams {
             n_eigenvalues: params.n_eigenvalues,
             which: EigenWhich::LargestMagnitude,
             tol: params.tol,
@@ -253,7 +253,7 @@ impl<T: Scalar> GeneralizedEigen<T> {
         };
 
         let mut result = if self.symmetric {
-            let mut l = LanczosIter { ncv: self.ncv, seed: 42 };
+            let l = LanczosIter { ncv: self.ncv, seed: 42 };
             EigenSolver::<T>::solve(&l, &op, &inner_params)?
         } else {
             let a_iter = ArnoldiIter { ncv: self.ncv, seed: 42 };
@@ -290,6 +290,7 @@ impl<T: Scalar> GeneralizedEigen<T> {
 // ─── Generic identity operator ────────────────────────────────────────────────
 
 struct IdentityOpG<T: Scalar> { n: usize, _p: std::marker::PhantomData<T> }
+#[allow(dead_code)]
 impl<T: Scalar> IdentityOpG<T> { fn new(n: usize) -> Self { IdentityOpG { n, _p: std::marker::PhantomData } } }
 impl<T: Scalar> LinearOperator for IdentityOpG<T> {
     type Vector = DenseVec<T>;

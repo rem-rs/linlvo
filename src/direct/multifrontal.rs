@@ -27,11 +27,12 @@
 //! Amestoy et al. (2015).  *Improving multifrontal methods by means of
 //! block low-rank representations.*  SIAM J. Sci. Comput., 37(3), A1452-A1474.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
-    ordering::{OrderingMethod, permute_symmetric, invert_perm, rcm, colamd, nd},
+    ordering::{OrderingMethod, permute_symmetric, rcm, colamd, nd},
     etree::{elimination_tree, post_order},
 };
 
@@ -226,8 +227,10 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
         // Dense working matrix (reuse the dense right-looking approach from SparseLu
         // for correctness; Sprint 15 adds BLR as a modular extension).
         let mut mat: Vec<T> = vec![T::zero(); n * n];
-        let mut row_perm: Vec<usize> = (0..n).collect();
-        let mut row_pos:  Vec<usize> = (0..n).collect();
+        #[allow(unused_assignments)]
+        let mut row_perm: Vec<usize> = Vec::new();
+        #[allow(unused_assignments)]
+        let mut row_pos:  Vec<usize> = Vec::new();
         let thresh = self.opts.base.pivot_threshold;
 
         for i in 0..n {
@@ -422,7 +425,7 @@ fn coo_to_csr<T: Scalar>(
     for &(_, c, v) in &sorted { col_idx.push(c); values.push(v); }
     let mut diag_pos = vec![0usize; n];
     if lower {
-        for i in 0..n { diag_pos[i] = row_ptr[i]; }
+        diag_pos.copy_from_slice(&row_ptr[..n]);
     } else {
         for i in 0..n {
             for k in row_ptr[i]..row_ptr[i + 1] {

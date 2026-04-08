@@ -24,6 +24,7 @@
 //! *Sparse partial pivoting in time proportional to arithmetic.*
 //! SIAM J. Sci. Comput., 15(5), 1075-1091.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 
@@ -180,8 +181,6 @@ pub fn symbolic_lu<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> SymbolicLu 
     }
 
     // For each column j, compute the reach set via DFS on the e-tree.
-    let mut l_col_ptr = vec![0usize; n + 1];
-    let mut l_rows: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut u_rows: Vec<Vec<usize>> = vec![Vec::new(); n]; // u_rows[j] = cols in row j of U
 
     let mut visited = vec![usize::MAX; n]; // visited[k] = last column that touched k

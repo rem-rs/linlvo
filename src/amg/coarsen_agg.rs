@@ -10,6 +10,7 @@
 //!
 //! **Reference**: Vaněk, Mandel & Brezina, Computing 56 (1996).
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 

@@ -101,7 +101,7 @@ impl<'p, T: Scalar> EigenSolver<T> for Lobpcg<'p, T> {
 
         for iter in 0..params.max_iter {
             // ── Compute residuals R = AX − X Λ ─────────────────────────────
-            let mut r_cols: Vec<DenseVec<T>> = (0..k).map(|j| {
+            let r_cols: Vec<DenseVec<T>> = (0..k).map(|j| {
                 let mut r = DenseVec::zeros(n);
                 let axs = ax_cols[j].as_slice();
                 let xs  = x_cols[j].as_slice();
@@ -169,7 +169,7 @@ impl<'p, T: Scalar> EigenSolver<T> for Lobpcg<'p, T> {
             }
 
             // A_S[i,j] = sᵢᵀ A sⱼ
-            let mut as_cols: Vec<DenseVec<T>> = s.iter().map(|sv| {
+            let as_cols: Vec<DenseVec<T>> = s.iter().map(|sv| {
                 let mut asv = DenseVec::zeros(n); op.apply(sv, &mut asv); asv
             }).collect();
 
@@ -256,7 +256,7 @@ impl<'p, T: Scalar> EigenSolver<T> for Lobpcg<'p, T> {
 
             x_cols  = x_new;
             ax_cols = ax_new;
-            p_cols  = p_new.into_iter().map(|p| Some(p)).collect();
+            p_cols  = p_new.into_iter().map(Some).collect();
         }
 
         let eigenvalues  = lambdas;

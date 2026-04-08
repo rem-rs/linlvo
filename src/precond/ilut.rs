@@ -188,7 +188,7 @@ fn to_f64_sq<T: Scalar>(v: T) -> f64 {
     f * f
 }
 
-fn zero_active<T: Scalar>(w: &mut Vec<T>, active: &[usize]) {
+fn zero_active<T: Scalar>(w: &mut [T], active: &[usize]) {
     for &j in active {
         w[j] = T::zero();
     }

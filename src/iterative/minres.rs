@@ -15,6 +15,7 @@
 //!   PETSc: `KSPSetType(ksp, KSPMINRES)`
 //!   HYPRE: not directly exposed; use GMRES for indefinite systems.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{
     error::SolverError,
     operator::LinearOperator,

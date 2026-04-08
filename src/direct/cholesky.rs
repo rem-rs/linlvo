@@ -22,6 +22,7 @@
 //!
 //! Davis, T. A. (2006). *Direct Methods for Sparse Linear Systems.* SIAM.
 
+#![allow(clippy::needless_range_loop)]
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
@@ -427,7 +428,7 @@ fn backward_solve_lt<T: Scalar>(
         if l_ii.abs() < T::machine_epsilon() * T::from_f64(1e6) {
             return Err(SolverError::SingularMatrix { row: i });
         }
-        xs[i] = xs[i] / l_ii;
+        xs[i] /= l_ii;
         let xi = xs[i];
         for k in l_row_ptr[i]..l_diag_pos[i] {
             let j = l_col_idx[k];

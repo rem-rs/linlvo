@@ -5,7 +5,7 @@
 //! utilisation for block-structured systems (e.g., multi-DOF FEA nodes).
 //!
 //! Layout (block size r × c):
-//! - `block_row_ptr[I]..block_row_ptr[I+1]`: range of stored blocks in block-row I.
+//! - `block_row_ptr[i]..block_row_ptr[i+1]`: range of stored blocks in block-row i.
 //! - `block_col_idx[K]`: block-column index of the K-th stored block.
 //! - `block_vals[K]`: the r×c block stored **row-major** in a flat `Vec<T>` of
 //!   length `r * c`.
@@ -87,11 +87,11 @@ impl<T: Scalar> BsrMatrix<T> {
 
         for y in y.iter_mut() { *y = T::zero(); }
 
-        for I in 0..self.nblock_rows {
-            let row_start = I * r; // first scalar row of block-row I
-            for k in self.block_row_ptr[I]..self.block_row_ptr[I + 1] {
-                let J         = self.block_col_idx[k];
-                let col_start = J * c; // first scalar col of block-col J
+        for i in 0..self.nblock_rows {
+            let row_start = i * r; // first scalar row of block-row i
+            for k in self.block_row_ptr[i]..self.block_row_ptr[i + 1] {
+                let j         = self.block_col_idx[k];
+                let col_start = j * c; // first scalar col of block-col j
                 let blk       = &self.block_vals[k * bs..(k + 1) * bs];
 
                 // Dense r×c multiply: y[row_start..+r] += blk * x[col_start..+c]
@@ -130,11 +130,11 @@ impl<T: Scalar> BsrMatrix<T> {
             // Each block-row is independent.
             let results: Vec<Vec<T>> = (0..self.nblock_rows)
                 .into_par_iter()
-                .map(|I| {
+                .map(|i| {
                     let mut row_out = vec![T::zero(); r];
-                    for k in rp[I]..rp[I + 1] {
-                        let J         = ci[k];
-                        let col_start = J * c;
+                    for k in rp[i]..rp[i + 1] {
+                        let j         = ci[k];
+                        let col_start = j * c;
                         let blk       = &bv[k * bs..(k + 1) * bs];
                         for bi in 0..r {
                             let mut sum = T::zero();
@@ -148,8 +148,8 @@ impl<T: Scalar> BsrMatrix<T> {
                 })
                 .collect();
 
-            for (I, row_out) in results.iter().enumerate() {
-                y[I * r..(I + 1) * r].copy_from_slice(row_out);
+            for (i, row_out) in results.iter().enumerate() {
+                y[i * r..(i + 1) * r].copy_from_slice(row_out);
             }
         }
 
@@ -168,15 +168,15 @@ impl<T: Scalar> BsrMatrix<T> {
         let c  = self.block_cols;
         let bs = r * c;
         let mut coo = CooMatrix::with_capacity(self.nrows(), self.ncols(), self.nnz_stored());
-        for I in 0..self.nblock_rows {
-            for k in self.block_row_ptr[I]..self.block_row_ptr[I + 1] {
-                let J   = self.block_col_idx[k];
+        for i in 0..self.nblock_rows {
+            for k in self.block_row_ptr[i]..self.block_row_ptr[i + 1] {
+                let j   = self.block_col_idx[k];
                 let blk = &self.block_vals[k * bs..(k + 1) * bs];
                 for bi in 0..r {
                     for bj in 0..c {
                         let v = blk[bi * c + bj];
                         if v != T::zero() {
-                            coo.push(I * r + bi, J * c + bj, v);
+                            coo.push(i * r + bi, j * c + bj, v);
                         }
                     }
                 }
@@ -203,34 +203,34 @@ impl<T: Scalar> BsrBuilder<T> {
         BsrBuilder { nblock_rows, nblock_cols, block_rows, block_cols, entries: Vec::new() }
     }
 
-    /// Add a dense `block_rows × block_cols` block at position (I, J).
+    /// Add a dense `block_rows × block_cols` block at position (i, j).
     /// `vals` must be row-major with length `block_rows * block_cols`.
-    pub fn push_block(&mut self, I: usize, J: usize, vals: Vec<T>) {
+    pub fn push_block(&mut self, i: usize, j: usize, vals: Vec<T>) {
         assert_eq!(vals.len(), self.block_rows * self.block_cols);
-        self.entries.push((I, J, vals));
+        self.entries.push((i, j, vals));
     }
 
-    /// Finalise into a `BsrMatrix`.  Duplicate (I, J) entries are summed.
+    /// Finalise into a `BsrMatrix`.  Duplicate (i, j) entries are summed.
     pub fn build(mut self) -> BsrMatrix<T> {
         let r  = self.block_rows;
         let c  = self.block_cols;
         let bs = r * c;
 
         // Sort by (block_row, block_col).
-        self.entries.sort_unstable_by_key(|&(I, J, _)| (I, J));
+        self.entries.sort_unstable_by_key(|&(i, j, _)| (i, j));
 
         // Merge duplicate blocks by summing.
         let mut merged: Vec<(usize, usize, Vec<T>)> = Vec::new();
-        for (I, J, vals) in self.entries {
+        for (i, j, vals) in self.entries {
             if let Some(last) = merged.last_mut() {
-                if last.0 == I && last.1 == J {
+                if last.0 == i && last.1 == j {
                     for (a, b) in last.2.iter_mut().zip(vals.iter()) {
                         *a += *b;
                     }
                     continue;
                 }
             }
-            merged.push((I, J, vals));
+            merged.push((i, j, vals));
         }
 
         // Pack into BSR arrays.
@@ -238,9 +238,9 @@ impl<T: Scalar> BsrBuilder<T> {
         let mut block_col_idx = Vec::with_capacity(merged.len());
         let mut block_vals    = Vec::with_capacity(merged.len() * bs);
 
-        for &(I, J, ref v) in &merged {
-            block_row_ptr[I + 1] += 1; // count
-            block_col_idx.push(J);
+        for &(i, j, ref v) in &merged {
+            block_row_ptr[i + 1] += 1; // count
+            block_col_idx.push(j);
             block_vals.extend_from_slice(v);
         }
         // Prefix sum for row_ptr.

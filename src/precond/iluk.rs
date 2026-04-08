@@ -14,6 +14,7 @@
 //!   PETSc: `PCILU` with `PCFactorSetLevels(pc, k)`
 //!   HYPRE: `HYPRE_EuclidCreate` with `HYPRE_EuclidSetLevel(solver, k)`
 
+#![allow(clippy::needless_range_loop)]
 use std::collections::BTreeMap;
 
 use crate::core::{
@@ -92,7 +93,7 @@ impl<T: Scalar> IlukPrecond<T> {
 
         for i in 0..n {
             let mut found = false;
-            for (&j, _) in &levels[i] {
+            for &j in levels[i].keys() {
                 let pos = new_ci.len();
                 if j == i {
                     diag_pos[i] = pos;
