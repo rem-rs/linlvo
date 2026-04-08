@@ -14,6 +14,7 @@ use linger::{
     direct::{
         DirectSolver, DirectOptions, DirectSolverPrecond,
         SparseLu, SparseCholesky, SparseLdlt, MultifrontalLu, MultifrontalOptions,
+        SupernodalSparseLu,
         compress_block, ordering::OrderingMethod,
     },
     iterative::Gmres,
@@ -575,6 +576,46 @@ fn bench_direct_precond(c: &mut Criterion) {
     group.finish();
 }
 
+// ─── SupernodalSparseLu vs SparseLu ──────────────────────────────────────────
+
+fn bench_supernodal_lu(c: &mut Criterion) {
+    let mut group = c.benchmark_group("SupernodalSparseLu");
+
+    for &n in &[50usize, 100, 200, 400] {
+        let a = laplacian_1d(n);
+        group.throughput(Throughput::Elements(n as u64));
+
+        // Scalar SparseLu (baseline).
+        group.bench_with_input(BenchmarkId::new("SparseLu_1d/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SparseLu::<f64>::default();
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+
+        // SupernodalSparseLu with sn_target = 8.
+        group.bench_with_input(BenchmarkId::new("Supernodal_sn8_1d/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SupernodalSparseLu::<f64>::new(DirectOptions::default(), 8);
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+
+        // SupernodalSparseLu with sn_target = 16.
+        group.bench_with_input(BenchmarkId::new("Supernodal_sn16_1d/n", n), &n, |b, _| {
+            b.iter(|| {
+                let mut s = SupernodalSparseLu::<f64>::new(DirectOptions::default(), 16);
+                s.factor(black_box(&a)).unwrap();
+                black_box(s)
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_lu_factorize,
@@ -592,5 +633,6 @@ criterion_group!(
     bench_blr_compress,
     bench_multifrontal_blr,
     bench_direct_precond,
+    bench_supernodal_lu,
 );
 criterion_main!(benches);

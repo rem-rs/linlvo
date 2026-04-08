@@ -41,11 +41,13 @@ pub mod symbolic;
 pub mod blr;
 mod triangular;
 mod lu;
+mod lu_sn;
 mod cholesky;
 mod ldlt;
 mod multifrontal;
 
 pub use lu::SparseLu;
+pub use lu_sn::{SupernodalSparseLu, SNode as SupernodalSNode};
 pub use cholesky::SparseCholesky;
 pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
