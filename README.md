@@ -296,6 +296,7 @@ The primary operator. Implement once, use everywhere.
 // Build
 let csr = CsrMatrix::from_coo(&coo);
 let csr = CsrMatrix::from_raw(nrows, ncols, row_ptr, col_idx, values);
+//   └─ from_raw checks col_idx bounds in debug builds (panics if any col_idx ≥ ncols)
 
 // Query
 csr.nrows()  csr.ncols()  csr.nnz()
@@ -344,7 +345,7 @@ SolverParams {
 result.converged          // bool
 result.iterations         // usize
 result.final_residual     // f64 — ‖b − Ax‖ / ‖b‖
-result.residual_history   // Vec<f64> — per-iteration residuals (always populated)
+result.residual_history   // Vec<f64> — per-iteration residuals (always populated; moved out, not cloned)
 result.history            // Option<Vec<f64>> — same, only Some when verbose = Iterations
 ```
 
@@ -354,20 +355,26 @@ result.history            // Option<Vec<f64>> — same, only Some when verbose =
 
 All solvers implement `KrylovSolver<Operator = CsrMatrix<T>, Vector = DenseVec<T>>`.
 
-| Struct | Best for | Constructor |
-|--------|----------|-------------|
-| `ConjugateGradient` | SPD systems | `::default()` |
-| `Minres` | Symmetric indefinite | `::default()` |
-| `Gmres` | General (non-symmetric) | `::new(restart)` |
-| `BiCgStab` | Non-symmetric, large | `::new()` |
-| `Fgmres` | Variable preconditioner | `::new(restart)` |
-| `Lgmres` | Augmented Krylov | `::new(restart, aug_dim)` |
-| `Idrs` | Non-symmetric, short recurrence | `::new(s)` — s=4 recommended |
-| `Tfqmr` | Non-symmetric, breakdown-robust | `::new()` |
+| Struct | Best for | Constructor | Notes |
+|--------|----------|-------------|-------|
+| `ConjugateGradient` | SPD systems | `::default()` | |
+| `Minres` | Symmetric indefinite | `::default()` | |
+| `Gmres` | General (non-symmetric) | `::new(restart)` | Krylov basis pre-allocated outside restart loop |
+| `BiCgStab` | Non-symmetric, large | `::new()` | |
+| `Fgmres` | Variable preconditioner | `::new(restart)` | |
+| `Lgmres` | Augmented Krylov | `::new(restart, aug_dim)` | |
+| `Idrs` | Non-symmetric, short recurrence | `::new(s)` — s=4 recommended | Hot-path allocations eliminated |
+| `Tfqmr` | Non-symmetric, breakdown-robust | `::new()` | |
 
 `Idrs` uses s shadow vectors; larger s → fewer iterations, more work per step (s=1 ≈ BiCGSTAB, s=4 typical). It auto-restarts with a fresh shadow space on near-breakdown, configurable via `.with_max_restarts(n)`.
 
 `Tfqmr` (Transpose-Free QMR, Freund 1993) uses 2 matrix-vector products per outer step and avoids the omega denominator that causes BiCGSTAB breakdown.
+
+### Performance notes
+
+- **GMRES**: The Arnoldi basis (`m+1` vectors of size `n`), preconditioner scratch (`z`, `w`, `mz`), and `Ax` scratch are allocated once before the restart loop and reused each cycle — no per-restart heap allocations for these buffers.
+- **All solvers**: On convergence or early exit, `residual_history` is moved out of the solver (via `std::mem::take`) rather than cloned — zero extra allocation on the return path.
+- **IDR(s)**: Preconditioner application and inner-loop SpMV reuse pre-allocated `DenseVec` scratch buffers, eliminating the O(s · n_iter) transient allocations that existed in earlier versions.
 
 ```rust
 // Signature (same for all)
@@ -574,7 +581,7 @@ pub enum SolverError {
 4. **No `std::time::Instant` in the core library** — safe for wasm32 compilation.
 5. **Direct `nalgebra_sparse::CsrMatrix` support** is gated to `cfg(not(target_arch = "wasm32"))`. Use linger's own sparse formats in wasm-targeted code.
 6. **Matrix construction is always COO → CSR.** Never construct `CsrMatrix` by hand; use `CooMatrix::push` then `CsrMatrix::from_coo`. Duplicate entries are summed automatically.
-7. **`from_raw` is for internal use.** Prefer `from_coo` unless you have pre-validated CSR arrays.
+7. **`from_raw` is for internal use.** Prefer `from_coo` unless you have pre-validated CSR arrays. In debug builds, `from_raw` panics if any `col_idx` value is ≥ `ncols` — this protects the `unsafe get_unchecked` calls in `spmv` from out-of-bounds access.
 
 ---
 
