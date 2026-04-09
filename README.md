@@ -149,9 +149,12 @@ linger/
 │   ├── gmres.rs           GMRES(m) (general)
 │   ├── bicgstab.rs        BiCGSTAB (non-symmetric)
 │   ├── fgmres.rs          Flexible GMRES (variable preconditioner)
-│   └── lgmres.rs          LGMRES (augmented Krylov)
+│   ├── lgmres.rs          LGMRES (augmented Krylov)
+│   ├── idrs.rs            IDR(s) — short-recurrence, non-symmetric, with auto-restart
+│   └── tfqmr.rs           TFQMR — Transpose-Free QMR (Freund 1993)
 ├── precond/
-│   ├── jacobi.rs          Jacobi / Block Jacobi
+│   ├── jacobi.rs          JacobiPrecond — diagonal scaling
+│   ├── block_jacobi.rs    BlockJacobiPrecond — dense LU per diagonal block
 │   ├── sor.rs             SOR / SSOR
 │   ├── ilu0.rs            ILU(0)
 │   ├── iluk.rs            ILU(k) — level-of-fill
@@ -165,7 +168,7 @@ linger/
 │   ├── coarsen_agg.rs     Smoothed Aggregation (SA-AMG) greedy aggregation
 │   ├── interpolation.rs   RS direct interpolation / SA smoothed prolongation
 │   ├── smoother.rs        Weighted Jacobi / Gauss-Seidel sweeps
-│   ├── cycle.rs           V-cycle / W-cycle
+│   ├── cycle.rs           V-cycle / W-cycle / K-cycle
 │   └── setup.rs           AmgHierarchy::build (Galerkin RAP)
 ├── eigen/
 │   ├── power.rs           PowerIter — largest-magnitude single eigenpair
@@ -298,6 +301,7 @@ let csr = CsrMatrix::from_raw(nrows, ncols, row_ptr, col_idx, values);
 csr.nrows()  csr.ncols()  csr.nnz()
 csr.row_ptr()  csr.col_idx()  csr.values()
 csr.triplets()          // Iterator<(row, col, val)>
+csr.validate()          // Result<(), String> — check structural correctness
 
 // Operations
 csr.spmv(x, y)                          // y = A·x
@@ -337,10 +341,11 @@ SolverParams {
 ### `SolverResult`
 
 ```rust
-result.converged        // bool
-result.iterations       // usize
-result.final_residual   // f64 — ‖b − Ax‖ / ‖b‖
-result.history          // Option<Vec<f64>> — per-iteration residuals
+result.converged          // bool
+result.iterations         // usize
+result.final_residual     // f64 — ‖b − Ax‖ / ‖b‖
+result.residual_history   // Vec<f64> — per-iteration residuals (always populated)
+result.history            // Option<Vec<f64>> — same, only Some when verbose = Iterations
 ```
 
 ---
@@ -357,6 +362,12 @@ All solvers implement `KrylovSolver<Operator = CsrMatrix<T>, Vector = DenseVec<T
 | `BiCgStab` | Non-symmetric, large | `::new()` |
 | `Fgmres` | Variable preconditioner | `::new(restart)` |
 | `Lgmres` | Augmented Krylov | `::new(restart, aug_dim)` |
+| `Idrs` | Non-symmetric, short recurrence | `::new(s)` — s=4 recommended |
+| `Tfqmr` | Non-symmetric, breakdown-robust | `::new()` |
+
+`Idrs` uses s shadow vectors; larger s → fewer iterations, more work per step (s=1 ≈ BiCGSTAB, s=4 typical). It auto-restarts with a fresh shadow space on near-breakdown, configurable via `.with_max_restarts(n)`.
+
+`Tfqmr` (Transpose-Free QMR, Freund 1993) uses 2 matrix-vector products per outer step and avoids the omega denominator that causes BiCGSTAB breakdown.
 
 ```rust
 // Signature (same for all)
@@ -381,6 +392,7 @@ All implement `Preconditioner<Vector = DenseVec<T>>`.
 | `SpaiPrecond` | `::from_csr(&a)` | Sparse approximate inverse |
 | `AdditivePrecond` | `::new(vec_of_preconds)` | Sums M⁻¹ applications |
 | `MultiplicativePrecond` | `::new(vec_of_preconds)` | Composes M⁻¹ applications |
+| `BlockJacobiPrecond` | `::from_csr(&a, block_size)` | Dense LU per diagonal block; ideal for multi-DOF-per-node FEA |
 | `AmgPrecond` | `AmgPrecond::new(hierarchy)` | AMG V-cycle as preconditioner |
 
 All constructors return `Result<_, SolverError>`.
@@ -389,6 +401,10 @@ All constructors return `Result<_, SolverError>`.
 // Typical usage
 let precond = IlukPrecond::<f64>::from_csr(&a, 1).unwrap();
 solver.solve(&a, Some(&precond), &b, &mut x, &params)?;
+
+// Block Jacobi — ideal when DOF are grouped in fixed-size blocks (e.g. 3D elasticity)
+let bjac = BlockJacobiPrecond::<f64>::from_csr(&a, 3).unwrap();  // 3×3 blocks
+Idrs::<f64>::new(4).solve(&a, Some(&bjac), &b, &mut x, &params)?;
 ```
 
 ---
@@ -413,13 +429,22 @@ let hier    = AmgHierarchy::build(a.clone(), config);
 let precond = AmgPrecond::new(hier);
 ```
 
-### Standalone AMG solve (V-cycle / W-cycle)
+### Standalone AMG solve (V-cycle / W-cycle / K-cycle)
 
 ```rust
 use linger::amg::CycleType;
 let b_dv = DenseVec::from_vec(b.clone());
 let mut x_dv = DenseVec::zeros(n);
 hier.apply_cycle(&b_dv, &mut x_dv, CycleType::V);
+hier.apply_cycle(&b_dv, &mut x_dv, CycleType::W);
+hier.apply_cycle(&b_dv, &mut x_dv, CycleType::K { inner_iters: 2 });
+```
+
+The K-cycle uses inner preconditioned CG (with the next-level V-cycle as preconditioner) as the coarse correction. It gives better convergence than W-cycle for heterogeneous or harder problems. Because it is a **variable preconditioner**, use it with `AmgPrecond` + a flexible outer method, or as a standalone iterative solver — not with standard CG.
+
+```rust
+// K-cycle as AMG preconditioner (use with FGMRES or standalone)
+let precond = AmgPrecond::new(hier).with_cycle(CycleType::K { inner_iters: 2 });
 ```
 
 ---
@@ -491,20 +516,25 @@ Note: native `nalgebra` integration is excluded from wasm32 builds. The core CSR
 ## Running tests and benchmarks
 
 ```bash
-# All tests (154 tests across 11 suites)
+# All tests (509 tests across 33 suites)
 cargo test
 
-# Individual suites
-cargo test --test test_sparse_ops        # CSR/CSC structure operations (26 tests)
-cargo test --test test_krylov            # Core Krylov solvers (15 tests)
-cargo test --test test_precond           # Basic preconditioners (11 tests)
-cargo test --test test_sprint3           # Advanced precond + FGMRES/LGMRES (21 tests)
-cargo test --test test_amg               # AMG hierarchy and cycles (10 tests)
-cargo test --test test_amg_internals     # AMG sub-modules + ILU(k) (22 tests)
-cargo test --test test_parallel          # Parallel ops + BSR format (13 tests)
-cargo test --test test_eigen             # Eigenvalue solvers Sprint 7 (11 tests)
-cargo test --test test_eigen_s8_s10      # Eigenvalue solvers Sprint 8-10 (16 tests)
-cargo test --test test_eigen_s11_s12     # SVD, QEP, NEP, ComplexScalar (9 tests)
+# Individual suites (selection)
+cargo test --test test_sparse_ops           # CSR/CSC structure + validate (30 tests)
+cargo test --test test_sparse_proptest_e4   # proptest round-trip + SpMV linearity (5 tests)
+cargo test --test test_krylov               # Core Krylov solvers (19 tests)
+cargo test --test test_precond              # Basic preconditioners (11 tests)
+cargo test --test test_sprint3              # Advanced precond + FGMRES/LGMRES (21 tests)
+cargo test --test test_idrs_f4              # IDR(s) solver incl. restart (12 tests)
+cargo test --test test_tfqmr_a1             # TFQMR solver (8 tests)
+cargo test --test test_block_jacobi_a4      # Block Jacobi preconditioner (7 tests)
+cargo test --test test_amg                  # AMG hierarchy and cycles (10 tests)
+cargo test --test test_amg_kcycle_a3        # AMG K-cycle (6 tests)
+cargo test --test test_amg_internals        # AMG sub-modules + ILU(k) (22 tests)
+cargo test --test test_parallel             # Parallel ops + BSR format (13 tests)
+cargo test --test test_eigen                # Eigenvalue solvers (11 tests)
+cargo test --test test_eigen_s8_s10         # Eigenvalue solvers Sprint 8-10 (16 tests)
+cargo test --test test_eigen_s11_s12        # SVD, QEP, NEP, ComplexScalar (9 tests)
 
 # Criterion benchmarks (HTML report in target/criterion/)
 cargo bench --bench bench_spmv
@@ -570,3 +600,5 @@ common::relative_residual(&a, x.as_slice(), &b)
 2. Trottenberg, Oosterlee & Schüller (2001). *Multigrid*
 3. Falgout & Yang (2002). *hypre: A Library of High Performance Preconditioners*
 4. Balay et al. *PETSc Users Manual* (ANL-95/11 Rev 3.20)
+5. Freund, R.W. (1993). A transpose-free quasi-minimal residual algorithm for non-Hermitian linear systems. *SIAM J. Sci. Comput.*, 14(2), 470–482. (TFQMR)
+6. van Gijzen, M.B. & Sonneveld, P. (2011). Algorithm 913: An elegant IDR(s) variant that efficiently exploits biorthogonality properties. *ACM Trans. Math. Software*, 38(1). (IDR(s))
