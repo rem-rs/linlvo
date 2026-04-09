@@ -170,6 +170,18 @@ linger/
 │   ├── smoother.rs        Weighted Jacobi / Gauss-Seidel sweeps
 │   ├── cycle.rs           V-cycle / W-cycle / K-cycle
 │   └── setup.rs           AmgHierarchy::build (Galerkin RAP)
+├── direct/
+│   ├── blr.rs             BlrBlock<T> — Block Low-Rank compression (randomised SVD)
+│   ├── lu.rs              SparseLu — Gilbert-Peierls + partial pivoting
+│   ├── lu_sn.rs           SupernodalSparseLu — supernodal LU
+│   ├── cholesky.rs        SparseCholesky — left-looking incomplete Cholesky
+│   ├── cholesky_sn.rs     SupernodalSparseCholesky
+│   ├── ldlt.rs            SparseLdlt — left-looking sparse LDLᵀ
+│   ├── multifrontal.rs    MultifrontalLu — multifrontal LU with optional BLR compression
+│   ├── symbolic.rs        SymbolicCholesky / SymbolicLu — fill-pattern analysis
+│   ├── etree.rs           Elimination tree + post-order traversal
+│   ├── triangular.rs      forward_solve / backward_solve
+│   └── ordering/          RCM / COLAMD / nested-dissection fill-reducing orderings
 ├── eigen/
 │   ├── power.rs           PowerIter — largest-magnitude single eigenpair
 │   ├── subspace.rs        SubspaceIter — k largest eigenpairs
@@ -597,6 +609,112 @@ common::make_nonsymmetric_convdiff::<f64>(n, peclet)  // upwind convection-diffu
 
 // ‖Ax − b‖₂ / ‖b‖₂
 common::relative_residual(&a, x.as_slice(), &b)
+```
+
+---
+
+## Direct solvers
+
+All direct solvers implement the `DirectSolver<T>` trait:
+
+```rust
+solver.analyze(&a)?;   // fill-reducing reorder + symbolic factorisation
+solver.factorize(&a)?; // numerical factorisation (reuse analysis if pattern unchanged)
+solver.solve(&b, &mut x)?;
+// — or in one call —
+solver.factor(&a)?;
+solver.solve_multi(&bs, &mut xs)?;   // multiple right-hand sides
+```
+
+### Available solvers
+
+| Struct | Algorithm | Suitable for |
+|--------|-----------|--------------|
+| `SparseLu` | Gilbert-Peierls LU + partial pivoting | General square matrices |
+| `SupernodalSparseLu` | Supernodal LU | General; better cache use on large problems |
+| `SparseCholesky` | Left-looking sparse Cholesky | SPD matrices |
+| `SupernodalSparseCholesky` | Supernodal Cholesky | SPD; improved cache blocking |
+| `SparseLdlt` | Left-looking sparse LDLᵀ | Symmetric indefinite |
+| `MultifrontalLu` | Multifrontal LU + optional BLR compression | General; approximate via BLR for preconditioning |
+
+### Fill-reducing orderings
+
+```rust
+use linger::direct::ordering::{rcm, colamd, nd, OrderingMethod};
+
+let perm = rcm(&a);    // Reverse Cuthill-McKee
+let perm = colamd(&a); // Column approximate minimum degree
+let perm = nd(&a);     // Nested dissection (best fill for 2D/3D FEA)
+```
+
+Pass the ordering via `DirectOptions`:
+
+```rust
+use linger::direct::{SparseLu, DirectOptions};
+use linger::direct::ordering::OrderingMethod;
+
+let mut solver = SparseLu::<f64>::default();
+solver.options.ordering = OrderingMethod::NestedDissection;
+solver.factor(&a)?;
+solver.solve(&b, &mut x)?;
+```
+
+### Direct solver as preconditioner
+
+Any `DirectSolver` can be wrapped in `DirectSolverPrecond` for use with Krylov methods:
+
+```rust
+use linger::direct::{SparseLu, DirectSolverPrecond};
+
+let precond = DirectSolverPrecond::new(SparseLu::<f64>::default(), &a)?;
+Gmres::new(30).solve(&a, Some(&precond), &b, &mut x, &params)?;
+```
+
+### `MultifrontalLu` with BLR compression
+
+`MultifrontalLu` supports approximate factorisation via Block Low-Rank (BLR)
+compression of off-diagonal frontal blocks.  BLR trades accuracy for memory and
+arithmetic savings (typically 2–5× for FEA problems).  Use it as a
+high-quality preconditioner rather than an exact solver.
+
+```rust
+use linger::direct::multifrontal::{MultifrontalLu, MultifrontalOptions};
+
+let opts = MultifrontalOptions {
+    blr_min_size: 16,   // compress fronts larger than this
+    blr_tol: 1e-6,      // relative singular-value threshold
+    ..Default::default()
+};
+let mut solver = MultifrontalLu::<f64>::with_options(opts);
+solver.factor(&a)?;
+solver.solve(&b, &mut x)?;
+```
+
+Setting `blr_min_size = usize::MAX` disables BLR entirely (exact factorisation).
+
+### `BlrBlock<T>` — low-level BLR API
+
+`BlrBlock` is also available as a standalone compression primitive:
+
+```rust
+use linger::direct::{BlrBlock, compress_block};
+
+// Compress a row-major m×n dense block with tolerance 1e-8.
+// max_rank = 0 means no hard cap (uses min(m, n)).
+let blk: BlrBlock<f64> = compress_block(&dense, m, n, 1e-8, /*max_rank=*/ 0);
+
+println!("rank={}, compression={:.1}%", blk.rank, blk.compression_ratio() * 100.0);
+let (dense_bytes, blr_bytes) = blk.memory_bytes();
+
+// Matrix-vector products
+blk.apply_add(&x, &mut y, alpha);    // y += α A x
+blk.apply_add_t(&x, &mut y, alpha);  // y += α Aᵀ x  (transpose)
+
+// Recompress with a looser tolerance (no access to original matrix needed)
+let blk2 = blk.recompress(1e-4);
+
+// Add two same-size BLR blocks and recompress
+let blk_sum = blk_a.add_compressed(&blk_b, 1e-6, /*max_rank=*/ 0);
 ```
 
 ---

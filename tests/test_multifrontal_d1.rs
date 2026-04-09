@@ -117,7 +117,7 @@ fn compress_block_rank_and_accuracy() {
     let v: Vec<f64> = (0..n).map(|j| (j as f64 * 0.5 + 1.0)).collect();
     let mut a_mat = vec![0.0f64; m * n];
     for i in 0..m { for j in 0..n { a_mat[i*n+j] = u[i] * v[j]; } }
-    let blk = compress_block::<f64>(&a_mat, m, n, 1e-8);
+    let blk = compress_block::<f64>(&a_mat, m, n, 1e-8, 0);
     assert!(blk.rank <= 1, "rank-1 block got rank={}", blk.rank);
     let recon = blk.to_dense();
     let err: f64 = a_mat.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();

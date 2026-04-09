@@ -467,7 +467,7 @@ proptest! {
         let nrm: f64 = a.iter().map(|x| x*x).sum::<f64>().sqrt();
         if nrm < 1e-10 { return Ok(()); } // skip degenerate case
 
-        let blk = compress_block::<f64>(&a, m, n, tol);
+        let blk = compress_block::<f64>(&a, m, n, tol, 0);
         let recon = blk.to_dense();
         let err: f64 = a.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
         prop_assert!(err / nrm < tol * 100.0 + 1e-10,
@@ -484,7 +484,7 @@ proptest! {
         let size = m * n;
         if vals.len() < size { return Ok(()); }
         let a = vals[..size].to_vec();
-        let blk = compress_block::<f64>(&a, m, n, 1e-12);
+        let blk = compress_block::<f64>(&a, m, n, 1e-12, 0);
         prop_assert!(blk.rank <= m.min(n),
             "rank {} > min(m={m},n={n})", blk.rank);
     }
@@ -493,7 +493,7 @@ proptest! {
     #[test]
     fn prop_blr_zero_rank_zero(m in 2usize..=15, n in 2usize..=15) {
         let a = vec![0.0f64; m * n];
-        let blk = compress_block::<f64>(&a, m, n, 1e-12);
+        let blk = compress_block::<f64>(&a, m, n, 1e-12, 0);
         prop_assert_eq!(blk.rank, 0, "zero matrix got rank={}", blk.rank);
     }
 
@@ -511,7 +511,7 @@ proptest! {
         // Rank-1 matrix A = u v^T.
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n { a[i*n+j] = u[i] * v[j]; } }
-        let blk = compress_block::<f64>(&a, m, n, 1e-10);
+        let blk = compress_block::<f64>(&a, m, n, 1e-10, 0);
         let xv = &x[..n];
         // Dense reference: y_ref = A * xv
         let mut y_ref = vec![0.0f64; m];

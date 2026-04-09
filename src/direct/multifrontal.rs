@@ -368,7 +368,7 @@ impl<T: Scalar> DirectSolver<T> for MultifrontalLu<T> {
 
                     // ── BLR: compress sub_dense if front is large enough ──────
                     let (blr, used_blr) = if ur >= blr_min && sn_size >= 2 {
-                        let blk = compress_block::<T>(&sub_dense, ur, sn_size, blr_tol);
+                        let blk = compress_block::<T>(&sub_dense, ur, sn_size, blr_tol, 0);
                         let u_b = blk.used_blr_check(&sub_dense, ur, sn_size);
                         (blk, u_b)
                     } else {

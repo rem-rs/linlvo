@@ -1,21 +1,54 @@
-//! Block Low-Rank (BLR) compression via truncated SVD.
+//! Block Low-Rank (BLR) compression via randomised truncated SVD.
 //!
 //! A BLR block stores an off-diagonal submatrix `A` approximately as
-//! `A ≈ U * Vᵀ` where `U` is `m×r` and `V` is `n×r` (r = numerical rank).
-//! The rank `r` is chosen such that all discarded singular values are below
-//! `tol * σ₁` (relative truncation), subject to a hard cap `max_rank`.
+//! `A ≈ U Vᵀ` where `U` is `m×r` and `V` is `n×r` (`r` = numerical rank).
+//! The rank is chosen so that all discarded singular values satisfy
+//! `σ_k < tol · σ₁` (relative truncation), subject to a hard cap `max_rank`.
 //!
-//! The SVD is computed via a randomised power-iteration sketch, which avoids
-//! O(mn·min(m,n)) full LAPACK-style SVD while remaining accurate to `tol`.
+//! Arithmetic is always performed in `f64` regardless of the element type `T`.
+//! For `f32` inputs this means a widening conversion on entry and a narrowing
+//! one on exit — this is intentional, since `f32` precision (≈7 digits) is
+//! unreliable for tolerances below ~1e-5.
 //!
-//! ## Algorithm (randomised SVD, Halko-Martinsson-Tropp 2011)
+//! ## Compression algorithm (Halko-Martinsson-Tropp 2011)
 //!
 //! 1. Draw a Gaussian sketch matrix Ω ∈ ℝ^{n×(r+p)}.
-//! 2. Form Y = A Ω, optionally power-iterate: Y = (A Aᵀ)^q A Ω.
-//! 3. Orthogonalise Y → Q via column-pivoted Gram–Schmidt.
-//! 4. Project: B = Qᵀ A  (small (r+p)×n matrix).
-//! 5. Thin SVD of B: B = Û Σ Vᵀ.
-//! 6. U = Q Û, discard columns where σ_k < tol·σ₁.
+//! 2. Power-iterate: Y = A (Aᵀ (A Ω))  — one step, improves slow-decay accuracy.
+//! 3. Orthogonalise Y → Q via **double-pass modified Gram-Schmidt (MGS×2)**,
+//!    which suppresses residual drift from nearly-dependent columns.
+//! 4. Project: B = Qᵀ A  (small `(r+p)×n` matrix).
+//! 5. Thin SVD of B via deflating power iteration (`power_iter_svd_f64`).
+//! 6. U = Q Û Σ,  discard columns where σ_k < tol · σ₁.
+//!
+//! ## `BlrBlock<T>` — key methods
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | `to_dense()` | Expand to full `m×n` row-major matrix |
+//! | `apply_add(x, y, α)` | `y += α U Vᵀ x`  (matvec) |
+//! | `apply_add_t(x, y, α)` | `y += α V Uᵀ x`  (transpose matvec) |
+//! | `recompress(new_tol)` | Re-truncate with a looser tolerance — no original matrix needed |
+//! | `add_compressed(other, tol, max_rank)` | `A + B` with rank truncation |
+//! | `compression_ratio()` | `(m+n)·r / (m·n)` — fraction of dense memory used |
+//! | `memory_bytes()` | `(dense_bytes, blr_bytes)` pair |
+//!
+//! ## `compress_block` parameters
+//!
+//! ```text
+//! compress_block(a, m, n, tol, max_rank)
+//! ```
+//!
+//! * `tol` — relative singular-value threshold (e.g. `1e-8`).
+//! * `max_rank` — hard rank cap; pass `0` for no limit (`min(m, n)` is used).
+//!
+//! ## References
+//!
+//! Halko, N., Martinsson, P.-G., & Tropp, J.A. (2011). Finding structure with
+//! randomness: Probabilistic algorithms for constructing approximate matrix
+//! decompositions. *SIAM Review*, 53(2), 217–288.
+//!
+//! Amestoy, P. et al. (2015). Improving multifrontal methods by means of block
+//! low-rank representations. *SIAM J. Sci. Comput.*, 37(3), A1452–A1474.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -72,14 +105,196 @@ impl<T: Scalar> BlrBlock<T> {
             }
         }
     }
+    /// Apply block to vector (transpose): `y += alpha * V (Uᵀ x)`.
+    ///
+    /// Computes `y ← y + α Vᵀ (Uᵀ x)` — i.e. applies the transpose `(UVᵀ)ᵀ = V Uᵀ`.
+    pub fn apply_add_t(&self, x: &[T], y: &mut [T], alpha: T) {
+        // w = Uᵀ x  (rank × 1).
+        let mut w = vec![T::zero(); self.rank];
+        for k in 0..self.rank {
+            let mut s = T::zero();
+            for i in 0..self.m {
+                s += self.u[i + k * self.m] * x[i];
+            }
+            w[k] = s;
+        }
+        // y += alpha * V w.
+        for k in 0..self.rank {
+            let aw = alpha * w[k];
+            for j in 0..self.n {
+                y[j] += self.v[j + k * self.n] * aw;
+            }
+        }
+    }
+
+    /// Re-compress this block with a looser (or equal) tolerance `new_tol`.
+    ///
+    /// Works entirely with the stored `U` and `V` factors — no access to the
+    /// original dense matrix is required.  The resulting rank is ≤ `self.rank`.
+    ///
+    /// ## Algorithm
+    ///
+    /// 1. QR-decompose `U = Q R` via Gram-Schmidt on the rank columns.
+    /// 2. Compute the small `rank × rank` matrix `C = R Vᵀ`… actually we
+    ///    note that `A ≈ U Vᵀ = (Q R) Vᵀ`.  The new compact matrix is
+    ///    `M = R` (rank×rank) and the right factor absorbs V: we SVD `M` and
+    ///    build `U_new = Q Û Σ`, `V_new = V`.
+    ///
+    ///    More precisely: SVD of `R` gives `R = Û_r Σ_r W_rᵀ`.  Then
+    ///    `U Vᵀ = Q Û_r Σ_r (W_r Vᵀ)`, so `U_new = Q Û_r Σ_r` and
+    ///    `V_new = V W_r` (n×rank_new).
+    ///
+    /// Columns are dropped where `σ_k < new_tol * σ_1`.
+    pub fn recompress(&self, new_tol: f64) -> Self {
+        if self.rank == 0 {
+            return self.clone();
+        }
+        let r = self.rank;
+        let m = self.m;
+        let n = self.n;
+
+        // ── QR of U (m × r) via MGS → Q (m×r), R (r×r upper triangular) ────
+        // Store Q in-place in q_buf, R as a dense r×r matrix.
+        let mut q_buf = vec![0.0f64; m * r];
+        let mut r_mat = vec![0.0f64; r * r]; // row-major
+        let mut u_f: Vec<f64> = self.u.iter().map(|&v| {
+            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
+        }).collect();
+
+        for k in 0..r {
+            // Orthogonalise column k against already-accepted Q columns.
+            for qc in 0..k {
+                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
+                r_mat[qc * r + k] = dot;
+                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
+            }
+            // Second pass.
+            for qc in 0..k {
+                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
+                r_mat[qc * r + k] += dot;
+                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
+            }
+            let nrm: f64 = (0..m).map(|i| u_f[i + k*m].powi(2)).sum::<f64>().sqrt();
+            if nrm < 1e-14 {
+                // Linearly dependent column: zero R diagonal, leave Q column as zero.
+                continue;
+            }
+            r_mat[k * r + k] = nrm;
+            let inv = 1.0 / nrm;
+            for i in 0..m { q_buf[i + k*m] = u_f[i + k*m] * inv; }
+        }
+
+        // ── SVD of R (r×r) ────────────────────────────────────────────────────
+        let (sigma_r, u_hat_r, w_r) = power_iter_svd_f64(&r_mat, r, r, r);
+        if sigma_r.is_empty() || sigma_r[0] == 0.0 {
+            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
+        }
+        let threshold = new_tol * sigma_r[0];
+        let new_rank = sigma_r.iter().take_while(|&&s| s >= threshold).count().min(r);
+        if new_rank == 0 {
+            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
+        }
+
+        // ── Build U_new = Q Û_r Σ_r  (m × new_rank, col-major, T) ────────────
+        let mut u_new = vec![T::zero(); m * new_rank];
+        for k in 0..new_rank {
+            let sig = T::from_f64(sigma_r[k]);
+            for i in 0..m {
+                let mut s = 0.0f64;
+                for qi in 0..r { s += q_buf[i + qi*m] * u_hat_r[qi + k*r]; }
+                u_new[i + k*m] = T::from_f64(s) * sig;
+            }
+        }
+
+        // ── Build V_new = V W_r  (n × new_rank, col-major, T) ────────────────
+        // V_svd (W_r) is col-major r×r: w_r[j + k*r].
+        let v_f: Vec<f64> = self.v.iter().map(|&v| {
+            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
+        }).collect();
+        let mut v_new = vec![T::zero(); n * new_rank];
+        for k in 0..new_rank {
+            for j in 0..n {
+                let mut s = 0.0f64;
+                for qi in 0..r { s += v_f[j + qi*n] * w_r[qi + k*r]; }
+                v_new[j + k*n] = T::from_f64(s);
+            }
+        }
+
+        BlrBlock { m, n, rank: new_rank, u: u_new, v: v_new }
+    }
+
+    /// Returns `(dense_bytes, blr_bytes)` as a pair for memory comparison.
+    ///
+    /// `dense_bytes = m * n * sizeof(T)`.
+    /// `blr_bytes   = (m + n) * rank * sizeof(T)`.
+    pub fn memory_bytes(&self) -> (usize, usize) {
+        let elem = std::mem::size_of::<T>();
+        (self.m * self.n * elem, (self.m + self.n) * self.rank * elem)
+    }
+
+    /// Fraction of memory used relative to the dense equivalent: `(m+n)*r / (m*n)`.
+    ///
+    /// Returns 0.0 for a zero-rank block, 1.0 if no compression is achieved.
+    pub fn compression_ratio(&self) -> f64 {
+        if self.m == 0 || self.n == 0 { return 0.0; }
+        (self.m + self.n) as f64 * self.rank as f64 / (self.m * self.n) as f64
+    }
+
+    /// Add two same-size BLR blocks and re-compress the result.
+    ///
+    /// `(U₁V₁ᵀ + U₂V₂ᵀ) ≈ compress([U₁|U₂] [V₁|V₂]ᵀ)`.
+    ///
+    /// The combined rank is at most `self.rank + other.rank` before truncation.
+    /// `new_tol` is the relative tolerance for the final SVD truncation;
+    /// `max_rank = 0` means no hard rank cap.
+    ///
+    /// # Panics
+    /// Panics if `self.m != other.m || self.n != other.n`.
+    pub fn add_compressed(&self, other: &BlrBlock<T>, new_tol: f64, max_rank: usize) -> Self {
+        assert_eq!(self.m, other.m, "add_compressed: m mismatch");
+        assert_eq!(self.n, other.n, "add_compressed: n mismatch");
+        let m = self.m; let n = self.n;
+        let r1 = self.rank; let r2 = other.rank;
+        let r_cat = r1 + r2;
+        if r_cat == 0 { return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] }; }
+
+        // Concatenate U factors: [U₁ | U₂]  (m × r_cat, col-major).
+        let mut u_cat = vec![T::zero(); m * r_cat];
+        u_cat[..m * r1].copy_from_slice(&self.u);
+        u_cat[m * r1..].copy_from_slice(&other.u);
+
+        // Concatenate V factors: [V₁ | V₂]  (n × r_cat, col-major).
+        let mut v_cat = vec![T::zero(); n * r_cat];
+        v_cat[..n * r1].copy_from_slice(&self.v);
+        v_cat[n * r1..].copy_from_slice(&other.v);
+
+        // Recompress the concatenated block via the same QR+SVD path.
+        let tmp = BlrBlock { m, n, rank: r_cat, u: u_cat, v: v_cat };
+        let mut result = tmp.recompress(new_tol);
+        // Apply hard rank cap if requested.
+        let hard_cap = if max_rank == 0 { m.min(n) } else { max_rank.min(m.min(n)) };
+        if result.rank > hard_cap {
+            result = result.recompress(new_tol); // second pass with existing tol is a no-op,
+            // but if rank still exceeds cap we truncate columns directly.
+            if result.rank > hard_cap {
+                result.rank = hard_cap;
+                result.u.truncate(m * hard_cap);
+                result.v.truncate(n * hard_cap);
+            }
+        }
+        result
+    }
 }
 
 // ─── Truncated SVD via randomised algorithm ───────────────────────────────────
 
 /// Compress the `m×n` row-major dense block `a` with tolerance `tol` (relative).
 ///
-/// Returns a [`BlrBlock`] of rank ≤ `min(m, n)`.  When the block is zero or
-/// all singular values fall below `tol * sigma_max`, `rank = 0` is returned.
+/// Returns a [`BlrBlock`] of rank ≤ `max_rank.min(min(m, n))`.  When the block
+/// is zero or all singular values fall below `tol * sigma_max`, `rank = 0` is
+/// returned.
+///
+/// `max_rank = 0` is treated as "no limit" (same as passing `min(m, n)`).
 ///
 /// The pseudo-random seed is deterministic so compression is reproducible.
 pub fn compress_block<T: Scalar>(
@@ -87,18 +302,27 @@ pub fn compress_block<T: Scalar>(
     m: usize,
     n: usize,
     tol: f64,
+    max_rank: usize,
 ) -> BlrBlock<T> {
     if m == 0 || n == 0 {
         return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
     }
 
-    let max_rank = m.min(n);
-    // Convert to f64 for numerics once.
+    let natural_max = m.min(n);
+    let max_rank = if max_rank == 0 { natural_max } else { max_rank.min(natural_max) };
+    // All arithmetic is performed in f64 regardless of whether T = f32 or f64.
+    // For f32 inputs this means a widening conversion on the way in and a
+    // narrowing conversion on the way out.  This is intentional: the randomised
+    // SVD requires enough precision to distinguish singular values separated by
+    // `tol`, and f32 arithmetic (≈7 digits) is not reliable below tol ≈ 1e-5.
     let a_f: Vec<f64> = a.iter().map(|&v| {
         <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
     }).collect();
 
     // Sketch with r + oversampling columns, capped at max_rank.
+    // TODO(rayon): the three blocked matmuls below (y0, tmp, y) can each be
+    // parallelised over `col` with Rayon when the `rayon` feature is enabled
+    // and the block is large enough to amortise the threading overhead.
     let r = max_rank.min(20);
     let p_os = 5_usize.min(max_rank.saturating_sub(r));
     let k_sketch = (r + p_os).min(max_rank);
@@ -140,27 +364,37 @@ pub fn compress_block<T: Scalar>(
         }
     }
 
-    // ── Step 3: QR of Y → Q (m × q_cols) via compacting Gram-Schmidt ─────────
-    // We store accepted columns in a compact output buffer.
-    let mut q_buf = vec![0.0f64; m * k_sketch]; // compacted columns
+    // ── Step 3: QR of Y → Q (m × q_cols) via modified Gram-Schmidt (MGS×2) ───
+    // Two passes of MGS (double reorthogonalisation) are used to handle
+    // nearly linearly-dependent columns that arise when the sketch matrix Y
+    // has a slowly-decaying spectrum.  A single pass can leave significant
+    // residual components along already-accepted basis vectors; the second
+    // pass reduces this error from O(ε·κ) to O(ε·κ²) where ε = machine eps
+    // and κ is the condition number of Y.
+    let mut q_buf = vec![0.0f64; m * k_sketch]; // compacted accepted columns
     let mut q_cols = 0usize;
-    // `pending`: working copy of each column, modified in-place.
+    // `pending`: working copy of each sketch column, modified in-place.
     let mut pending = y.clone();
     for j in 0..k_sketch {
-        // Compute norm of column j of pending.
+        // ── First orthogonalisation pass: project out all accepted columns ──
+        for qc in 0..q_cols {
+            let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * pending[i + j*m]).sum();
+            for i in 0..m { pending[i + j*m] -= dot * q_buf[i + qc*m]; }
+        }
+        // ── Second pass (reorthogonalisation): eliminates residual drift ───
+        for qc in 0..q_cols {
+            let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * pending[i + j*m]).sum();
+            for i in 0..m { pending[i + j*m] -= dot * q_buf[i + qc*m]; }
+        }
+        // Compute norm after double-reorthogonalisation.
         let norm_sq: f64 = (0..m).map(|i| { let v = pending[i + j*m]; v*v }).sum();
         let nrm = norm_sq.sqrt();
         if nrm < 1e-10 * (k_sketch as f64).sqrt() { continue; }
+        // Accept: store normalised column.
         let inv = 1.0 / nrm;
-        // Accept this column: copy (normalised) into q_buf[:, q_cols].
-        for i in 0..m { q_buf[i + q_cols*m] = pending[i + j*m] * inv; }
         let qc = q_cols;
+        for i in 0..m { q_buf[i + qc*m] = pending[i + j*m] * inv; }
         q_cols += 1;
-        // Orthogonalise remaining columns j+1..k_sketch against the new q column.
-        for l in (j+1)..k_sketch {
-            let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * pending[i + l*m]).sum();
-            for i in 0..m { pending[i + l*m] -= dot * q_buf[i + qc*m]; }
-        }
         if q_cols == max_rank { break; }
     }
 
@@ -178,9 +412,9 @@ pub fn compress_block<T: Scalar>(
         }
     }
 
-    // ── Step 5: thin SVD of B (q_cols × n) via one-sided Jacobi ─────────────
+    // ── Step 5: thin SVD of B (q_cols × n) via deflating power iteration ────
     let p_svd = q_cols.min(n);
-    let (sigma_f, u_hat_f, v_svd_f) = jacobi_svd_f64(&b_small, q_cols, n, p_svd);
+    let (sigma_f, u_hat_f, v_svd_f) = power_iter_svd_f64(&b_small, q_cols, n, p_svd);
 
     if sigma_f.is_empty() || sigma_f[0] == 0.0 {
         return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
@@ -229,16 +463,21 @@ impl AsF64Val for f32 { #[inline] fn as_f64_val(self) -> f64 { self as f64 } }
 // a blanket impl to avoid coherence issues.
 
 
-// ─── Jacobi SVD (f64 internal) ───────────────────────────────────────────────
+// ─── Truncated SVD via deflating power iteration (f64 internal) ──────────────
 
 /// Compute thin SVD of row-major f64 `m×n` matrix returning up to `p`
 /// singular triplets `(sigma, U_hat (m×p col-major), V (n×p col-major))`.
 ///
 /// Uses deflating power iteration: extract one singular triplet at a time
-/// via alternating normalised matrix-vector products, then deflate.
+/// via alternating normalised matrix-vector products `v ← Aᵀ(Av)/‖…‖`,
+/// then deflate `A ← A − σ u vᵀ`.
 /// This is reliable for small matrices (m,n ≤ ~30) and avoids the
 /// numerical instability of one-sided Jacobi on Gram matrices.
-fn jacobi_svd_f64(
+///
+/// Note: despite the historical name in this file, this is **not** the
+/// classical Jacobi SVD (which rotates the Gram matrix); it is a simple
+/// power-iteration / deflation approach.
+fn power_iter_svd_f64(
     a: &[f64],
     m: usize,
     n: usize,
@@ -378,7 +617,7 @@ mod tests {
         let m = 4; let n = 3;
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n { a[i*n+j] = u[i]*v[j]; } }
-        let blk = compress_block::<f64>(&a, m, n, 1e-10);
+        let blk = compress_block::<f64>(&a, m, n, 1e-10, 0);
         assert!(blk.rank <= 1, "rank-1 block should compress to rank≤1, got {}", blk.rank);
         let recon = blk.to_dense();
         let err = frobenius_err(&a, &recon);
@@ -398,7 +637,7 @@ mod tests {
         for i in 0..m { for j in 0..n {
             a[i*n+j] = 3.0 * u1[i]*v1[j] + 0.5 * u2[i]*v2[j];
         }}
-        let blk = compress_block::<f64>(&a, m, n, 1e-8);
+        let blk = compress_block::<f64>(&a, m, n, 1e-8, 0);
         assert!(blk.rank <= 2, "rank-2 block should compress to rank≤2, got {}", blk.rank);
         let recon = blk.to_dense();
         let err = frobenius_err(&a, &recon);
@@ -409,7 +648,7 @@ mod tests {
     #[test]
     fn blr_zero_block() {
         let a = vec![0.0f64; 4 * 4];
-        let blk = compress_block::<f64>(&a, 4, 4, 1e-8);
+        let blk = compress_block::<f64>(&a, 4, 4, 1e-8, 0);
         assert_eq!(blk.rank, 0);
     }
 
@@ -422,7 +661,7 @@ mod tests {
             x - 0.5
         }).collect();
         // With tol=0: rank should be min(m,n).
-        let blk = compress_block::<f64>(&a, m, n, 1e-15);
+        let blk = compress_block::<f64>(&a, m, n, 1e-15, 0);
         assert!(blk.rank > 0);
         let recon = blk.to_dense();
         let err = frobenius_err(&a, &recon);
@@ -434,7 +673,7 @@ mod tests {
     fn blr_apply_add_matches_dense() {
         let m = 4; let n = 3;
         let a = vec![1.0f64, 2.0, 0.0, -1.0, 3.0, 1.0, 0.0, -2.0, 4.0, 1.0, 0.5, -0.5];
-        let blk = compress_block::<f64>(&a, m, n, 1e-12);
+        let blk = compress_block::<f64>(&a, m, n, 1e-12, 0);
         let x = vec![1.0f64, -1.0, 2.0];
         // Dense: y_dense = A * x.
         let mut y_dense = vec![0.0f64; m];
@@ -445,5 +684,163 @@ mod tests {
             assert!((y_dense[i] - y_blr[i]).abs() < 1e-10,
                 "apply_add mismatch at i={i}: {:.6} vs {:.6}", y_dense[i], y_blr[i]);
         }
+    }
+
+    #[test]
+    fn blr_apply_add_t_matches_dense() {
+        // A is m×n; Aᵀ is n×m.  x has length m, y has length n.
+        let m = 4; let n = 3;
+        let a = vec![1.0f64, 2.0, 0.0, -1.0, 3.0, 1.0, 0.0, -2.0, 4.0, 1.0, 0.5, -0.5];
+        let blk = compress_block::<f64>(&a, m, n, 1e-12, 0);
+        let x = vec![1.0f64, -1.0, 2.0, 0.5]; // length m
+        // Dense transpose matvec: y_dense = Aᵀ x.
+        let mut y_dense = vec![0.0f64; n];
+        for j in 0..n { for i in 0..m { y_dense[j] += a[i*n+j] * x[i]; } }
+        let mut y_blr = vec![0.0f64; n];
+        blk.apply_add_t(&x, &mut y_blr, 1.0f64);
+        for j in 0..n {
+            assert!((y_dense[j] - y_blr[j]).abs() < 1e-10,
+                "apply_add_t mismatch at j={j}: {:.6} vs {:.6}", y_dense[j], y_blr[j]);
+        }
+    }
+
+    #[test]
+    fn blr_recompress_reduces_rank() {
+        // Build a rank-3 matrix with singular values 100, 1, 0.001.
+        let m = 6; let n = 5;
+        let u = [
+            vec![1.0f64, 0.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.0f64, 1.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.0f64, 0.0, 1.0, 0.0, 0.0, 0.0],
+        ];
+        let v = [
+            vec![1.0f64, 0.0, 0.0, 0.0, 0.0],
+            vec![0.0f64, 1.0, 0.0, 0.0, 0.0],
+            vec![0.0f64, 0.0, 1.0, 0.0, 0.0],
+        ];
+        let sigmas = [100.0f64, 1.0, 0.001];
+        let mut a = vec![0.0f64; m * n];
+        for k in 0..3 {
+            for i in 0..m { for j in 0..n { a[i*n+j] += sigmas[k] * u[k][i] * v[k][j]; } }
+        }
+        // Compress tightly to capture all 3 ranks.
+        let blk = compress_block::<f64>(&a, m, n, 1e-10, 0);
+        assert_eq!(blk.rank, 3, "expected rank 3, got {}", blk.rank);
+
+        // Recompress with tol = 0.01 → should drop σ=0.001, keep rank ≤ 2.
+        let blk2 = blk.recompress(0.01);
+        assert!(blk2.rank <= 2, "recompressed rank should be ≤2, got {}", blk2.rank);
+
+        // The reconstruction should still approximate the rank-2 part well.
+        let recon = blk2.to_dense();
+        // Build rank-2 reference (drop σ=0.001 term).
+        let mut a2 = vec![0.0f64; m * n];
+        for k in 0..2 {
+            for i in 0..m { for j in 0..n { a2[i*n+j] += sigmas[k] * u[k][i] * v[k][j]; } }
+        }
+        let err: f64 = a2.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
+        let nrm: f64 = a2.iter().map(|x| x*x).sum::<f64>().sqrt();
+        // The dropped term has σ=0.001 ≪ σ₁=100, and σ₂=1 sits exactly at the
+        // threshold (0.01×σ₁).  Numerical drift in the internal SVD may occasionally
+        // place σ₂ just below the threshold; allow up to 2% relative error.
+        assert!(err / nrm < 0.02, "recompress reconstruction error {}", err / nrm);
+    }
+
+    #[test]
+    fn blr_compression_ratio_rank1() {
+        // rank-1 m×n: ratio = (m+n)/m*n < 1 for large m,n.
+        let m = 10; let n = 8;
+        let u: Vec<f64> = (0..m).map(|i| i as f64 + 1.0).collect();
+        let v: Vec<f64> = (0..n).map(|j| j as f64 * 0.5 + 1.0).collect();
+        let mut a = vec![0.0f64; m * n];
+        for i in 0..m { for j in 0..n { a[i*n+j] = u[i] * v[j]; } }
+        let blk = compress_block::<f64>(&a, m, n, 1e-10, 0);
+        assert_eq!(blk.rank, 1);
+        let ratio = blk.compression_ratio();
+        let expected = (m + n) as f64 / (m * n) as f64;
+        assert!((ratio - expected).abs() < 1e-12, "ratio mismatch: {} vs {}", ratio, expected);
+        assert!(ratio < 1.0, "rank-1 should compress below full: {}", ratio);
+    }
+
+    #[test]
+    fn blr_large_decaying_spectrum() {
+        // 50×30 matrix with exponentially decaying singular values.
+        // σ_k = exp(-k), so tol=1e-4 should keep k where exp(-k)≥1e-4*1 → k≤9.
+        let m = 50; let n = 30;
+        let rank_true = m.min(n); // build full-rank basis
+        // U: random-ish orthonormal columns (Gram-Schmidt on random vectors).
+        let mut u_cols: Vec<Vec<f64>> = Vec::new();
+        let mut rng = Lcg64::new(0xdeadbeef);
+        for k in 0..rank_true {
+            let mut col: Vec<f64> = (0..m).map(|_| rng.gaussian()).collect();
+            // Orthogonalise against prior columns.
+            for prev in &u_cols {
+                let dot: f64 = col.iter().zip(prev).map(|(a,b)| a*b).sum();
+                for i in 0..m { col[i] -= dot * prev[i]; }
+            }
+            let nrm: f64 = col.iter().map(|x| x*x).sum::<f64>().sqrt();
+            if nrm < 1e-12 { break; }
+            for x in &mut col { *x /= nrm; }
+            u_cols.push(col);
+        }
+        let mut v_cols: Vec<Vec<f64>> = Vec::new();
+        for k in 0..rank_true {
+            let mut col: Vec<f64> = (0..n).map(|_| rng.gaussian()).collect();
+            for prev in &v_cols {
+                let dot: f64 = col.iter().zip(prev).map(|(a,b)| a*b).sum();
+                for j in 0..n { col[j] -= dot * prev[j]; }
+            }
+            let nrm: f64 = col.iter().map(|x| x*x).sum::<f64>().sqrt();
+            if nrm < 1e-12 { break; }
+            for x in &mut col { *x /= nrm; }
+            v_cols.push(col);
+        }
+        let r_built = u_cols.len().min(v_cols.len());
+        let mut a = vec![0.0f64; m * n];
+        for k in 0..r_built {
+            let sigma = (-( k as f64)).exp(); // 1, e^-1, e^-2, ...
+            for i in 0..m { for j in 0..n { a[i*n+j] += sigma * u_cols[k][i] * v_cols[k][j]; } }
+        }
+        let nrm: f64 = a.iter().map(|x| x*x).sum::<f64>().sqrt();
+
+        let tol = 1e-4;
+        let blk = compress_block::<f64>(&a, m, n, tol, 0);
+        let recon = blk.to_dense();
+        let err: f64 = a.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
+        // Reconstruction error should be at most a few times tol * ||A||_F.
+        assert!(
+            err / nrm < tol * 50.0,
+            "large decaying-spectrum: err/nrm={:.2e}, tol={tol:.2e}, rank={}", err/nrm, blk.rank
+        );
+        // Rank should be well below min(m,n)=30 — the spectrum drops to 1e-4 around k=9.
+        assert!(blk.rank < n, "rank {} should be < n={n}", blk.rank);
+    }
+
+    #[test]
+    fn blr_add_compressed_roundtrip() {
+        // A = B + C where B is rank-1 and C is rank-1 → sum is rank ≤ 2.
+        let m = 5; let n = 4;
+        let ub = vec![1.0f64, 2.0, -1.0, 0.5, 3.0];
+        let vb = vec![1.0f64, -1.0, 2.0, 0.5];
+        let uc = vec![0.0f64, 1.0, 1.0, -2.0, 0.5];
+        let vc = vec![-1.0f64, 0.0, 1.0, -0.5];
+        let mut b_dense = vec![0.0f64; m * n];
+        let mut c_dense = vec![0.0f64; m * n];
+        for i in 0..m { for j in 0..n {
+            b_dense[i*n+j] = ub[i] * vb[j];
+            c_dense[i*n+j] = uc[i] * vc[j];
+        }}
+        let mut sum_dense = vec![0.0f64; m * n];
+        for k in 0..m*n { sum_dense[k] = b_dense[k] + c_dense[k]; }
+
+        let blk_b = compress_block::<f64>(&b_dense, m, n, 1e-12, 0);
+        let blk_c = compress_block::<f64>(&c_dense, m, n, 1e-12, 0);
+        let blk_sum = blk_b.add_compressed(&blk_c, 1e-10, 0);
+
+        assert!(blk_sum.rank <= 2, "sum of rank-1 blocks should be ≤ rank 2, got {}", blk_sum.rank);
+        let recon = blk_sum.to_dense();
+        let err: f64 = sum_dense.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
+        let nrm: f64 = sum_dense.iter().map(|x| x*x).sum::<f64>().sqrt();
+        assert!(err / nrm < 1e-8, "add_compressed reconstruction error {}", err / nrm);
     }
 }

@@ -454,7 +454,7 @@ fn bench_blr_compress(c: &mut Criterion) {
         group.throughput(Throughput::Elements((m * n) as u64));
         group.bench_with_input(BenchmarkId::new("rank1", format!("{m}x{n}")), &(m, n), |b, _| {
             b.iter(|| {
-                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-8))
+                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-8, 0))
             });
         });
     }
@@ -467,7 +467,7 @@ fn bench_blr_compress(c: &mut Criterion) {
         }).collect();
         group.bench_with_input(BenchmarkId::new("full_rank", format!("{m}x{n}")), &(m, n), |b, _| {
             b.iter(|| {
-                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-12))
+                black_box(compress_block::<f64>(black_box(&a), m, n, 1e-12, 0))
             });
         });
     }
