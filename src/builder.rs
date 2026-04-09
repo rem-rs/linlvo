@@ -91,6 +91,28 @@ pub enum PrecondChoice {
     /// triangular solve at each preconditioner application.  One Krylov
     /// iteration is usually sufficient (exact precond = direct solve).
     DirectLu(DirectBackend),
+    /// AMS auxiliary-space preconditioner for H(curl) / edge-element problems.
+    ///
+    /// Requires the discrete gradient matrix `G` (n_edges × n_nodes).
+    /// Stored as `Arc` so that `PrecondChoice` remains cheaply `Clone`.
+    Ams {
+        /// Discrete gradient matrix G (n_edges × n_nodes), in `f64`.
+        g:      std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+        /// AMS configuration (smoother weight, coarse-solver choice).
+        config: crate::precond::ams::AmsConfig,
+    },
+    /// ADS auxiliary-space preconditioner for H(div) / face-element problems.
+    ///
+    /// Requires the discrete curl `C` (n_faces × n_edges) and gradient `G`
+    /// (n_edges × n_nodes) matrices.
+    Ads {
+        /// Discrete curl matrix C (n_faces × n_edges), in `f64`.
+        c:      std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+        /// Discrete gradient matrix G (n_edges × n_nodes), in `f64`.
+        g:      std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+        /// ADS configuration.
+        config: crate::precond::ads::AdsConfig,
+    },
 }
 
 /// Fill-reducing permutation exposed at builder level.
@@ -281,6 +303,17 @@ impl SolverBuilder {
             PrecondChoice::DirectLu(backend) => {
                 self.run_krylov_direct_precond(backend, a, b, x, &params)
             }
+            PrecondChoice::Ams { g, config } => {
+                let g_t = cast_csr_f64_to::<T>(g);
+                let p = crate::precond::ams::AmsPrecond::new(a, &g_t, config.clone())?;
+                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+            }
+            PrecondChoice::Ads { c, g, config } => {
+                let c_t = cast_csr_f64_to::<T>(c);
+                let g_t = cast_csr_f64_to::<T>(g);
+                let p = crate::precond::ads::AdsPrecond::new(a, &c_t, &g_t, config.clone())?;
+                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+            }
         }
     }
 
@@ -357,4 +390,20 @@ pub fn solve_auto<T: Scalar>(
     SolverBuilder::new()
         .method(SolveMethod::Direct(backend))
         .solve(a, b)
+}
+
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
+/// Convert a `CsrMatrix<f64>` to `CsrMatrix<T>` by casting each value.
+///
+/// Used by the AMS/ADS builder arms to convert user-supplied `f64` matrices
+/// into the solver's working scalar type `T` (`f32` or `f64`).
+fn cast_csr_f64_to<T: Scalar>(m: &crate::sparse::CsrMatrix<f64>) -> crate::sparse::CsrMatrix<T> {
+    crate::sparse::CsrMatrix::from_raw(
+        m.nrows(),
+        m.ncols(),
+        m.row_ptr().to_vec(),
+        m.col_idx().to_vec(),
+        m.values().iter().map(|&v| T::from_f64(v)).collect(),
+    )
 }

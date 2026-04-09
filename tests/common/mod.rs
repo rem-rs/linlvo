@@ -169,3 +169,119 @@ pub fn relative_residual<T: Scalar>(
 
     if norm_b == T::zero() { norm_r } else { norm_r / norm_b }
 }
+
+// ─── AMS / ADS test geometry helpers ─────────────────────────────────────────
+
+/// Build a 1-D chain graph with `n_nodes` nodes and `n_edges = n_nodes - 1` edges.
+///
+/// Returns `(G, A)` where:
+/// - `G` is the discrete gradient (n_edges × n_nodes): `G[e, tail] = -1`, `G[e, head] = +1`.
+/// - `A = GGᵀ + delta·I` (n_edges × n_edges): the regularised edge Laplacian.
+///
+/// Adding `delta > 0` removes the null space so the system is non-singular.
+/// A typical value is `delta = 1e-3`.
+pub fn make_chain_graph(n_nodes: usize, delta: f64) -> (CsrMatrix<f64>, CsrMatrix<f64>) {
+    assert!(n_nodes >= 2, "chain graph needs at least 2 nodes");
+    let n_edges = n_nodes - 1;
+
+    // G: n_edges × n_nodes
+    let mut cg = CooMatrix::new(n_edges, n_nodes);
+    for e in 0..n_edges {
+        cg.push(e, e,     -1.0);
+        cg.push(e, e + 1,  1.0);
+    }
+    let g = CsrMatrix::from_coo(&cg);
+
+    // A = G Gᵀ + delta * I
+    let g_t  = g.transpose_csr();
+    let gg_t = g.matmat(&g_t);
+    let mut ca = CooMatrix::new(n_edges, n_edges);
+    for (i, j, v) in gg_t.triplets() {
+        ca.push(i, j, v);
+    }
+    for i in 0..n_edges {
+        ca.push(i, i, delta);
+    }
+    let a = CsrMatrix::from_coo(&ca);
+    (g, a)
+}
+
+/// Build a 2-D rectangular discrete de Rham complex with `nx × ny` nodes.
+///
+/// Returns `(G, C, A)` where:
+/// - `G` is the discrete gradient (n_edges × n_nodes).
+/// - `C` is the discrete curl (n_faces × n_edges).
+/// - `A = CCᵀ + delta·I` (n_faces × n_faces): regularised face Laplacian.
+///
+/// The key algebraic property `C · G = 0` (curl-of-gradient = 0) holds exactly.
+///
+/// # Dimensions
+///
+/// For an `nx × ny` node grid:
+/// - n_nodes = nx * ny
+/// - n_h_edges = nx * (ny − 1)    (horizontal)
+/// - n_v_edges = (nx − 1) * ny    (vertical)
+/// - n_edges = n_h_edges + n_v_edges
+/// - n_faces = (nx − 1) * (ny − 1)
+pub fn make_rect_complex(
+    nx: usize,
+    ny: usize,
+    delta: f64,
+) -> (CsrMatrix<f64>, CsrMatrix<f64>, CsrMatrix<f64>) {
+    assert!(nx >= 2 && ny >= 2, "rect complex needs at least 2×2 nodes");
+    let n_nodes = nx * ny;
+    let n_h     = nx * (ny - 1);        // horizontal edges
+    let n_v     = (nx - 1) * ny;        // vertical edges
+    let n_edges = n_h + n_v;
+    let n_faces = (nx - 1) * (ny - 1);
+
+    let node   = |i: usize, j: usize| i * ny + j;
+    let h_edge = |i: usize, j: usize| i * (ny - 1) + j;
+    let v_edge = |i: usize, j: usize| n_h + i * ny + j;
+    let face   = |i: usize, j: usize| i * (ny - 1) + j;
+
+    // G: discrete gradient (n_edges × n_nodes)
+    let mut cg = CooMatrix::new(n_edges, n_nodes);
+    for i in 0..nx {
+        for j in 0..(ny - 1) {
+            cg.push(h_edge(i, j), node(i, j),       -1.0);
+            cg.push(h_edge(i, j), node(i, j + 1),    1.0);
+        }
+    }
+    for i in 0..(nx - 1) {
+        for j in 0..ny {
+            cg.push(v_edge(i, j), node(i, j),        -1.0);
+            cg.push(v_edge(i, j), node(i + 1, j),     1.0);
+        }
+    }
+    let g = CsrMatrix::from_coo(&cg);
+
+    // C: discrete curl (n_faces × n_edges)
+    // Face (i,j) is bounded by: bottom h_edge(i,j)+, right v_edge(i,j+1)+,
+    //                            top h_edge(i+1,j)-, left v_edge(i,j)-
+    let mut cc = CooMatrix::new(n_faces, n_edges);
+    for i in 0..(nx - 1) {
+        for j in 0..(ny - 1) {
+            let f = face(i, j);
+            cc.push(f, h_edge(i,     j    ),  1.0); // bottom
+            cc.push(f, v_edge(i,     j + 1),  1.0); // right
+            cc.push(f, h_edge(i + 1, j    ), -1.0); // top (reversed)
+            cc.push(f, v_edge(i,     j    ), -1.0); // left (reversed)
+        }
+    }
+    let c = CsrMatrix::from_coo(&cc);
+
+    // A = C Cᵀ + delta * I
+    let c_t  = c.transpose_csr();
+    let cc_t = c.matmat(&c_t);
+    let mut ca = CooMatrix::new(n_faces, n_faces);
+    for (i, j, v) in cc_t.triplets() {
+        ca.push(i, j, v);
+    }
+    for i in 0..n_faces {
+        ca.push(i, i, delta);
+    }
+    let a = CsrMatrix::from_coo(&ca);
+
+    (g, c, a)
+}

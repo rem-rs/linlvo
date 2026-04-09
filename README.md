@@ -161,7 +161,9 @@ linger/
 │   ├── ilut.rs            ILUT(tau, p) — dual threshold
 │   ├── icc.rs             ICC(0) — incomplete Cholesky
 │   ├── spai.rs            SPAI — sparse approximate inverse
-│   └── composite.rs       AdditivePrecond / MultiplicativePrecond
+│   ├── composite.rs       AdditivePrecond / MultiplicativePrecond
+│   ├── ams.rs             AmsPrecond — auxiliary-space Maxwell solver (H(curl))
+│   └── ads.rs             AdsPrecond — auxiliary-space divergence solver (H(div))
 ├── amg/
 │   ├── strength.rs        Strong-connection graph (θ threshold)
 │   ├── coarsen_rs.rs      Ruge–Stüben C/F splitting
@@ -413,6 +415,8 @@ All implement `Preconditioner<Vector = DenseVec<T>>`.
 | `MultiplicativePrecond` | `::new(vec_of_preconds)` | Composes M⁻¹ applications |
 | `BlockJacobiPrecond` | `::from_csr(&a, block_size)` | Dense LU per diagonal block; ideal for multi-DOF-per-node FEA |
 | `AmgPrecond` | `AmgPrecond::new(hierarchy)` | AMG V-cycle as preconditioner |
+| `AmsPrecond` | `::new(&a, &g, config)` | Auxiliary-space Maxwell solver — H(curl) / edge elements |
+| `AdsPrecond` | `::new(&a, &c, &g, config)` | Auxiliary-space divergence solver — H(div) / face elements |
 
 All constructors return `Result<_, SolverError>`.
 
@@ -424,6 +428,94 @@ solver.solve(&a, Some(&precond), &b, &mut x, &params)?;
 // Block Jacobi — ideal when DOF are grouped in fixed-size blocks (e.g. 3D elasticity)
 let bjac = BlockJacobiPrecond::<f64>::from_csr(&a, 3).unwrap();  // 3×3 blocks
 Idrs::<f64>::new(4).solve(&a, Some(&bjac), &b, &mut x, &params)?;
+```
+
+---
+
+## Auxiliary-space preconditioners (AMS / ADS)
+
+Pure-Rust implementations of the Hiptmair-Xu auxiliary-space framework for
+edge- and face-element FEA problems.
+
+### AMS — H(curl) / edge elements (Maxwell)
+
+```text
+M_AMS⁻¹ x  ≈  ω D_A⁻¹ x  +  G · P_v⁻¹ · Gᵀ x
+```
+
+| Term | Meaning |
+|------|---------|
+| `ω D_A⁻¹ x` | Weighted Jacobi smoother on the edge space |
+| `G · P_v⁻¹ · Gᵀ x` | AMG (or ILU(0)) solve on the nodal Laplacian `GᵀAG` |
+
+```rust
+use linger::precond::{AmsPrecond, AmsConfig, AuxSpaceSolver};
+
+// G: discrete gradient matrix (n_edges × n_nodes), user-assembled
+let config = AmsConfig::default();          // AMG coarse solve, ω = 0.667
+let precond = AmsPrecond::new(&a_edge, &g, config)?;
+
+ConjugateGradient::default()
+    .solve(&a_edge, Some(&precond), &b, &mut x, &params)?;
+```
+
+### ADS — H(div) / face elements (Darcy, mixed Maxwell)
+
+```text
+M_ADS⁻¹ x  ≈  ω D_A⁻¹ x  +  C · P_e⁻¹ · Cᵀ x  +  C G · P_v⁻¹ · Gᵀ Cᵀ x
+```
+
+| Term | Meaning |
+|------|---------|
+| `ω D_A⁻¹ x` | Weighted Jacobi smoother on the face space |
+| `C · P_e⁻¹ · Cᵀ x` | AMG solve on the edge Laplacian `CᵀAC` |
+| `C G · P_v⁻¹ · Gᵀ Cᵀ x` | AMG solve on the nodal Laplacian `Gᵀ(CᵀAC)G` |
+
+```rust
+use linger::precond::{AdsPrecond, AdsConfig};
+
+// C: discrete curl (n_faces × n_edges), G: discrete gradient (n_edges × n_nodes)
+let config = AdsConfig::default();          // AMG for both coarse solves
+let precond = AdsPrecond::new(&a_face, &c, &g, config)?;
+
+Gmres::new(30).solve(&a_face, Some(&precond), &b, &mut x, &params)?;
+```
+
+### Coarse-solver choice
+
+Both `AmsConfig` and `AdsConfig` accept `AuxSpaceSolver` for each coarse level:
+
+```rust
+use linger::precond::{AmsConfig, AuxSpaceSolver};
+use linger::amg::AmgConfig;
+
+// AMG (default, recommended for large problems)
+let config = AmsConfig { node_solver: AuxSpaceSolver::Amg(AmgConfig::default()), ..Default::default() };
+
+// ILU(0) (fast setup, suitable for small/medium non-singular coarse problems)
+let config = AmsConfig { node_solver: AuxSpaceSolver::Ilu0, ..Default::default() };
+```
+
+> **Note:** ILU(0) will fail with `PrecondSetupFailed` if the coarse operator is
+> singular.  This can happen when `A = GGᵀ` (pure edge Laplacian) has no
+> diagonal shift.  Add a small regularisation `δI` to `A` before constructing
+> the preconditioner, or use AMG instead.
+
+### Via `SolverBuilder`
+
+```rust
+use linger::builder::{SolverBuilder, SolveMethod, PrecondChoice};
+use linger::precond::{AmsConfig};
+use std::sync::Arc;
+
+let precond = PrecondChoice::Ams {
+    g:      Arc::new(g_f64),          // f64 gradient matrix
+    config: AmsConfig::default(),
+};
+let x = SolverBuilder::new()
+    .method(SolveMethod::Gmres { restart: 30 })
+    .precond(precond)
+    .solve(&a, &b)?;
 ```
 
 ---
@@ -547,6 +639,7 @@ cargo test --test test_sprint3              # Advanced precond + FGMRES/LGMRES (
 cargo test --test test_idrs_f4              # IDR(s) solver incl. restart (12 tests)
 cargo test --test test_tfqmr_a1             # TFQMR solver (8 tests)
 cargo test --test test_block_jacobi_a4      # Block Jacobi preconditioner (7 tests)
+cargo test --test test_ams_ads              # AMS/ADS auxiliary-space preconditioners (13 tests)
 cargo test --test test_amg                  # AMG hierarchy and cycles (10 tests)
 cargo test --test test_amg_kcycle_a3        # AMG K-cycle (6 tests)
 cargo test --test test_amg_internals        # AMG sub-modules + ILU(k) (22 tests)
@@ -606,6 +699,10 @@ pub enum SolverError {
 common::make_poisson_1d::<f64>(n)           // 1D Poisson tridiagonal
 common::make_poisson_2d::<f64>(nx, ny)      // 2D Poisson 5-point stencil
 common::make_nonsymmetric_convdiff::<f64>(n, peclet)  // upwind convection-diffusion
+
+// AMS/ADS test geometries
+common::make_chain_graph(n_nodes, delta)       // 1-D edge complex: (G, A=GGᵀ+δI)
+common::make_rect_complex(nx, ny, delta)       // 2-D face complex: (G, C, A=CCᵀ+δI)
 
 // ‖Ax − b‖₂ / ‖b‖₂
 common::relative_residual(&a, x.as_slice(), &b)
@@ -727,3 +824,5 @@ let blk_sum = blk_a.add_compressed(&blk_b, 1e-6, /*max_rank=*/ 0);
 4. Balay et al. *PETSc Users Manual* (ANL-95/11 Rev 3.20)
 5. Freund, R.W. (1993). A transpose-free quasi-minimal residual algorithm for non-Hermitian linear systems. *SIAM J. Sci. Comput.*, 14(2), 470–482. (TFQMR)
 6. van Gijzen, M.B. & Sonneveld, P. (2011). Algorithm 913: An elegant IDR(s) variant that efficiently exploits biorthogonality properties. *ACM Trans. Math. Software*, 38(1). (IDR(s))
+7. Hiptmair, R. & Xu, J. (2007). Nodal auxiliary space preconditioning in H(curl) and H(div) spaces. *SIAM J. Numer. Anal.*, 45(6), 2483–2509. (AMS/ADS)
+8. Kolev, T.V. & Vassilevski, P.S. (2009). Parallel auxiliary space AMG for H(curl) problems. *J. Comput. Math.*, 27(5), 604–623. (AMS)

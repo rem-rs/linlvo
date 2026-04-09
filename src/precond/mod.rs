@@ -8,6 +8,8 @@ pub mod ildlt;
 pub mod spai;
 pub mod composite;
 pub mod block_jacobi;
+pub mod ams;
+pub mod ads;
 
 pub use jacobi::JacobiPrecond;
 pub use sor::{SorPrecond, SsorPrecond};
@@ -19,3 +21,5 @@ pub use ildlt::IldltPrecond;
 pub use spai::SpaiPrecond;
 pub use composite::{AdditivePrecond, MultiplicativePrecond};
 pub use block_jacobi::BlockJacobiPrecond;
+pub use ams::{AmsPrecond, AmsConfig, AuxSpaceSolver};
+pub use ads::{AdsPrecond, AdsConfig};
