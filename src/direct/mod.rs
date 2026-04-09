@@ -53,7 +53,7 @@ pub use cholesky::SparseCholesky;
 pub use cholesky_sn::{SupernodalSparseCholesky, SNode as CholeskySNode};
 pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
-pub use blr::{BlrBlock, compress_block};
+pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
 
