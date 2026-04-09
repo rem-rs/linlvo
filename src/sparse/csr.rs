@@ -106,6 +106,11 @@ impl<T: Scalar> CsrMatrix<T> {
         assert_eq!(row_ptr.len(), nrows + 1, "row_ptr must have nrows+1 entries");
         assert_eq!(col_idx.len(), values.len(), "col_idx and values must have equal length");
         assert_eq!(*row_ptr.last().unwrap(), col_idx.len(), "row_ptr.last() must equal nnz");
+        // Bounds-check col_idx in debug builds so that spmv's get_unchecked is safe.
+        #[cfg(debug_assertions)]
+        for (k, &c) in col_idx.iter().enumerate() {
+            assert!(c < ncols, "from_raw: col_idx[{k}] = {c} out of bounds (ncols = {ncols})");
+        }
         Self { nrows, ncols, row_ptr, col_idx, values }
     }
 

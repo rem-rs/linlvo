@@ -82,16 +82,29 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
 
         let mut total_iters = 0usize;
 
+        // Pre-allocate restart-cycle buffers once; reuse each restart.
+        // v[0..=m]: Arnoldi basis (m+1 vectors); z, w, mz: scratch.
+        let mut v: Vec<DenseVec<T>> = (0..=m).map(|_| DenseVec::zeros(n)).collect();
+        let mut z_scratch = DenseVec::zeros(n);
+        let mut w_scratch = DenseVec::zeros(n);
+        let mut mz_scratch = DenseVec::zeros(n);
+        // Hessenberg columns: each column j has length j+2, still re-allocate inner
+        // Vecs but reuse the outer Vec's backing array across restarts.
+        let mut h: Vec<Vec<T>> = Vec::with_capacity(m);
+        let mut cs: Vec<T> = Vec::with_capacity(m);
+        let mut sn: Vec<T> = Vec::with_capacity(m);
+        let mut g: Vec<T> = vec![T::zero(); m + 1];
+        let mut ax_scratch = DenseVec::zeros(n);
+
         // Outer restart loop
         loop {
-            // r = b - A x
+            // r = b - A x  (reuse ax_scratch)
             let mut r = b.zero_like();
             {
-                let mut ax = b.zero_like();
-                op.apply(x, &mut ax);
+                op.apply(x, &mut ax_scratch);
                 let rs = r.as_mut_slice();
                 let bs = b.as_slice();
-                let axs = ax.as_slice();
+                let axs = ax_scratch.as_slice();
                 for i in 0..n { rs[i] = bs[i] - axs[i]; }
             }
             let beta = r.norm2();
@@ -105,7 +118,7 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                     converged: true,
                     iterations: total_iters,
                     final_residual: to_f64(rel),
-                    residual_history: residual_history.clone(),
+                    residual_history: std::mem::take(&mut residual_history),
                     history: None,
                 });
             }
@@ -113,21 +126,19 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                 break;
             }
 
-            // V[0] = r / β
-            let mut v: Vec<DenseVec<T>> = Vec::with_capacity(m + 1);
+            // V[0] = r / β  (copy into pre-allocated slot)
             {
-                let mut v0 = r.clone();
-                v0.scale(T::one() / beta);
-                v.push(v0);
+                let v0s = v[0].as_mut_slice();
+                let rs  = r.as_slice();
+                let inv_beta = T::one() / beta;
+                for i in 0..n { v0s[i] = rs[i] * inv_beta; }
             }
 
-            // Upper Hessenberg H (stored column-major: h[j] = column j, length j+2)
-            let mut h: Vec<Vec<T>> = Vec::with_capacity(m);
-            // Givens rotations: (cs, sn)
-            let mut cs: Vec<T> = Vec::with_capacity(m);
-            let mut sn: Vec<T> = Vec::with_capacity(m);
-            // g = [β, 0, 0, …]
-            let mut g: Vec<T> = vec![T::zero(); m + 1];
+            // Reset per-restart state (reuse allocations)
+            h.clear();
+            cs.clear();
+            sn.clear();
+            for gi in g.iter_mut() { *gi = T::zero(); }
             g[0] = beta;
 
             let mut inner_converged = false;
@@ -136,31 +147,34 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
             'inner: for j in 0..m {
                 if total_iters >= params.max_iter { break; }
 
-                // w = A M⁻¹ vⱼ
-                let mut z = DenseVec::zeros(n);
-                apply_precond_or_copy(precond, &v[j], &mut z);
-                let mut w = b.zero_like();
-                op.apply(&z, &mut w);
+                // z = M⁻¹ v[j],  w = A z
+                apply_precond_or_copy(precond, &v[j], &mut z_scratch);
+                op.apply(&z_scratch, &mut w_scratch);
 
                 // Modified Gram-Schmidt orthogonalisation
                 let mut hcol: Vec<T> = Vec::with_capacity(j + 2);
                 for vi in &v[..=j] {
-                    let hij = dot_slice(vi.as_slice(), w.as_slice());
+                    let hij = dot_slice(vi.as_slice(), w_scratch.as_slice());
                     hcol.push(hij);
-                    // w -= hij * vi
-                    let ws = w.as_mut_slice();
+                    let ws  = w_scratch.as_mut_slice();
                     let vis = vi.as_slice();
                     for i in 0..n { ws[i] -= hij * vis[i]; }
                 }
-                let h_next = w.norm2();
+                let h_next = w_scratch.norm2();
                 hcol.push(h_next);
                 h.push(hcol);
 
-                // Normalise w → v_{j+1}
-                if h_next > T::machine_epsilon() {
-                    w.scale(T::one() / h_next);
+                // Normalise w → v[j+1]  (copy into pre-allocated slot)
+                {
+                    let vj1 = v[j + 1].as_mut_slice();
+                    let ws  = w_scratch.as_slice();
+                    if h_next > T::machine_epsilon() {
+                        let inv = T::one() / h_next;
+                        for i in 0..n { vj1[i] = ws[i] * inv; }
+                    } else {
+                        vj1.copy_from_slice(ws);
+                    }
                 }
-                v.push(w);
 
                 // Apply previous Givens rotations to column j
                 let hj = h.last_mut().unwrap();
@@ -209,28 +223,21 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                 y[i] = s / h[i][i];
             }
 
-            // x += V[:jf] · y   (using right-preconditioned vectors)
-            // Actually we need to apply M⁻¹ to each basis vector before accumulating.
-            // Since we stored v (preconditioned by M⁻¹ before multiply), we need
-            // to undo: x += sum y_j * M⁻¹ v_j
+            // x += sum_j y[j] * M⁻¹ v[j]  (right-preconditioned update)
             for j in 0..jf {
-                let mut mz = DenseVec::zeros(n);
-                apply_precond_or_copy(precond, &v[j], &mut mz);
-                x.axpy(y[j], &mz);
+                apply_precond_or_copy(precond, &v[j], &mut mz_scratch);
+                x.axpy(y[j], &mz_scratch);
             }
 
             if inner_converged {
-                // Compute true residual for final result
-                let mut r_final = b.zero_like();
-                {
-                    let mut ax = b.zero_like();
-                    op.apply(x, &mut ax);
-                    let rs = r_final.as_mut_slice();
-                    let bs = b.as_slice();
-                    let axs = ax.as_slice();
-                    for i in 0..n { rs[i] = bs[i] - axs[i]; }
-                }
-                let rel = r_final.norm2() / norm_b_f;
+                // Compute true residual using ax_scratch
+                op.apply(x, &mut ax_scratch);
+                let rfnorm = {
+                    let bs  = b.as_slice();
+                    let axs = ax_scratch.as_slice();
+                    (0..n).map(|i| { let d = bs[i] - axs[i]; d * d }).fold(T::zero(), |a, v| a + v).sqrt()
+                };
+                let rel = rfnorm / norm_b_f;
                 if params.verbose != VerboseLevel::Silent {
                     println!("  GMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
@@ -238,7 +245,7 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                     converged: true,
                     iterations: total_iters,
                     final_residual: to_f64(rel),
-                    residual_history: residual_history.clone(),
+                    residual_history: std::mem::take(&mut residual_history),
                     history: None,
                 });
             }
@@ -247,17 +254,14 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
             // continue restart
         }
 
-        // Compute final residual
-        let mut r_final = b.zero_like();
-        {
-            let mut ax = b.zero_like();
-            op.apply(x, &mut ax);
-            let rs = r_final.as_mut_slice();
-            let bs = b.as_slice();
-            let axs = ax.as_slice();
-            for i in 0..n { rs[i] = bs[i] - axs[i]; }
-        }
-        let final_residual = to_f64(r_final.norm2() / norm_b_f);
+        // Compute final residual using ax_scratch
+        op.apply(x, &mut ax_scratch);
+        let rfnorm = {
+            let bs  = b.as_slice();
+            let axs = ax_scratch.as_slice();
+            (0..n).map(|i| { let d = bs[i] - axs[i]; d * d }).fold(T::zero(), |a, v| a + v).sqrt()
+        };
+        let final_residual = to_f64(rfnorm / norm_b_f);
         Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
     }
 }

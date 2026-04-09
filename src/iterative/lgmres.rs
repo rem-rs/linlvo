@@ -118,7 +118,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  LGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history: None });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: std::mem::take(&mut residual_history), history: None });
             }
             if total_iters >= params.max_iter { break; }
 
@@ -272,7 +272,7 @@ impl<T: Scalar> KrylovSolver for Lgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  LGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history: None });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: std::mem::take(&mut residual_history), history: None });
             }
 
             if total_iters >= params.max_iter { break; }

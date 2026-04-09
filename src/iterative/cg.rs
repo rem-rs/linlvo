@@ -123,7 +123,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                     }
                     residual_history.push(res_f);
                     return Ok(SolverResult {
-                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: history.clone(),
+                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: history.take(),
                     });
                 }
             }
@@ -137,7 +137,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                 }
                 residual_history.push(res_f);
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: history.clone(),
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: history.take(),
                 });
             }
             let alpha = rz / pap;
@@ -187,8 +187,8 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
                     converged: true,
                     iterations: k + 1,
                     final_residual: to_f64(res),
-                    residual_history: residual_history.clone(),
-                    history: history.clone(),
+                    residual_history: std::mem::take(&mut residual_history),
+                    history: history.take(),
                 });
             }
 

@@ -108,7 +108,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                     println!("  BiCGSTAB converged iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                 }
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: None,
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: None,
                 });
             }
 
@@ -167,7 +167,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                     converged: true,
                     iterations: k + 1,
                     final_residual: res_f,
-                    residual_history: residual_history.clone(),
+                    residual_history: std::mem::take(&mut residual_history),
                     history: None,
                 });
             }
@@ -189,7 +189,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                         println!("  BiCGSTAB converged (t≈0) iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                     }
                     return Ok(SolverResult {
-                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: None,
+                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: None,
                     });
                 }
                 return Err(SolverError::NumericalBreakdown {
@@ -227,7 +227,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                     converged: true,
                     iterations: k + 1,
                     final_residual: to_f64(res),
-                    residual_history: residual_history.clone(),
+                    residual_history: std::mem::take(&mut residual_history),
                     history: None,
                 });
             }

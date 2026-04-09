@@ -209,7 +209,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
                     println!("  MINRES converged iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                 }
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: None,
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: None,
                 });
             }
         }
