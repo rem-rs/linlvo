@@ -7,6 +7,7 @@ pub mod icc;
 pub mod ildlt;
 pub mod spai;
 pub mod composite;
+pub mod block_jacobi;
 
 pub use jacobi::JacobiPrecond;
 pub use sor::{SorPrecond, SsorPrecond};
@@ -17,3 +18,4 @@ pub use icc::Icc0Precond;
 pub use ildlt::IldltPrecond;
 pub use spai::SpaiPrecond;
 pub use composite::{AdditivePrecond, MultiplicativePrecond};
+pub use block_jacobi::BlockJacobiPrecond;

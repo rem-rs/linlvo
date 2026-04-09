@@ -80,12 +80,6 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
         let m        = self.restart;
         let mut residual_history: Vec<f64> = Vec::new();
 
-        let mut history = if params.verbose == VerboseLevel::Iterations {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
         let mut total_iters = 0usize;
 
         loop {
@@ -105,7 +99,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  FGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history: None });
             }
             if total_iters >= params.max_iter { break; }
 
@@ -180,7 +174,6 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
                 let res   = g[j + 1].abs() / norm_b_f;
                 let res_f = to_f64(res);
                 residual_history.push(res_f);
-                if let Some(ref mut hist) = history { hist.push(res_f); }
                 if params.verbose == VerboseLevel::Iterations {
                     println!("    FGMRES iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", total_iters);
                 }
@@ -219,7 +212,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  FGMRES converged iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
-                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history });
+                return Ok(SolverResult { converged: true, iterations: total_iters, final_residual: to_f64(rel), residual_history: residual_history.clone(), history: None });
             }
 
             if total_iters >= params.max_iter { break; }

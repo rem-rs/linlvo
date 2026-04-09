@@ -118,6 +118,70 @@ impl<T: Scalar> CsrMatrix<T> {
     /// Number of stored non-zero entries.
     pub fn nnz(&self) -> usize { self.values.len() }
 
+    /// Validate the CSR structure.
+    ///
+    /// Returns `Ok(())` if:
+    /// - `row_ptr` starts at 0, is non-decreasing, and ends at `nnz`
+    /// - every `col_idx` value is in `[0, ncols)`
+    /// - within each row, `col_idx` values are **strictly increasing** (no duplicates, sorted)
+    ///
+    /// Returns `Err(String)` describing the first violation found.
+    pub fn validate(&self) -> Result<(), String> {
+        let nnz = self.values.len();
+        // row_ptr checks
+        if self.row_ptr.len() != self.nrows + 1 {
+            return Err(format!(
+                "row_ptr length {} ≠ nrows+1 = {}",
+                self.row_ptr.len(), self.nrows + 1
+            ));
+        }
+        if self.row_ptr[0] != 0 {
+            return Err(format!("row_ptr[0] = {} ≠ 0", self.row_ptr[0]));
+        }
+        if self.row_ptr[self.nrows] != nnz {
+            return Err(format!(
+                "row_ptr[nrows] = {} ≠ nnz = {}",
+                self.row_ptr[self.nrows], nnz
+            ));
+        }
+        for i in 0..self.nrows {
+            if self.row_ptr[i] > self.row_ptr[i + 1] {
+                return Err(format!(
+                    "row_ptr non-monotone at row {i}: row_ptr[{i}]={} > row_ptr[{}]={}",
+                    self.row_ptr[i], i + 1, self.row_ptr[i + 1]
+                ));
+            }
+        }
+        // col_idx checks
+        if self.col_idx.len() != nnz {
+            return Err(format!("col_idx length {} ≠ nnz = {}", self.col_idx.len(), nnz));
+        }
+        for row in 0..self.nrows {
+            let start = self.row_ptr[row];
+            let end   = self.row_ptr[row + 1];
+            let mut prev: Option<usize> = None;
+            for idx in start..end {
+                let col = self.col_idx[idx];
+                if col >= self.ncols {
+                    return Err(format!(
+                        "col_idx[{idx}] = {col} out of bounds (ncols = {})",
+                        self.ncols
+                    ));
+                }
+                if let Some(p) = prev {
+                    if col <= p {
+                        return Err(format!(
+                            "row {row}: col_idx not strictly increasing at positions {}, {} ({} ≥ {})",
+                            idx - 1, idx, p, col
+                        ));
+                    }
+                }
+                prev = Some(col);
+            }
+        }
+        Ok(())
+    }
+
     /// Raw row-pointer array (length `nrows + 1`).
     pub fn row_ptr(&self) -> &[usize] { &self.row_ptr }
     /// Raw column-index array (length `nnz`).

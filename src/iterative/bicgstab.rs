@@ -76,12 +76,6 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
         let atol = T::from_f64(params.atol);
         let mut residual_history: Vec<f64> = Vec::new();
 
-        let mut history = if params.verbose == VerboseLevel::Iterations {
-            Some(Vec::new())
-        } else {
-            None
-        };
-
         // r = b - A x₀
         let mut r = b.zero_like();
         {
@@ -110,12 +104,11 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
             if res_early < tol || r_norm < atol {
                 let res_f = to_f64(res_early);
                 residual_history.push(res_f);
-                if let Some(ref mut h) = history { h.push(res_f); }
                 if params.verbose != VerboseLevel::Silent {
                     println!("  BiCGSTAB converged iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                 }
                 return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history,
+                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: None,
                 });
             }
 
@@ -167,7 +160,6 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                 let res = s_norm / norm_b_f;
                 let res_f = to_f64(res);
                 residual_history.push(res_f);
-                if let Some(ref mut h) = history { h.push(res_f); }
                 if params.verbose != VerboseLevel::Silent {
                     println!("  BiCGSTAB converged (early) iter {}  ‖r‖/‖b‖={:.3e}", k + 1, res_f);
                 }
@@ -176,7 +168,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                     iterations: k + 1,
                     final_residual: res_f,
                     residual_history: residual_history.clone(),
-                    history,
+                    history: None,
                 });
             }
 
@@ -197,7 +189,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                         println!("  BiCGSTAB converged (t≈0) iter {}  ‖r‖/‖b‖={res_f:.3e}", k + 1);
                     }
                     return Ok(SolverResult {
-                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history,
+                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: residual_history.clone(), history: None,
                     });
                 }
                 return Err(SolverError::NumericalBreakdown {
@@ -223,7 +215,6 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
             let res = r.norm2() / norm_b_f;
             let res_f = to_f64(res);
             residual_history.push(res_f);
-            if let Some(ref mut h) = history { h.push(res_f); }
             if params.verbose == VerboseLevel::Iterations {
                 println!("    BiCGSTAB iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
             }
@@ -237,7 +228,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
                     iterations: k + 1,
                     final_residual: to_f64(res),
                     residual_history: residual_history.clone(),
-                    history,
+                    history: None,
                 });
             }
 

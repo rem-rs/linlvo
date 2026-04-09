@@ -35,9 +35,9 @@ pub use num_complex::Complex;
 pub use crate::precond::{
     JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
     IlukPrecond, IlutPrecond, Icc0Precond, IldltPrecond, SpaiPrecond,
-    AdditivePrecond, MultiplicativePrecond,
+    AdditivePrecond, MultiplicativePrecond, BlockJacobiPrecond,
 };
-pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs};
+pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType, LevelInfo};
 pub use crate::sparse::{
     BsrMatrix, BsrBuilder,

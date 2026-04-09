@@ -40,12 +40,19 @@ use crate::sparse::CsrMatrix;
 /// IDR(s) solver for general (non-symmetric) systems.
 pub struct Idrs<T> {
     s: usize,
+    max_restarts: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
 impl<T: Scalar> Idrs<T> {
     pub fn new(s: usize) -> Self {
-        Idrs { s: s.max(1), _phantom: std::marker::PhantomData }
+        Idrs { s: s.max(1), max_restarts: 3, _phantom: std::marker::PhantomData }
+    }
+
+    /// Set maximum number of shadow-space restarts on breakdown.
+    pub fn with_max_restarts(mut self, n: usize) -> Self {
+        self.max_restarts = n;
+        self
     }
 }
 
@@ -83,17 +90,13 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
         let norm_b_f = if norm_b == T::zero() { T::one() } else { norm_b };
         let mut residual_history: Vec<f64> = Vec::new();
 
-        // Helper: apply preconditioner (or identity).
-        let apply_pc = |v: &[T], w: &mut [T]| {
-            let vd = DenseVec::from_vec(v.to_vec());
-            let mut wd = DenseVec::from_vec(w.to_vec());
-            if let Some(pc) = precond {
-                pc.apply_precond(&vd, &mut wd);
-            } else {
-                wd.copy_from(&vd);
-            }
-            w.copy_from_slice(wd.as_slice());
-        };
+        // Pre-allocated scratch buffers for preconditioner application (avoids
+        // per-call Vec allocation on the hot path).
+        let mut pc_in  = DenseVec::zeros(n);
+        let mut pc_out = DenseVec::zeros(n);
+        // Scratch buffer for u_k matvec (avoids clone per inner step).
+        let mut u_dense = DenseVec::zeros(n);
+        let mut g_k_dense = DenseVec::zeros(n);
 
         // ── Euclidean norm of a slice ─────────────────────────────────────────
         let rnorm = |r: &[T]| -> T {
@@ -161,6 +164,40 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
         let mut iters = 0usize;
         let mut converged = false;
         let mut omega = T::one();
+        let mut restarts = 0usize;
+        let max_restarts = self.max_restarts;
+
+        // Helper: rebuild shadow space P with a given seed offset.
+        let build_shadow = |seed_offset: u64| -> Vec<Vec<T>> {
+            let mut rows: Vec<Vec<T>> = (0..s).map(|i| {
+                let mut row = vec![T::zero(); n];
+                let mut state: u64 = 0x123456789abcdefu64
+                    .wrapping_add(i as u64 * 2654435769)
+                    .wrapping_add(seed_offset);
+                for v in row.iter_mut() {
+                    state = state.wrapping_mul(6364136223846793005)
+                                 .wrapping_add(1442695040888963407);
+                    let f = ((state >> 33) as f64) / (u32::MAX as f64) * 2.0 - 1.0;
+                    *v = T::from_f64(f);
+                }
+                row
+            }).collect();
+            // Orthonormalise.
+            for i in 0..s {
+                for k in 0..i {
+                    let dot = dot_slice(&rows[k], &rows[i]);
+                    let pk = rows[k].clone();
+                    for j in 0..n { rows[i][j] = rows[i][j] - dot * pk[j]; }
+                }
+                let nrm2: T = rows[i].iter().map(|&v| v * v).fold(T::zero(), |a, b| a + b);
+                let nrm = nrm2.sqrt();
+                if nrm > T::from_f64(1e-14) {
+                    for v in &mut rows[i] { *v = *v / nrm; }
+                }
+            }
+            rows
+        };
+        let mut near_zero_count = 0usize;
 
         'outer: loop {
             for k in 0..s {
@@ -189,7 +226,13 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
 
                 // ── uhat = precond(v) ─────────────────────────────────────────
                 let mut uhat = vec![T::zero(); n];
-                apply_pc(&v, &mut uhat);
+                pc_in.as_mut_slice().copy_from_slice(&v);
+                if let Some(pc) = precond {
+                    pc.apply_precond(&pc_in, &mut pc_out);
+                } else {
+                    pc_out.copy_from(&pc_in);
+                }
+                uhat.copy_from_slice(pc_out.as_slice());
 
                 // ── U[:,k] = omega * uhat + U[:,k:s] * c ─────────────────────
                 let mut u_k = vec![T::zero(); n];
@@ -202,8 +245,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                 }
 
                 // ── G[:,k] = A * U[:,k] ───────────────────────────────────────
-                let u_dense = DenseVec::from_vec(u_k.clone());
-                let mut g_k_dense = DenseVec::zeros(n);
+                u_dense.as_mut_slice().copy_from_slice(&u_k);
                 op.apply(&u_dense, &mut g_k_dense);
                 let mut g_k = g_k_dense.as_slice().to_vec();
 
@@ -231,8 +273,31 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                     g_cols[k] = g_k;
                     u_cols[k] = u_k;
                     iters += 1;
+                    near_zero_count += 1;
+                    // If too many consecutive near-zero pivots, trigger restart.
+                    if near_zero_count >= s && restarts < max_restarts {
+                        restarts += 1;
+                        near_zero_count = 0;
+                        // Recompute r exactly from current x.
+                        {
+                            let mut ax = DenseVec::zeros(n);
+                            op.apply(x, &mut ax);
+                            let bs = b.as_slice(); let axs = ax.as_slice();
+                            for i in 0..n { r[i] = bs[i] - axs[i]; }
+                        }
+                        // Rebuild shadow space with new seed.
+                        p_rows = build_shadow(restarts as u64 * 1337);
+                        // Reset G, U, M, f.
+                        g_cols = vec![vec![T::zero(); n]; s];
+                        u_cols = vec![vec![T::zero(); n]; s];
+                        m_mat = vec![vec![T::zero(); s]; s];
+                        for i in 0..s { m_mat[i][i] = T::one(); }
+                        f = (0..s).map(|i| dot_slice(&p_rows[i], &r)).collect();
+                        omega = T::one();
+                    }
                     continue;
                 }
+                near_zero_count = 0;
                 let beta = f[k] / m_kk;
 
                 // ── r -= beta * G[:,k],  x += beta * U[:,k] ──────────────────
@@ -250,9 +315,13 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                 u_cols[k] = u_k;
 
                 iters += 1;
-                if params.verbose == VerboseLevel::Iterations {
+                {
                     let rn = rnorm(&r);
                     residual_history.push(to_f64(rn / norm_b_f));
+                    if params.verbose == VerboseLevel::Iterations {
+                        let res_f = to_f64(rn / norm_b_f);
+                        println!("    IDR({s}) iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", iters);
+                    }
                 }
                 if rnorm(&r) <= atol || rnorm(&r) <= tol * norm_b_f {
                     converged = true;
@@ -265,9 +334,15 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
 
             // ── Omega step (GMRES-1 minimisation) ────────────────────────────
             let mut uhat2 = vec![T::zero(); n];
-            apply_pc(&r, &mut uhat2);
+            pc_in.as_mut_slice().copy_from_slice(&r);
+            if let Some(pc) = precond {
+                pc.apply_precond(&pc_in, &mut pc_out);
+            } else {
+                pc_out.copy_from(&pc_in);
+            }
+            uhat2.copy_from_slice(pc_out.as_slice());
             let mut t = DenseVec::zeros(n);
-            op.apply(&DenseVec::from_vec(uhat2.clone()), &mut t);
+            op.apply(&pc_out, &mut t);
 
             let tr = dot_slice(t.as_slice(), &r);
             let tt = dot_slice(t.as_slice(), t.as_slice());
@@ -281,9 +356,13 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
             { let xs = x.as_mut_slice(); for l in 0..n { xs[l] = xs[l] + omega * uhat2[l]; } }
 
             iters += 1;
-            if params.verbose == VerboseLevel::Iterations {
+            {
                 let rn = rnorm(&r);
                 residual_history.push(to_f64(rn / norm_b_f));
+                if params.verbose == VerboseLevel::Iterations {
+                    let res_f = to_f64(rn / norm_b_f);
+                    println!("    IDR({s}) iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", iters);
+                }
             }
             if rnorm(&r) <= atol || rnorm(&r) <= tol * norm_b_f {
                 converged = true;

@@ -189,3 +189,32 @@ fn idrs4_f32() {
     let res = Idrs::<f32>::new(4).solve(&a, None, &b, &mut x, &params).unwrap();
     assert!(res.converged, "IDR(4) f32 did not converge");
 }
+
+/// 11. IDR(s) with_max_restarts(0) converges normally (no restart needed for good seed).
+#[test]
+fn idrs_max_restarts_zero_still_converges() {
+    let n = 50;
+    let a = laplacian_1d(n);
+    let b = DenseVec::from_vec(vec![1.0f64; n]);
+    let mut x = DenseVec::zeros(n);
+    let res = Idrs::<f64>::new(4)
+        .with_max_restarts(0)
+        .solve(&a, None, &b, &mut x, &default_params()).unwrap();
+    assert!(res.converged, "IDR(4) no-restart did not converge");
+    assert!(rel_res(&a, &x, &b) < 1e-7);
+}
+
+/// 12. with_max_restarts builder method is accessible and increases convergence
+///     robustness (smoke test).
+#[test]
+fn idrs_with_max_restarts_accessible() {
+    let n = 50;
+    let a = nonsymmetric_tridiag(n);
+    let b = DenseVec::from_vec(vec![1.0f64; n]);
+    let mut x = DenseVec::zeros(n);
+    let res = Idrs::<f64>::new(4)
+        .with_max_restarts(5)
+        .solve(&a, None, &b, &mut x, &default_params()).unwrap();
+    assert!(res.converged, "IDR(4) max_restarts=5 did not converge");
+    assert!(rel_res(&a, &x, &b) < 1e-7);
+}
