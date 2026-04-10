@@ -83,6 +83,29 @@ let result = ConjugateGradient::<f64>::default()
     .unwrap();
 ```
 
+### AMS/ADS parameter sweep (CSV)
+
+Use the tuning example to generate structured CSV rows for AMS/ADS settings
+(`theta`, `coarse_threshold`, `restart`) including convergence, iterations,
+residual, elapsed time, and AMG complexity metrics.
+
+```bash
+# AMS only
+cargo run --example ex07_ams_ads_tuning -- --mode ams
+
+# ADS only
+cargo run --example ex07_ams_ads_tuning -- --mode ads
+
+# Both families
+cargo run --example ex07_ams_ads_tuning -- --mode both
+```
+
+Pipe the output to a file for post-processing:
+
+```bash
+cargo run --example ex07_ams_ads_tuning -- --mode both > ams_ads_sweep.csv
+```
+
 ### With `nalgebra_sparse::CsrMatrix`
 
 On native targets, `nalgebra_sparse::CsrMatrix<T>` implements `LinearOperator`
