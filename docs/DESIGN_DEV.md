@@ -92,17 +92,11 @@ linger/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
 │   │   └── mpi_stub.rs           # MPI trait 接口（暂 stub）
-│   └── ffi/                      # feature = "hypre-ffi" / "petsc-ffi"
+│   └── parallel_dist/            # 规划：纯 Rust 分布式并行（MPI 抽象 / halo / 分布式 CSR）
 │       ├── mod.rs
-│       ├── hypre/
-│       │   ├── mod.rs
-│       │   ├── sys.rs            # 原始 C 绑定（hypre-sys crate）
-│       │   └── boomeramg.rs      # BoomerAMG 包装
-│       └── petsc/
-│           ├── mod.rs
-│           ├── sys.rs            # 原始 C 绑定（petsc-sys crate）
-│           ├── ksp.rs            # KSP 包装
-│           └── pc.rs             # PC 包装
+│       ├── layout.rs             # 全局/局部 DOF 映射与分区元数据
+│       ├── halo.rs               # halo 打包/交换接口
+│       └── dist_csr.rs           # 分布式 CSR 结构与局部 SpMV
 ├── tests/
 │   ├── common/
 │   │   └── mod.rs                # 共用测试辅助（MMS 制造解）
@@ -535,7 +529,7 @@ pub fn make_nonsymmetric_convdiff<T: Scalar>(n: usize, peclet: T) -> (...) { ...
 
 **有依赖顺序的任务**：
 ```
-core/ → sparse/ → iterative/ + precond/ → amg/ → ffi/
+core/ → sparse/ → iterative/ + precond/ → amg/ → parallel_dist/
                                         ↘
 
 ```
@@ -650,7 +644,6 @@ pub enum SolverError {
 | `amg/` | ✅ 完全支持 | setup/cycle 均可在 WASM 运行 |
 | `parallel/rayon_ops.rs` | ⚠️ 禁用 | `cfg` 条件编译屏蔽 |
 | `direct/` | ✅ 完全支持 | 纯 Rust，零 FFI 依赖，明确 WASM 兼容目标 |
-| `ffi/` | ❌ 不支持 | C 库无法链接到 WASM |
 
 **编码约束**：
 - 所有模块禁止直接调用 `std::thread::spawn`，并行路径统一通过 rayon feature 隔离
@@ -668,7 +661,7 @@ pub fn solve_cg_js(
 ```
 
 **验证目标**：
-- `cargo build --target wasm32-unknown-unknown` 核心 crate（不带 ffi/rayon feature）编译通过
+- `cargo build --target wasm32-unknown-unknown` 核心 crate（不带 rayon feature）编译通过
 - `wasm-pack test --headless --firefox` 运行基本 solver 测试
 
 ### 5.6 代码风格约定
@@ -734,11 +727,11 @@ pub fn solve_cg_js(
 
 **Sprint 5 完成时状态**：73 项测试全部通过，`cargo build --benches` 编译通过，wasm32 双模式编译通过。
 
-### Sprint 6（M6，可选）：FFI 后端
-- [ ] `ffi/hypre/` BoomerAMG 绑定
-- [ ] `ffi/petsc/` KSP/PC 绑定
-- [ ] feature flag 集成测试
-- [ ] 对比基准：纯 Rust vs FFI 后端
+### Sprint 6（M6，可选）：纯 Rust 分布式并行基础
+- [ ] `parallel_dist/layout.rs`：分区元数据（owned/ghost）
+- [ ] `parallel_dist/halo.rs`：邻域通信抽象（先 trait，后接 rsmpi）
+- [ ] `parallel_dist/dist_csr.rs`：分布式 CSR + 局部 SpMV + halo 合并
+- [ ] 对比基准：单机多线程 vs 分布式（弱扩展/强扩展）
 
 ### Sprint 7（M7）：特征值求解器基础 ✅ 已完成
 - [x] `eigen/power.rs`（PowerIter）

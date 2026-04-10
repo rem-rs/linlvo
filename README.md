@@ -13,7 +13,7 @@ Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich precond
 | `rayon` | **on** | Parallel SpMV, AXPY, dot, norm2, and AMG setup phases via Rayon |
 | `wasm` | off | Enables `wasm-bindgen` JS interface (`WasmCsrMatrix`, `WasmCgSolver`, `WasmGmresSolver`) |
 | `mpi` | off | Placeholder for distributed-memory support (not yet implemented) |
-| `hypre-ffi` / `petsc-ffi` / `mumps` / `mkl` | off | Placeholders for FFI backends (Sprint 6) |
+| `mumps` / `mkl` | off | Optional native acceleration placeholders (currently not implemented) |
 
 ```toml
 # Cargo.toml — add linger as a dependency
