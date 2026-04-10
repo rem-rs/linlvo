@@ -353,12 +353,18 @@ impl SolverBuilder {
             PrecondChoice::Ams { g, config } => {
                 let g_t = cast_csr_f64_to::<T>(g);
                 let p = crate::precond::ams::AmsPrecond::new(a, &g_t, config.clone())?;
+                if self.verbose {
+                    print_ams_profile_summary(p.profile());
+                }
                 self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
             }
             PrecondChoice::Ads { c, g, config } => {
                 let c_t = cast_csr_f64_to::<T>(c);
                 let g_t = cast_csr_f64_to::<T>(g);
                 let p = crate::precond::ads::AdsPrecond::new(a, &c_t, &g_t, config.clone())?;
+                if self.verbose {
+                    print_ads_profile_summary(p.profile());
+                }
                 self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
             }
         }
@@ -453,4 +459,46 @@ fn cast_csr_f64_to<T: Scalar>(m: &crate::sparse::CsrMatrix<f64>) -> crate::spars
         m.col_idx().to_vec(),
         m.values().iter().map(|&v| T::from_f64(v)).collect(),
     )
+}
+
+fn print_ams_profile_summary(profile: &crate::precond::ams::AmsProfile) {
+    println!(
+        "[AMS] edges={} nodes={} nnz(A)={} nnz(G)={} nnz(G^T A G)={} aux={}",
+        profile.n_edges,
+        profile.n_nodes,
+        profile.a_nnz,
+        profile.g_nnz,
+        profile.a_node_nnz,
+        format_aux_solver_profile(&profile.node_solver),
+    );
+}
+
+fn print_ads_profile_summary(profile: &crate::precond::ads::AdsProfile) {
+    println!(
+        "[ADS] faces={} edges={} nodes={} nnz(A)={} nnz(C)={} nnz(G)={} nnz(C^T A C)={} nnz(G^T A_e G)={} edge_aux={} node_aux={}",
+        profile.n_faces,
+        profile.n_edges,
+        profile.n_nodes,
+        profile.a_nnz,
+        profile.c_nnz,
+        profile.g_nnz,
+        profile.a_edge_nnz,
+        profile.a_node_nnz,
+        format_aux_solver_profile(&profile.edge_solver),
+        format_aux_solver_profile(&profile.node_solver),
+    );
+}
+
+fn format_aux_solver_profile(profile: &crate::precond::ams::AuxSolverProfile) -> String {
+    match profile {
+        crate::precond::ams::AuxSolverProfile::Amg(amg) => {
+            format!(
+                "AMG(levels={}, op_cx={:.2}, grid_cx={:.2})",
+                amg.n_levels, amg.operator_complexity, amg.grid_complexity
+            )
+        }
+        crate::precond::ams::AuxSolverProfile::Ilu0 { n, nnz } => {
+            format!("ILU0(n={}, nnz={})", n, nnz)
+        }
+    }
 }

@@ -3,6 +3,8 @@
 //! Verifies the high-level builder API (C2) for all solver combinations.
 //! WASM types are compile-only tested here (no wasm-pack/browser runtime).
 
+mod common;
+
 use linger::{
     builder::{SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering, solve_auto},
     sparse::{CooMatrix, CsrMatrix},
@@ -230,4 +232,38 @@ fn builder_dimension_mismatch_returns_err() {
         .method(SolveMethod::Direct(DirectBackend::Lu))
         .solve(&a, &b);
     assert!(result.is_err());
+}
+
+#[test]
+fn builder_hpc_ams_preset() {
+    let (g, a) = common::make_chain_graph(31, 1e-3);
+    let n = a.nrows();
+    let x_exact: Vec<f64> = (1..=n)
+        .map(|k| (std::f64::consts::PI * k as f64 / (n + 1) as f64).sin())
+        .collect();
+    let mut b_raw = vec![0.0f64; n];
+    a.spmv(&x_exact, &mut b_raw);
+    let b = DenseVec::from_vec(b_raw);
+
+    let x = SolverBuilder::new()
+        .hpc_ams(std::sync::Arc::new(g))
+        .solve(&a, &b)
+        .unwrap();
+
+    assert!(relative_residual(&a, &x, &b) < 1e-7);
+}
+
+#[test]
+fn builder_hpc_ads_preset() {
+    let (g, c, a) = common::make_rect_complex(4, 4, 1e-3);
+    let b = DenseVec::from_vec(vec![1.0f64; a.nrows()]);
+
+    let x = SolverBuilder::new()
+        .hpc_ads(std::sync::Arc::new(c), std::sync::Arc::new(g))
+        .max_iter(600)
+        .solve(&a, &b)
+        .unwrap();
+
+    assert!(x.as_slice().iter().all(|v| v.is_finite()));
+    assert!(x.as_slice().iter().any(|v| v.abs() > 1e-14));
 }
