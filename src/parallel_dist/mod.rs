@@ -8,5 +8,8 @@ pub mod halo;
 pub mod dist_csr;
 
 pub use layout::{block_partition, PartitionLayout};
-pub use halo::{HaloError, HaloExchange, LocalHaloExchange};
+pub use halo::{
+	HaloError, HaloExchange, LocalHaloExchange,
+	HaloPlan, NeighborHaloPlan,
+};
 pub use dist_csr::DistCsrMatrix;

@@ -58,6 +58,7 @@ pub use crate::parallel::{
 pub use crate::parallel_dist::{
     PartitionLayout, block_partition,
     HaloExchange, HaloError, LocalHaloExchange,
+    HaloPlan, NeighborHaloPlan,
     DistCsrMatrix,
 };
 

@@ -1,7 +1,8 @@
 use crate::core::scalar::Scalar;
 use crate::parallel_dist::halo::HaloExchange;
-use crate::parallel_dist::layout::PartitionLayout;
-use crate::sparse::CsrMatrix;
+use crate::parallel_dist::layout::{block_partition, PartitionLayout};
+use crate::sparse::{CooMatrix, CsrMatrix};
+use std::collections::BTreeSet;
 
 /// Distributed CSR scaffold.
 ///
@@ -31,6 +32,60 @@ impl<T: Scalar> DistCsrMatrix<T> {
     pub fn layout(&self) -> &PartitionLayout { &self.layout }
 
     pub fn local_mat(&self) -> &CsrMatrix<T> { &self.local_mat }
+
+    /// Build one partition from a global CSR matrix using simple block rows.
+    ///
+    /// This is a scaffolding constructor for early distributed development and
+    /// testing. It assumes one unknown per row and therefore requires
+    /// `global.nrows() == global.ncols()`.
+    pub fn from_global_csr_block_partition(
+        global: &CsrMatrix<T>,
+        nranks: usize,
+        rank: usize,
+    ) -> Result<Self, String> {
+        if global.nrows() != global.ncols() {
+            return Err("global matrix must be square for block-partition constructor".into());
+        }
+
+        let owned = block_partition(global.nrows(), nranks, rank);
+        let local_size = owned.end - owned.start;
+
+        let mut ghost_set = BTreeSet::new();
+        for i in owned.clone() {
+            let rs = global.row_ptr()[i];
+            let re = global.row_ptr()[i + 1];
+            for &gcol in &global.col_idx()[rs..re] {
+                if gcol < owned.start || gcol >= owned.end {
+                    ghost_set.insert(gcol);
+                }
+            }
+        }
+        let ghost_globals: Vec<usize> = ghost_set.into_iter().collect();
+
+        let layout = PartitionLayout::new(global.nrows(), owned.clone(), ghost_globals.clone())?;
+
+        let mut coo = CooMatrix::new(local_size, local_size + ghost_globals.len());
+        for gi in owned.clone() {
+            let li = gi - owned.start;
+            let rs = global.row_ptr()[gi];
+            let re = global.row_ptr()[gi + 1];
+            for k in rs..re {
+                let gcol = global.col_idx()[k];
+                let lcol = if gcol >= owned.start && gcol < owned.end {
+                    gcol - owned.start
+                } else {
+                    let pos = ghost_globals
+                        .binary_search(&gcol)
+                        .map_err(|_| "internal ghost mapping error")?;
+                    local_size + pos
+                };
+                coo.push(li, lcol, global.values()[k]);
+            }
+        }
+
+        let local_mat = CsrMatrix::from_coo(&coo);
+        Self::new(local_mat, layout)
+    }
 
     /// Local SpMV using owned + already-fetched ghost values.
     pub fn spmv_local(&self, x_owned: &[T], x_ghost: &[T], y_owned: &mut [T]) {
@@ -91,5 +146,43 @@ mod tests {
 
         dist.spmv_with_halo(&x_owned, &halo, &mut y).unwrap();
         assert_eq!(y, vec![0.0_f64, 0.0_f64]);
+    }
+
+    #[test]
+    fn dist_spmv_two_partitions_matches_global_spmv() {
+        let n = 8usize;
+        let mut coo = CooMatrix::new(n, n);
+        for i in 0..n {
+            coo.push(i, i, 2.0_f64);
+            if i > 0 { coo.push(i, i - 1, -1.0); }
+            if i + 1 < n { coo.push(i, i + 1, -1.0); }
+        }
+        let global = CsrMatrix::from_coo(&coo);
+
+        let d0 = DistCsrMatrix::from_global_csr_block_partition(&global, 2, 0).unwrap();
+        let d1 = DistCsrMatrix::from_global_csr_block_partition(&global, 2, 1).unwrap();
+
+        let xg: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
+        let halo = LocalHaloExchange::new(xg.clone());
+
+        let x0 = &xg[d0.layout().owned_global_range.clone()];
+        let x1 = &xg[d1.layout().owned_global_range.clone()];
+
+        let mut y0 = vec![0.0_f64; d0.layout().local_size()];
+        let mut y1 = vec![0.0_f64; d1.layout().local_size()];
+        d0.spmv_with_halo(x0, &halo, &mut y0).unwrap();
+        d1.spmv_with_halo(x1, &halo, &mut y1).unwrap();
+
+        let mut yd = Vec::with_capacity(n);
+        yd.extend_from_slice(&y0);
+        yd.extend_from_slice(&y1);
+
+        let mut yg = vec![0.0_f64; n];
+        global.spmv(&xg, &mut yg);
+
+        assert_eq!(yd.len(), yg.len());
+        for (a, b) in yd.iter().zip(yg.iter()) {
+            assert!((*a - *b).abs() < 1e-12, "distributed vs global mismatch: {a} vs {b}");
+        }
     }
 }
