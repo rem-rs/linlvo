@@ -40,7 +40,7 @@ use crate::{
     core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}},
     sparse::CsrMatrix,
     iterative::{ConjugateGradient, Gmres, BiCgStab},
-    KrylovSolver, SolverParams, VerboseLevel,
+    KrylovSolver, SolverParams, SolverResult, VerboseLevel,
     direct::{DirectOptions, DirectSolver, DirectSolverPrecond, ordering::OrderingMethod},
     core::preconditioner::Preconditioner,
 };
@@ -126,6 +126,36 @@ pub enum Ordering {
     Colamd,
     /// Multilevel Nested Dissection — best fill reduction for large unstructured meshes.
     NodeNd,
+}
+
+/// Structured preconditioner diagnostics emitted by [`SolverBuilder`].
+#[derive(Debug, Clone)]
+pub enum BuilderPrecondReport {
+    /// No preconditioner.
+    None,
+    /// Jacobi preconditioner.
+    Jacobi,
+    /// ILU(0) preconditioner.
+    Ilu0,
+    /// ICC(0) preconditioner.
+    Icc0,
+    /// Exact direct-solver preconditioner.
+    DirectLu { backend: DirectBackend },
+    /// AMS preconditioner with setup profile.
+    Ams(crate::precond::ams::AmsProfile),
+    /// ADS preconditioner with setup profile.
+    Ads(crate::precond::ads::AdsProfile),
+}
+
+/// Structured solve diagnostics emitted by [`SolverBuilder::solve_with_report`].
+#[derive(Debug, Clone)]
+pub struct BuilderSolveReport {
+    /// Method used for this solve.
+    pub method: SolveMethod,
+    /// Selected preconditioner and its setup profile (if available).
+    pub precond: BuilderPrecondReport,
+    /// Krylov iteration result. `None` for direct solves.
+    pub krylov: Option<SolverResult>,
 }
 
 // ─── Builder ─────────────────────────────────────────────────────────────────
@@ -250,9 +280,25 @@ impl SolverBuilder {
                 op_rows: n, op_cols: a.ncols(), rhs_len: b.len(),
             });
         }
-        let mut x = DenseVec::zeros(n);
-        self.solve_into(a, b, &mut x)?;
+        let (x, _) = self.solve_with_report(a, b)?;
         Ok(x)
+    }
+
+    /// Solve `A x = b` and return structured diagnostics.
+    pub fn solve_with_report<T: Scalar>(
+        &self,
+        a: &CsrMatrix<T>,
+        b: &DenseVec<T>,
+    ) -> Result<(DenseVec<T>, BuilderSolveReport), SolverError> {
+        let n = a.nrows();
+        if b.len() != n {
+            return Err(SolverError::DimensionMismatch {
+                op_rows: n, op_cols: a.ncols(), rhs_len: b.len(),
+            });
+        }
+        let mut x = DenseVec::zeros(n);
+        let report = self.solve_into_with_report(a, b, &mut x)?;
+        Ok((x, report))
     }
 
     /// Solve `A x = b`, storing the result in the pre-allocated `x`.
@@ -262,9 +308,26 @@ impl SolverBuilder {
         b:  &DenseVec<T>,
         x:  &mut DenseVec<T>,
     ) -> Result<(), SolverError> {
+        self.solve_into_with_report(a, b, x).map(|_| ())
+    }
+
+    /// Solve `A x = b` into `x` and return structured diagnostics.
+    pub fn solve_into_with_report<T: Scalar>(
+        &self,
+        a:  &CsrMatrix<T>,
+        b:  &DenseVec<T>,
+        x:  &mut DenseVec<T>,
+    ) -> Result<BuilderSolveReport, SolverError> {
         match &self.method {
-            SolveMethod::Direct(backend) => self.run_direct(backend, a, b, x),
-            _ => self.run_krylov(a, b, x),
+            SolveMethod::Direct(backend) => {
+                self.run_direct(backend, a, b, x)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::None,
+                    krylov: None,
+                })
+            }
+            _ => self.run_krylov_with_report(a, b, x),
         }
     }
 
@@ -324,31 +387,56 @@ impl SolverBuilder {
 
     // ─── internal: Krylov ─────────────────────────────────────────────────────
 
-    fn run_krylov<T: Scalar>(
+    fn run_krylov_with_report<T: Scalar>(
         &self,
         a: &CsrMatrix<T>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
-    ) -> Result<(), SolverError> {
+    ) -> Result<BuilderSolveReport, SolverError> {
         let params = self.krylov_params();
         match &self.precond {
             PrecondChoice::None => {
-                self.dispatch_krylov::<T>(a, None, b, x, &params)
+                let result = self.dispatch_krylov_result::<T>(a, None, b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::None,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Jacobi => {
                 let p = crate::JacobiPrecond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Jacobi,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ilu0 => {
                 let p = crate::Ilu0Precond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ilu0,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Icc0 => {
                 let p = crate::Icc0Precond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Icc0,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::DirectLu(backend) => {
-                self.run_krylov_direct_precond(backend, a, b, x, &params)
+                let result = self.run_krylov_direct_precond(backend, a, b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::DirectLu { backend: backend.clone() },
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ams { g, config } => {
                 let g_t = cast_csr_f64_to::<T>(g);
@@ -356,7 +444,12 @@ impl SolverBuilder {
                 if self.verbose {
                     print_ams_profile_summary(p.profile());
                 }
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ams(p.profile().clone()),
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ads { c, g, config } => {
                 let c_t = cast_csr_f64_to::<T>(c);
@@ -365,32 +458,36 @@ impl SolverBuilder {
                 if self.verbose {
                     print_ads_profile_summary(p.profile());
                 }
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ads(p.profile().clone()),
+                    krylov: Some(result),
+                })
             }
         }
     }
 
-    fn dispatch_krylov<T: Scalar>(
+    fn dispatch_krylov_result<T: Scalar>(
         &self,
         a:       &CsrMatrix<T>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
-    ) -> Result<(), SolverError> {
+    ) -> Result<SolverResult, SolverError> {
         match &self.method {
             SolveMethod::Cg => {
-                ConjugateGradient::<T>::default().solve(a, precond, b, x, params)?;
+                ConjugateGradient::<T>::default().solve(a, precond, b, x, params)
             }
             SolveMethod::Gmres { restart } => {
-                Gmres::<T>::new(*restart).solve(a, precond, b, x, params)?;
+                Gmres::<T>::new(*restart).solve(a, precond, b, x, params)
             }
             SolveMethod::BiCgStab => {
-                BiCgStab::<T>::default().solve(a, precond, b, x, params)?;
+                BiCgStab::<T>::default().solve(a, precond, b, x, params)
             }
             SolveMethod::Direct(_) => unreachable!(),
         }
-        Ok(())
     }
 
     fn run_krylov_direct_precond<T: Scalar>(
@@ -400,18 +497,18 @@ impl SolverBuilder {
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
-    ) -> Result<(), SolverError> {
+    ) -> Result<SolverResult, SolverError> {
         use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
         match backend {
             DirectBackend::Lu => {
                 let s = SparseLu::<T>::new(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Cholesky => {
                 let s = SparseCholesky::<T>::new(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Multifrontal => {
                 let s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
@@ -419,7 +516,7 @@ impl SolverBuilder {
                     ..Default::default()
                 });
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
         }
     }

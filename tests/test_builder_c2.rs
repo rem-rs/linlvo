@@ -6,7 +6,7 @@
 mod common;
 
 use linger::{
-    builder::{SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering, solve_auto},
+    builder::{BuilderPrecondReport, SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering, solve_auto},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec,
 };
@@ -266,4 +266,54 @@ fn builder_hpc_ads_preset() {
 
     assert!(x.as_slice().iter().all(|v| v.is_finite()));
     assert!(x.as_slice().iter().any(|v| v.abs() > 1e-14));
+}
+
+#[test]
+fn builder_hpc_ams_report_contains_profile_and_krylov_result() {
+    let (g, a) = common::make_chain_graph(31, 1e-3);
+    let n = a.nrows();
+    let x_exact: Vec<f64> = (1..=n)
+        .map(|k| (std::f64::consts::PI * k as f64 / (n + 1) as f64).sin())
+        .collect();
+    let mut b_raw = vec![0.0f64; n];
+    a.spmv(&x_exact, &mut b_raw);
+    let b = DenseVec::from_vec(b_raw);
+
+    let (_x, report) = SolverBuilder::new()
+        .hpc_ams(std::sync::Arc::new(g))
+        .solve_with_report(&a, &b)
+        .unwrap();
+
+    match report.precond {
+        BuilderPrecondReport::Ams(p) => {
+            assert!(p.n_edges > 0);
+            assert!(p.a_node_nnz > 0);
+        }
+        _ => panic!("expected AMS preconditioner report"),
+    }
+    let krylov = report.krylov.expect("expected krylov result");
+    assert!(krylov.converged);
+}
+
+#[test]
+fn builder_hpc_ads_report_contains_profile_and_krylov_result() {
+    let (g, c, a) = common::make_rect_complex(4, 4, 1e-3);
+    let b = DenseVec::from_vec(vec![1.0f64; a.nrows()]);
+
+    let (_x, report) = SolverBuilder::new()
+        .hpc_ads(std::sync::Arc::new(c), std::sync::Arc::new(g))
+        .max_iter(600)
+        .solve_with_report(&a, &b)
+        .unwrap();
+
+    match report.precond {
+        BuilderPrecondReport::Ads(p) => {
+            assert!(p.n_faces > 0);
+            assert!(p.a_edge_nnz > 0);
+            assert!(p.a_node_nnz > 0);
+        }
+        _ => panic!("expected ADS preconditioner report"),
+    }
+    let krylov = report.krylov.expect("expected krylov result");
+    assert!(krylov.converged);
 }
