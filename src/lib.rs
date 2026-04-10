@@ -12,6 +12,7 @@ pub mod precond;
 pub mod iterative;
 pub mod amg;
 pub mod parallel;
+pub mod parallel_dist;
 pub mod eigen;
 pub mod direct;
 pub mod builder;
@@ -53,6 +54,11 @@ pub use crate::parallel::{
     parallel_spmv, parallel_spmv_add,
     parallel_axpy, parallel_axpby,
     parallel_dot, parallel_norm2,
+};
+pub use crate::parallel_dist::{
+    PartitionLayout, block_partition,
+    HaloExchange, HaloError, LocalHaloExchange,
+    DistCsrMatrix,
 };
 
 pub use crate::eigen::{

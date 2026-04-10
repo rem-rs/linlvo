@@ -221,6 +221,10 @@ linger/
 │   └── nep.rs             NonlinearOperator trait + NepNewton
 ├── parallel/
 │   └── rayon_ops.rs       parallel_spmv, parallel_axpy, parallel_dot, …
+├── parallel_dist/
+│   ├── layout.rs          PartitionLayout + block_partition
+│   ├── halo.rs            HaloExchange trait + LocalHaloExchange
+│   └── dist_csr.rs        DistCsrMatrix scaffold (owned/ghost split)
 └── wasm.rs                WasmCsrMatrix, WasmCgSolver, WasmGmresSolver
 ```
 
