@@ -45,7 +45,7 @@ use crate::core::{
     scalar::Scalar,
     vector::DenseVec,
 };
-use crate::precond::ams::{AuxSpaceSolver, build_aux_solver};
+use crate::precond::ams::{AuxSolverProfile, AuxSpaceSolver, build_aux_solver};
 use crate::sparse::CsrMatrix;
 
 // ─── AdsConfig ───────────────────────────────────────────────────────────────
@@ -73,6 +73,47 @@ impl Default for AdsConfig {
     }
 }
 
+impl AdsConfig {
+    /// HPC-oriented default for H(div) auxiliary-space solves.
+    pub fn hpc_default() -> Self {
+        let amg = crate::amg::AmgConfig {
+            coarse_threshold: 64,
+            max_levels: 30,
+            ..crate::amg::AmgConfig::default()
+        };
+        AdsConfig {
+            smoother_omega: 0.667,
+            edge_solver: AuxSpaceSolver::Amg(amg.clone()),
+            node_solver: AuxSpaceSolver::Amg(amg),
+        }
+    }
+}
+
+/// Lightweight setup diagnostics for [`AdsPrecond`].
+#[derive(Debug, Clone)]
+pub struct AdsProfile {
+    /// Number of face DOFs.
+    pub n_faces: usize,
+    /// Number of edge DOFs.
+    pub n_edges: usize,
+    /// Number of node DOFs.
+    pub n_nodes: usize,
+    /// Non-zeros in the fine operator `A`.
+    pub a_nnz: usize,
+    /// Non-zeros in the discrete curl `C`.
+    pub c_nnz: usize,
+    /// Non-zeros in the discrete gradient `G`.
+    pub g_nnz: usize,
+    /// Non-zeros in `A_edge = C^T A C`.
+    pub a_edge_nnz: usize,
+    /// Non-zeros in `A_node = G^T A_edge G`.
+    pub a_node_nnz: usize,
+    /// Auxiliary-space backend profile for the edge solve.
+    pub edge_solver: AuxSolverProfile,
+    /// Auxiliary-space backend profile for the node solve.
+    pub node_solver: AuxSolverProfile,
+}
+
 // ─── AdsPrecond ──────────────────────────────────────────────────────────────
 
 /// ADS preconditioner for H(div) face-element problems.
@@ -93,6 +134,8 @@ pub struct AdsPrecond<T: Scalar> {
     edge_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
     /// Approximate solver for the node coarse problem Gᵀ(CᵀAC)G.
     node_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
+    /// Setup diagnostics for observability and tuning.
+    profile: AdsProfile,
 }
 
 impl<T: Scalar> AdsPrecond<T> {
@@ -180,8 +223,23 @@ impl<T: Scalar> AdsPrecond<T> {
         let a_node = g_t.matmat(&a_e_g);      // n_nodes × n_nodes
 
         // ── 5. Coarse solvers ─────────────────────────────────────────────────
-        let edge_precond = build_aux_solver(a_edge, &config.edge_solver)?;
-        let node_precond = build_aux_solver(a_node, &config.node_solver)?;
+        let a_edge_nnz = a_edge.nnz();
+        let a_node_nnz = a_node.nnz();
+        let (edge_precond, edge_solver_profile) = build_aux_solver(a_edge, &config.edge_solver)?;
+        let (node_precond, node_solver_profile) = build_aux_solver(a_node, &config.node_solver)?;
+
+        let profile = AdsProfile {
+            n_faces,
+            n_edges,
+            n_nodes,
+            a_nnz: a.nnz(),
+            c_nnz: c.nnz(),
+            g_nnz: g.nnz(),
+            a_edge_nnz,
+            a_node_nnz,
+            edge_solver: edge_solver_profile,
+            node_solver: node_solver_profile,
+        };
 
         Ok(AdsPrecond {
             n_faces,
@@ -192,8 +250,12 @@ impl<T: Scalar> AdsPrecond<T> {
             g: g.clone(),
             edge_precond,
             node_precond,
+            profile,
         })
     }
+
+    /// Setup-time profile for diagnostics and performance tuning.
+    pub fn profile(&self) -> &AdsProfile { &self.profile }
 }
 
 impl<T: Scalar> Preconditioner for AdsPrecond<T> {

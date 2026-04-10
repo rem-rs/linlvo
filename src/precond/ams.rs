@@ -49,6 +49,31 @@ use crate::core::{
 use crate::precond::ilu0::Ilu0Precond;
 use crate::sparse::CsrMatrix;
 
+/// Profiling summary for an AMG auxiliary-space solve.
+#[derive(Debug, Clone)]
+pub struct AuxAmgProfile {
+    /// Number of AMG levels.
+    pub n_levels: usize,
+    /// AMG operator complexity.
+    pub operator_complexity: f64,
+    /// AMG grid complexity.
+    pub grid_complexity: f64,
+}
+
+/// Profiling summary for an auxiliary-space solver backend.
+#[derive(Debug, Clone)]
+pub enum AuxSolverProfile {
+    /// Algebraic multigrid backend diagnostics.
+    Amg(AuxAmgProfile),
+    /// ILU(0) backend diagnostics.
+    Ilu0 {
+        /// Matrix size of the auxiliary-space operator.
+        n: usize,
+        /// Stored non-zeros of the auxiliary-space operator.
+        nnz: usize,
+    },
+}
+
 // ─── AuxSpaceSolver ──────────────────────────────────────────────────────────
 
 /// Choice of solver for the auxiliary-space coarse problem.
@@ -99,6 +124,40 @@ impl Default for AmsConfig {
     }
 }
 
+impl AmsConfig {
+    /// HPC-oriented default for auxiliary-space Maxwell solves.
+    ///
+    /// Keeps the robust 2/3 Jacobi damping while using SA-AMG with a larger
+    /// coarse threshold to reduce setup/communication pressure on large cases.
+    pub fn hpc_default() -> Self {
+        AmsConfig {
+            smoother_omega: 0.667,
+            node_solver: AuxSpaceSolver::Amg(AmgConfig {
+                coarse_threshold: 64,
+                max_levels: 30,
+                ..AmgConfig::default()
+            }),
+        }
+    }
+}
+
+/// Lightweight setup diagnostics for [`AmsPrecond`].
+#[derive(Debug, Clone)]
+pub struct AmsProfile {
+    /// Number of edge DOFs.
+    pub n_edges: usize,
+    /// Number of node DOFs.
+    pub n_nodes: usize,
+    /// Non-zeros in the fine operator `A`.
+    pub a_nnz: usize,
+    /// Non-zeros in the discrete gradient `G`.
+    pub g_nnz: usize,
+    /// Non-zeros in the assembled coarse operator `G^T A G`.
+    pub a_node_nnz: usize,
+    /// Auxiliary-space backend profile for the nodal solve.
+    pub node_solver: AuxSolverProfile,
+}
+
 // ─── AmsPrecond ──────────────────────────────────────────────────────────────
 
 /// AMS preconditioner for H(curl) edge-element Maxwell problems.
@@ -114,6 +173,8 @@ pub struct AmsPrecond<T: Scalar> {
     g: CsrMatrix<T>,
     /// Approximate solver for the nodal coarse problem GᵀAG.
     node_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
+    /// Setup diagnostics for observability and tuning.
+    profile: AmsProfile,
 }
 
 impl<T: Scalar> AmsPrecond<T> {
@@ -188,7 +249,17 @@ impl<T: Scalar> AmsPrecond<T> {
         let a_node = g_t.matmat(&ag);     // n_nodes × n_nodes
 
         // ── 4. Coarse solver ─────────────────────────────────────────────────
-        let node_precond = build_aux_solver(a_node, &config.node_solver)?;
+        let a_node_nnz = a_node.nnz();
+        let (node_precond, node_solver_profile) = build_aux_solver(a_node, &config.node_solver)?;
+
+        let profile = AmsProfile {
+            n_edges,
+            n_nodes,
+            a_nnz: a.nnz(),
+            g_nnz: g.nnz(),
+            a_node_nnz,
+            node_solver: node_solver_profile,
+        };
 
         Ok(AmsPrecond {
             n_edges,
@@ -196,8 +267,12 @@ impl<T: Scalar> AmsPrecond<T> {
             scaled_inv_diag,
             g: g.clone(),
             node_precond,
+            profile,
         })
     }
+
+    /// Setup-time profile for diagnostics and performance tuning.
+    pub fn profile(&self) -> &AmsProfile { &self.profile }
 }
 
 impl<T: Scalar> Preconditioner for AmsPrecond<T> {
@@ -246,19 +321,26 @@ impl<T: Scalar> Preconditioner for AmsPrecond<T> {
 pub(super) fn build_aux_solver<T: Scalar>(
     mat:    CsrMatrix<T>,
     solver: &AuxSpaceSolver,
-) -> Result<Box<dyn Preconditioner<Vector = DenseVec<T>>>, SolverError> {
+) -> Result<(Box<dyn Preconditioner<Vector = DenseVec<T>>>, AuxSolverProfile), SolverError> {
     match solver {
         AuxSpaceSolver::Amg(cfg) => {
             let hier = AmgHierarchy::build(mat, cfg.clone());
-            Ok(Box::new(AmgPrecond::new(hier)))
+            let profile = AuxSolverProfile::Amg(AuxAmgProfile {
+                n_levels: hier.n_levels(),
+                operator_complexity: hier.operator_complexity(),
+                grid_complexity: hier.grid_complexity(),
+            });
+            Ok((Box::new(AmgPrecond::new(hier)), profile))
         }
         AuxSpaceSolver::Ilu0 => {
+            let n = mat.nrows();
+            let nnz = mat.nnz();
             let ilu = Ilu0Precond::from_csr(&mat).map_err(|e| {
                 SolverError::PrecondSetupFailed {
                     reason: format!("AMS/ADS auxiliary ILU(0) setup failed: {e}"),
                 }
             })?;
-            Ok(Box::new(ilu))
+            Ok((Box::new(ilu), AuxSolverProfile::Ilu0 { n, nnz }))
         }
     }
 }

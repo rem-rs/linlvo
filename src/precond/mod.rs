@@ -21,5 +21,5 @@ pub use ildlt::IldltPrecond;
 pub use spai::SpaiPrecond;
 pub use composite::{AdditivePrecond, MultiplicativePrecond};
 pub use block_jacobi::BlockJacobiPrecond;
-pub use ams::{AmsPrecond, AmsConfig, AuxSpaceSolver};
-pub use ads::{AdsPrecond, AdsConfig};
+pub use ams::{AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile};
+pub use ads::{AdsPrecond, AdsConfig, AdsProfile};

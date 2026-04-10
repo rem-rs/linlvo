@@ -189,6 +189,53 @@ impl SolverBuilder {
     /// Enable iteration-by-iteration convergence logging.
     pub fn verbose(mut self) -> Self { self.verbose = true; self }
 
+    /// Apply HPC-oriented Krylov defaults for large sparse problems.
+    ///
+    /// Sets:
+    /// - GMRES restart = 50
+    /// - rtol = 1e-8
+    /// - atol = 0.0
+    /// - max_iter = 400
+    pub fn hpc_krylov_defaults(mut self) -> Self {
+        self.method = SolveMethod::Gmres { restart: 50 };
+        self.rtol = 1e-8;
+        self.atol = 0.0;
+        self.max_iter = 400;
+        self
+    }
+
+    /// One-shot HPC preset for H(curl) systems using AMS.
+    ///
+    /// Uses [`AmsConfig::hpc_default`] and [`Self::hpc_krylov_defaults`].
+    pub fn hpc_ams(
+        mut self,
+        g: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+    ) -> Self {
+        self = self.hpc_krylov_defaults();
+        self.precond = PrecondChoice::Ams {
+            g,
+            config: crate::precond::ams::AmsConfig::hpc_default(),
+        };
+        self
+    }
+
+    /// One-shot HPC preset for H(div) systems using ADS.
+    ///
+    /// Uses [`AdsConfig::hpc_default`] and [`Self::hpc_krylov_defaults`].
+    pub fn hpc_ads(
+        mut self,
+        c: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+        g: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+    ) -> Self {
+        self = self.hpc_krylov_defaults();
+        self.precond = PrecondChoice::Ads {
+            c,
+            g,
+            config: crate::precond::ads::AdsConfig::hpc_default(),
+        };
+        self
+    }
+
     // ─── solve ────────────────────────────────────────────────────────────────
 
     /// Solve `A x = b`.
