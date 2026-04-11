@@ -8,7 +8,7 @@ use linger::{
     iterative::{BiCgStab, ConjugateGradient, Gmres, Minres},
     precond::{Ilu0Precond, JacobiPrecond, SsorPrecond},
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, KrylovSolver, SolverError, SolverParams, VerboseLevel, Vector,
+    DenseVec, KrylovSolver, SolverError, SolverParams, VerboseLevel,
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -120,6 +120,22 @@ fn cg_convergence_failure() {
     }
 }
 
+#[test]
+fn cg_zero_operator_reports_breakdown() {
+    // A = 0 has no unique solution for non-zero b; CG should report numerical breakdown.
+    let n = 6;
+    let a = CsrMatrix::from_coo(&CooMatrix::<f64>::new(n, n));
+    let b = DenseVec::from_vec(vec![1.0; n]);
+    let mut x = DenseVec::zeros(n);
+    let cg = ConjugateGradient::<f64>::default();
+    let params = default_params(1e-12, 20);
+
+    match cg.solve(&a, None, &b, &mut x, &params) {
+        Err(SolverError::NumericalBreakdown { .. }) => {}
+        other => panic!("expected NumericalBreakdown on zero operator, got {other:?}"),
+    }
+}
+
 // ─── GMRES tests ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -160,6 +176,21 @@ fn gmres_nonsymmetric_convdiff() {
     let res = gmres.solve(&a, None, &b_vec, &mut x, &params).unwrap();
     assert!(res.converged, "GMRES didn't converge on conv-diff; iters={}, rel={:.3e}", res.iterations, res.final_residual);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-7);
+}
+
+#[test]
+fn gmres_nonfinite_rhs_reports_breakdown() {
+    // Non-finite RHS should be rejected as numerical breakdown.
+    let a = diag_spd(&[1.0, 2.0, 3.0]);
+    let b = DenseVec::from_vec(vec![1.0, f64::NAN, 3.0]);
+    let mut x = DenseVec::zeros(3);
+    let gmres = Gmres::<f64>::new(10);
+    let params = default_params(1e-10, 30);
+
+    match gmres.solve(&a, None, &b, &mut x, &params) {
+        Err(SolverError::NumericalBreakdown { .. }) => {}
+        other => panic!("expected NumericalBreakdown for non-finite RHS, got {other:?}"),
+    }
 }
 
 // ─── BiCGSTAB tests ──────────────────────────────────────────────────────────

@@ -186,7 +186,13 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
 
             let u_jj = get_entry(&rows[j], j).unwrap_or(T::zero());
             if u_jj.abs() < T::machine_epsilon() * T::from_f64(1e6) {
-                return Err(SolverError::SingularMatrix { row: j });
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "SparseLu: pivot too small at step {} (|u_jj|={:.3e}); matrix may be singular/ill-conditioned, try NodeNd/Colamd ordering, pivot threshold tuning, or iterative fallback",
+                        j,
+                        num_traits::ToPrimitive::to_f64(&u_jj.abs()).unwrap_or(f64::INFINITY),
+                    ),
+                });
             }
 
             // ── Update rows below the pivot ──────────────────────────────────────
@@ -283,12 +289,21 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             for i in 0..n { xs[self.perm_q[i]] = zs[i]; }
         }
 
+        if x.as_slice().iter().any(|v| !v.is_finite()) {
+            return Err(SolverError::NumericalBreakdown {
+                detail: "SparseLu: non-finite solution entries detected after triangular solves; check conditioning/scaling and pivot strategy".into(),
+            });
+        }
+
         // Step 5: iterative refinement — x_{k+1} = x_k + A^{-1}(b - A x_k)
         if self.options.refine_steps > 0 {
             if let Some(ref a) = self.a_stored {
+                let mut r = DenseVec::zeros(n);
+                let mut pb = DenseVec::zeros(n);
+                let mut dy = DenseVec::zeros(n);
+                let mut dz = DenseVec::zeros(n);
                 for _ in 0..self.options.refine_steps {
                     // Compute residual r = b - A x.
-                    let mut r = DenseVec::zeros(n);
                     a.apply(x, &mut r);
                     {
                         let rs = r.as_mut_slice();
@@ -297,18 +312,15 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
                     }
 
                     // Solve A δx = r (reuse stored factors).
-                    let mut pb = DenseVec::zeros(n);
                     {
                         let rs  = r.as_slice();
                         let pbs = pb.as_mut_slice();
                         for j in 0..n { pbs[j] = rs[self.perm_p[j]]; }
                     }
-                    let mut dy = DenseVec::zeros(n);
                     forward_solve(
                         &self.l_row_ptr, &self.l_col_idx, &self.l_values,
                         &self.l_diag_pos, true, &pb, &mut dy,
                     )?;
-                    let mut dz = DenseVec::zeros(n);
                     backward_solve(
                         &self.u_row_ptr, &self.u_col_idx, &self.u_values,
                         &self.u_diag_pos, &dy, &mut dz,
@@ -319,6 +331,12 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
                         let dzs = dz.as_slice();
                         let xs  = x.as_mut_slice();
                         for i in 0..n { xs[self.perm_q[i]] += dzs[i]; }
+                    }
+
+                    if x.as_slice().iter().any(|v| !v.is_finite()) {
+                        return Err(SolverError::NumericalBreakdown {
+                            detail: "SparseLu: non-finite values during iterative refinement; disable refine_steps or improve scaling".into(),
+                        });
                     }
                 }
             }

@@ -108,6 +108,14 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                 for i in 0..n { rs[i] = bs[i] - axs[i]; }
             }
             let beta = r.norm2();
+            if !beta.is_finite() {
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "GMRES: non-finite residual norm at restart begin (iter {}); check matrix/RHS values",
+                        total_iters,
+                    ),
+                });
+            }
 
             let rel = beta / norm_b_f;
             if rel < tol || beta < atol {
@@ -161,6 +169,15 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                     for i in 0..n { ws[i] -= hij * vis[i]; }
                 }
                 let h_next = w_scratch.norm2();
+                if !h_next.is_finite() {
+                    return Err(SolverError::NumericalBreakdown {
+                        detail: format!(
+                            "GMRES: non-finite Arnoldi norm h[{},{}]; try scaling matrix/RHS or different preconditioner",
+                            j + 1,
+                            j,
+                        ),
+                    });
+                }
                 hcol.push(h_next);
                 h.push(hcol);
 
@@ -200,6 +217,14 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                 j_final = j + 1;
 
                 let res = g[j + 1].abs() / norm_b_f;
+                if !res.is_finite() {
+                    return Err(SolverError::NumericalBreakdown {
+                        detail: format!(
+                            "GMRES: non-finite relative residual at iter {}; Krylov basis likely corrupted",
+                            total_iters,
+                        ),
+                    });
+                }
                 let res_f = to_f64(res);
                 residual_history.push(res_f);
                 if params.verbose == VerboseLevel::Iterations {
@@ -216,6 +241,14 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
             let jf = j_final;
             let mut y = vec![T::zero(); jf];
             for i in (0..jf).rev() {
+                if h[i][i].abs() <= T::machine_epsilon() {
+                    return Err(SolverError::NumericalBreakdown {
+                        detail: format!(
+                            "GMRES: near-zero Hessenberg diagonal at backsolve i={}; try larger restart or stronger preconditioner",
+                            i,
+                        ),
+                    });
+                }
                 let mut s = g[i];
                 for k in (i + 1)..jf {
                     s -= h[k][i] * y[k];

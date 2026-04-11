@@ -2,11 +2,11 @@
 #[derive(Debug, thiserror::Error)]
 pub enum SolverError {
     /// Encountered a (near-)singular pivot during factorisation.
-    #[error("singular matrix detected at row {row}")]
+    #[error("singular matrix detected at row {row}; try scaling, different ordering, or iterative fallback")]
     SingularMatrix { row: usize },
 
     /// Krylov iteration did not reach the requested tolerance.
-    #[error("failed to converge after {max_iter} iterations, residual = {residual:.3e}")]
+    #[error("failed to converge after {max_iter} iterations, residual = {residual:.3e}; try stronger preconditioner, larger restart/max_iter, or looser tolerance")]
     ConvergenceFailed { max_iter: usize, residual: f64 },
 
     /// Operator and right-hand-side dimensions are incompatible.
@@ -21,7 +21,7 @@ pub enum SolverError {
     },
 
     /// Preconditioner setup failed (e.g. zero diagonal during ILU).
-    #[error("preconditioner setup failed: {reason}")]
+    #[error("preconditioner setup failed: {reason}; try diagonal scaling, ordering changes, or fallback preconditioner")]
     PrecondSetupFailed { reason: String },
 
     /// Numerical breakdown in the iteration (e.g. zero inner product in CG).

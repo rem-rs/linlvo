@@ -11,7 +11,7 @@ use linger::{
              ordering::{OrderingMethod, rcm, colamd, permute_symmetric}},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,
-    KrylovSolver, SolverParams, VerboseLevel,
+    KrylovSolver, SolverError, SolverParams, VerboseLevel,
     iterative::ConjugateGradient,
     Gmres,
 };
@@ -106,6 +106,26 @@ fn lu_nonsymmetric() {
 
     let rel = relative_residual(&a, &x, &b);
     assert!(rel < 1e-10, "rel residual = {rel:.3e}");
+}
+
+#[test]
+fn lu_singular_matrix_reports_breakdown() {
+    // Duplicate rows => rank-deficient matrix.
+    let mut coo = CooMatrix::<f64>::new(3, 3);
+    coo.push(0, 0, 1.0); coo.push(0, 1, 2.0);
+    coo.push(1, 0, 1.0); coo.push(1, 1, 2.0); // duplicate of row 0
+    coo.push(2, 2, 1.0);
+    let a = CsrMatrix::from_coo(&coo);
+
+    let mut solver = SparseLu::<f64>::new(DirectOptions {
+        ordering: OrderingMethod::Natural,
+        ..Default::default()
+    });
+
+    match solver.factor(&a) {
+        Err(SolverError::NumericalBreakdown { .. }) => {}
+        other => panic!("expected NumericalBreakdown for singular LU factorization, got {other:?}"),
+    }
 }
 
 #[test]

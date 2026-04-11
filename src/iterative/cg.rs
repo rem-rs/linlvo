@@ -106,6 +106,11 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
 
         // rz = r · z  (will be used as denominator)
         let mut rz = dot_slice(r.as_slice(), z.as_slice());
+        if !rz.is_finite() {
+            return Err(SolverError::NumericalBreakdown {
+                detail: "CG: non-finite <r,z> at initialization; check matrix/RHS values and preconditioner output".into(),
+            });
+        }
 
         let mut ap = DenseVec::zeros(n);
 
@@ -113,6 +118,16 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
             // α = rz / (p · A p)
             op.apply(&p, &mut ap);
             let pap = dot_slice(p.as_slice(), ap.as_slice());
+            if !pap.is_finite() || !rz.is_finite() {
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "CG: non-finite scalar at iter {} (pAp={:.3e}, rz={:.3e}); try scaling matrix/RHS or a more robust preconditioner",
+                        k + 1,
+                        to_f64(pap),
+                        to_f64(rz),
+                    ),
+                });
+            }
             // Check convergence FIRST to avoid false breakdown when residual ≈ 0.
             {
                 let res_now = r.norm2() / norm_b_f;
@@ -131,6 +146,15 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
             // (this happens when the method has already reached machine precision).
             if pap.abs() < T::machine_epsilon() * T::from_f64(1e3) * rz.abs() {
                 let res_now = r.norm2() / norm_b_f;
+                if res_now > T::from_f64(params.rtol) && r.norm2() > T::from_f64(params.atol) {
+                    return Err(SolverError::NumericalBreakdown {
+                        detail: format!(
+                            "CG: pAp≈0 before reaching tolerance at iter {} (rel_res={:.3e}); matrix may be indefinite/singular, try GMRES/MINRES or stronger preconditioner",
+                            k + 1,
+                            to_f64(res_now),
+                        ),
+                    });
+                }
                 let res_f = to_f64(res_now);
                 if params.verbose != VerboseLevel::Silent {
                     println!("  CG converged (p·Ap≈0) iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
@@ -170,6 +194,14 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
             apply_precond_or_copy(precond, &r, &mut z);
 
             let rz_new = dot_slice(r.as_slice(), z.as_slice());
+            if !rz_new.is_finite() {
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "CG: non-finite <r,z> at iter {}; preconditioner or operator produced invalid values",
+                        k + 1,
+                    ),
+                });
+            }
 
             let res = r.norm2() / norm_b_f;
             let res_f = to_f64(res);
