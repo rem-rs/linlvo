@@ -1396,7 +1396,7 @@ mod tests {
         // U: random-ish orthonormal columns (Gram-Schmidt on random vectors).
         let mut u_cols: Vec<Vec<f64>> = Vec::new();
         let mut rng = Lcg64::new(0xdeadbeef);
-        for k in 0..rank_true {
+        for _ in 0..rank_true {
             let mut col: Vec<f64> = (0..m).map(|_| rng.gaussian()).collect();
             // Orthogonalise against prior columns.
             for prev in &u_cols {
@@ -1409,7 +1409,7 @@ mod tests {
             u_cols.push(col);
         }
         let mut v_cols: Vec<Vec<f64>> = Vec::new();
-        for k in 0..rank_true {
+        for _ in 0..rank_true {
             let mut col: Vec<f64> = (0..n).map(|_| rng.gaussian()).collect();
             for prev in &v_cols {
                 let dot: f64 = col.iter().zip(prev).map(|(a,b)| a*b).sum();

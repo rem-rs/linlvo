@@ -9,7 +9,6 @@ use linger::{
     sparse::{CooMatrix, CsrMatrix},
     Scalar,
 };
-use num_traits::Float;
 
 // ─── 1-D Poisson ─────────────────────────────────────────────────────────────
 

@@ -4,8 +4,7 @@ mod common;
 
 use linger::{
     parallel::{parallel_axpy, parallel_axpby, parallel_dot, parallel_norm2, parallel_spmv, parallel_spmv_add},
-    sparse::{BsrBuilder, CooMatrix, CsrMatrix},
-    BsrMatrix,
+    sparse::{BsrBuilder, CsrMatrix},
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -19,10 +18,6 @@ fn serial_spmv(a: &CsrMatrix<f64>, x: &[f64]) -> Vec<f64> {
     let mut y = vec![0.0; a.nrows()];
     a.spmv(x, &mut y);
     y
-}
-
-fn norm(v: &[f64]) -> f64 {
-    v.iter().map(|&x| x * x).sum::<f64>().sqrt()
 }
 
 // ─── parallel SpMV ───────────────────────────────────────────────────────────
@@ -68,7 +63,7 @@ fn parallel_spmv_add_matches_serial() {
     let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
     let alpha = 2.0f64;
     let beta  = 0.5f64;
-    let y0: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0)).collect();
+    let y0: Vec<f64> = (0..n).map(|i| i as f64 + 1.0).collect();
 
     // Serial reference.
     let mut y_serial = y0.clone();
@@ -196,8 +191,8 @@ fn bsr_to_csr_roundtrip() {
     let c = 3;
     let diag_block: Vec<f64> = (0..r*c).map(|k| if k / c == k % c { 4.0 } else { -1.0 }).collect();
     let mut builder = BsrBuilder::<f64>::new(n_blocks, n_blocks, r, c);
-    for I in 0..n_blocks {
-        builder.push_block(I, I, diag_block.clone());
+    for i in 0..n_blocks {
+        builder.push_block(i, i, diag_block.clone());
     }
     let bsr = builder.build();
     let csr = bsr.to_csr();
@@ -221,10 +216,10 @@ fn bsr_parallel_spmv_matches_serial() {
     let block = vec![4.0f64, -1.0, -1.0, 4.0];
     let off   = vec![-1.0f64, 0.0, 0.0, -1.0];
     let mut builder = BsrBuilder::<f64>::new(n_blocks, n_blocks, r, c);
-    for I in 0..n_blocks {
-        builder.push_block(I, I, block.clone());
-        if I > 0          { builder.push_block(I, I - 1, off.clone()); }
-        if I < n_blocks-1 { builder.push_block(I, I + 1, off.clone()); }
+    for i in 0..n_blocks {
+        builder.push_block(i, i, block.clone());
+        if i > 0          { builder.push_block(i, i - 1, off.clone()); }
+        if i < n_blocks-1 { builder.push_block(i, i + 1, off.clone()); }
     }
     let bsr = builder.build();
     let n   = bsr.nrows();

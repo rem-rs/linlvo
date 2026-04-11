@@ -21,7 +21,6 @@ use crate::sparse::CsrMatrix;
 pub struct BlockJacobiPrecond<T> {
     block_size: usize,
     n_blocks:   usize,
-    n_total:    usize,
     /// Each block stored column-major as Vec<T> of length block_size².
     /// In-place LU with partial pivoting.
     blocks:     Vec<Vec<T>>,
@@ -80,7 +79,7 @@ impl<T: Scalar> BlockJacobiPrecond<T> {
             pivots.push(piv);
         }
 
-        Ok(BlockJacobiPrecond { block_size, n_blocks, n_total: n, blocks, pivots })
+        Ok(BlockJacobiPrecond { block_size, n_blocks, blocks, pivots })
     }
 }
 
@@ -94,11 +93,9 @@ impl<T: Scalar> Preconditioner for BlockJacobiPrecond<T> {
 
         for b in 0..self.n_blocks {
             let off = b * bs;
-            // Copy x[off..off+bs] into a local rhs.
-            let mut rhs = xs[off..off + bs].to_vec();
-            // Solve L U rhs = rhs_orig using the stored factorisation.
-            dense_lu_solve(&self.blocks[b], &self.pivots[b], &mut rhs, bs);
-            ys[off..off + bs].copy_from_slice(&rhs);
+            // Copy the source block to output and solve in-place to avoid per-block allocations.
+            ys[off..off + bs].copy_from_slice(&xs[off..off + bs]);
+            dense_lu_solve(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs], bs);
         }
     }
 }

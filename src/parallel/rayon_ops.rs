@@ -32,16 +32,35 @@ pub fn parallel_spmv<T: Scalar + Send + Sync>(
         let rp = mat.row_ptr();
         let ci = mat.col_idx();
         let vs = mat.values();
-        let n  = mat.nrows();
+        let n = mat.nrows();
 
-        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
-            let mut sum = T::zero();
-            for k in rp[i]..rp[i + 1] {
-                sum += vs[k] * x[ci[k]];
-            }
-            *yi = sum;
-        });
-        let _ = n; // suppress unused warning
+        // Rayon overhead dominates for very small systems; keep serial path fast.
+        if n < 256 {
+            mat.spmv(x, y);
+            return;
+        }
+
+        let threads = rayon::current_num_threads().max(1);
+        let nnz = vs.len().max(1);
+        let avg_nnz_per_row = (nnz / n.max(1)).max(1);
+        let target_chunks = threads * 8;
+        let target_nnz_per_chunk = (nnz + target_chunks - 1) / target_chunks;
+        let mut chunk_rows = (target_nnz_per_chunk / avg_nnz_per_row).max(32);
+        chunk_rows = chunk_rows.min(1024).min(n.max(1));
+
+        y.par_chunks_mut(chunk_rows)
+            .enumerate()
+            .for_each(|(chunk_idx, y_chunk)| {
+                let row_start = chunk_idx * chunk_rows;
+                for (local_i, yi) in y_chunk.iter_mut().enumerate() {
+                    let i = row_start + local_i;
+                    let mut sum = T::zero();
+                    for k in rp[i]..rp[i + 1] {
+                        sum += vs[k] * x[ci[k]];
+                    }
+                    *yi = sum;
+                }
+            });
     }
 
     #[cfg(not(feature = "rayon"))]
@@ -65,14 +84,34 @@ pub fn parallel_spmv_add<T: Scalar + Send + Sync>(
         let rp = mat.row_ptr();
         let ci = mat.col_idx();
         let vs = mat.values();
+        let n = mat.nrows();
 
-        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
-            let mut sum = T::zero();
-            for k in rp[i]..rp[i + 1] {
-                sum += vs[k] * x[ci[k]];
-            }
-            *yi = alpha * sum + beta * *yi;
-        });
+        if n < 256 {
+            mat.spmv_add(alpha, x, beta, y);
+            return;
+        }
+
+        let threads = rayon::current_num_threads().max(1);
+        let nnz = vs.len().max(1);
+        let avg_nnz_per_row = (nnz / n.max(1)).max(1);
+        let target_chunks = threads * 8;
+        let target_nnz_per_chunk = (nnz + target_chunks - 1) / target_chunks;
+        let mut chunk_rows = (target_nnz_per_chunk / avg_nnz_per_row).max(32);
+        chunk_rows = chunk_rows.min(1024).min(n.max(1));
+
+        y.par_chunks_mut(chunk_rows)
+            .enumerate()
+            .for_each(|(chunk_idx, y_chunk)| {
+                let row_start = chunk_idx * chunk_rows;
+                for (local_i, yi) in y_chunk.iter_mut().enumerate() {
+                    let i = row_start + local_i;
+                    let mut sum = T::zero();
+                    for k in rp[i]..rp[i + 1] {
+                        sum += vs[k] * x[ci[k]];
+                    }
+                    *yi = alpha * sum + beta * *yi;
+                }
+            });
     }
 
     #[cfg(not(feature = "rayon"))]

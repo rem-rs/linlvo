@@ -8,7 +8,7 @@ mod common;
 use linger::{
     precond::{Ilu0Precond, JacobiPrecond, SorPrecond, SsorPrecond},
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, Preconditioner, Vector,
+    DenseVec, Preconditioner,
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
