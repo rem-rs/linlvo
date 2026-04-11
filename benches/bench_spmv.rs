@@ -5,9 +5,28 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use linger::{
-    parallel::{parallel_spmv, parallel_spmv_add},
+    parallel::parallel_spmv,
     sparse::{BsrBuilder, CooMatrix, CsrMatrix},
 };
+
+#[path = "baseline.rs"]
+mod baseline;
+
+const SERIAL_1D_SIZES: [usize; 4] = [100, 500, 1000, 5000];
+const SERIAL_2D_GRID_SIZES: [usize; 3] = [16, 32, 64];
+const PARALLEL_1D_SIZES: [usize; 3] = [1000, 5000, 10000];
+const BSR_BLOCK_SIZES: [usize; 3] = [100, 500, 1000];
+const BSR_PAR_BLOCK_SIZES: [usize; 2] = [500, 2000];
+
+fn emit_baseline_manifest() {
+    baseline::print_baseline_manifest(&[
+        "BASELINE|bench=spmv|group=spmv_serial_csr|case=1d_poisson|sizes=[100,500,1000,5000]",
+        "BASELINE|bench=spmv|group=spmv_serial_csr|case=2d_poisson|grid_sizes=[16,32,64]",
+        "BASELINE|bench=spmv|group=spmv_parallel_csr|case=1d_poisson|sizes=[1000,5000,10000]",
+        "BASELINE|bench=spmv|group=spmv_bsr|case=2dof_blocks|block_sizes=[100,500,1000]",
+        "BASELINE|bench=spmv|group=spmv_bsr_parallel|case=2dof_blocks|block_sizes=[500,2000]",
+    ]);
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,10 +64,10 @@ fn make_bsr_2dof(n_blocks: usize) -> linger::BsrMatrix<f64> {
     // Diagonal blocks = [4,-1; -1,4], off-diagonal = [-1,0; 0,-1]
     let diag_block = vec![4.0, -1.0, -1.0, 4.0];
     let off_block  = vec![-1.0, 0.0, 0.0, -1.0];
-    for I in 0..n_blocks {
-        builder.push_block(I, I, diag_block.clone());
-        if I > 0          { builder.push_block(I, I - 1, off_block.clone()); }
-        if I < n_blocks-1 { builder.push_block(I, I + 1, off_block.clone()); }
+    for i in 0..n_blocks {
+        builder.push_block(i, i, diag_block.clone());
+        if i > 0          { builder.push_block(i, i - 1, off_block.clone()); }
+        if i < n_blocks-1 { builder.push_block(i, i + 1, off_block.clone()); }
     }
     builder.build()
 }
@@ -56,9 +75,10 @@ fn make_bsr_2dof(n_blocks: usize) -> linger::BsrMatrix<f64> {
 // ─── Serial CSR SpMV ─────────────────────────────────────────────────────────
 
 fn bench_spmv_serial(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("spmv_serial_csr");
 
-    for &n in &[100usize, 500, 1000, 5000] {
+    for &n in &SERIAL_1D_SIZES {
         let a = make_poisson_1d(n);
         let x = vec![1.0f64; n];
         let mut y = vec![0.0f64; n];
@@ -71,7 +91,7 @@ fn bench_spmv_serial(c: &mut Criterion) {
         });
     }
 
-    for &n in &[16usize, 32, 64] {
+    for &n in &SERIAL_2D_GRID_SIZES {
         let a = make_poisson_2d(n);
         let nn = n * n;
         let x  = vec![1.0f64; nn];
@@ -91,9 +111,10 @@ fn bench_spmv_serial(c: &mut Criterion) {
 // ─── Parallel CSR SpMV ───────────────────────────────────────────────────────
 
 fn bench_spmv_parallel(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("spmv_parallel_csr");
 
-    for &n in &[1000usize, 5000, 10000] {
+    for &n in &PARALLEL_1D_SIZES {
         let a = make_poisson_1d(n);
         let x = vec![1.0f64; n];
         let mut y = vec![0.0f64; n];
@@ -112,9 +133,10 @@ fn bench_spmv_parallel(c: &mut Criterion) {
 // ─── BSR SpMV ────────────────────────────────────────────────────────────────
 
 fn bench_spmv_bsr(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("spmv_bsr");
 
-    for &n_blocks in &[100usize, 500, 1000] {
+    for &n_blocks in &BSR_BLOCK_SIZES {
         let bsr  = make_bsr_2dof(n_blocks);
         let cols = bsr.ncols();
         let rows = bsr.nrows();
@@ -135,9 +157,10 @@ fn bench_spmv_bsr(c: &mut Criterion) {
 // ─── BSR vs CSR comparison ────────────────────────────────────────────────────
 
 fn bench_spmv_bsr_parallel(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("spmv_bsr_parallel");
 
-    for &n_blocks in &[500usize, 2000] {
+    for &n_blocks in &BSR_PAR_BLOCK_SIZES {
         let bsr  = make_bsr_2dof(n_blocks);
         let cols = bsr.ncols();
         let rows = bsr.nrows();

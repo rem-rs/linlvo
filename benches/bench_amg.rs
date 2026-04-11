@@ -8,6 +8,25 @@ use linger::{
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
 
+#[path = "baseline.rs"]
+mod baseline;
+
+const AMG_SETUP_1D_SIZES: [usize; 3] = [100, 500, 1000];
+const AMG_SETUP_2D_GRIDS: [usize; 2] = [16, 32];
+const AMG_PCG_1D_SIZES: [usize; 3] = [100, 500, 1000];
+const AMG_PCG_2D_GRIDS: [usize; 2] = [16, 32];
+const AMG_VCYCLE_1D_SIZES: [usize; 2] = [200, 1000];
+
+fn emit_baseline_manifest() {
+    baseline::print_baseline_manifest(&[
+        "BASELINE|bench=amg|group=amg_setup|cases=[SA_1d,RS_1d]|sizes=[100,500,1000]",
+        "BASELINE|bench=amg|group=amg_setup|case=SA_2d|grid_sizes=[16,32]",
+        "BASELINE|bench=amg|group=amg_pcg_solve|case=SA_1d|sizes=[100,500,1000]",
+        "BASELINE|bench=amg|group=amg_pcg_solve|case=SA_2d|grid_sizes=[16,32]",
+        "BASELINE|bench=amg|group=amg_vcycle|case=V_1d|sizes=[200,1000]",
+    ]);
+}
+
 fn make_poisson_1d(n: usize) -> CsrMatrix<f64> {
     let mut coo = CooMatrix::new(n, n);
     for i in 0..n {
@@ -41,9 +60,10 @@ fn params(rtol: f64, max_iter: usize) -> SolverParams {
 // ─── AMG setup phase ─────────────────────────────────────────────────────────
 
 fn bench_amg_setup(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("amg_setup");
 
-    for &n in &[100usize, 500, 1000] {
+    for &n in &AMG_SETUP_1D_SIZES {
         let a = make_poisson_1d(n);
         let config_sa = AmgConfig { coarse_threshold: 4, ..Default::default() };
         let config_rs = AmgConfig {
@@ -65,7 +85,7 @@ fn bench_amg_setup(c: &mut Criterion) {
         });
     }
 
-    for &n in &[16usize, 32] {
+    for &n in &AMG_SETUP_2D_GRIDS {
         let a = make_poisson_2d(n);
         let config = AmgConfig { coarse_threshold: 4, ..Default::default() };
         group.bench_with_input(BenchmarkId::new("SA_2d", n), &n, |b, _| {
@@ -81,10 +101,11 @@ fn bench_amg_setup(c: &mut Criterion) {
 // ─── AMG-PCG solve ────────────────────────────────────────────────────────────
 
 fn bench_amg_pcg(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("amg_pcg_solve");
     let p = params(1e-8, 500);
 
-    for &n in &[100usize, 500, 1000] {
+    for &n in &AMG_PCG_1D_SIZES {
         let a = make_poisson_1d(n);
         let b = DenseVec::from_vec(vec![1.0f64; n]);
 
@@ -103,7 +124,7 @@ fn bench_amg_pcg(c: &mut Criterion) {
     }
 
     // 2D Poisson.
-    for &n in &[16usize, 32] {
+    for &n in &AMG_PCG_2D_GRIDS {
         let a  = make_poisson_2d(n);
         let nn = n * n;
         let b  = DenseVec::from_vec(vec![1.0f64; nn]);
@@ -127,9 +148,10 @@ fn bench_amg_pcg(c: &mut Criterion) {
 // ─── V-cycle throughput ───────────────────────────────────────────────────────
 
 fn bench_vcycle(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("amg_vcycle");
 
-    for &n in &[200usize, 1000] {
+    for &n in &AMG_VCYCLE_1D_SIZES {
         let a      = make_poisson_1d(n);
         let b      = DenseVec::from_vec(vec![1.0f64; n]);
         let config = AmgConfig { coarse_threshold: 4, ..Default::default() };

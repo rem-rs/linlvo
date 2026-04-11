@@ -22,6 +22,26 @@ use linger::{
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
 
+#[path = "baseline.rs"]
+mod baseline;
+
+const LU_FACT_1D: [usize; 3] = [50, 100, 200];
+const LU_FACT_2D: [usize; 3] = [8, 12, 16];
+const LU_SOLVE_1D: [usize; 3] = [50, 100, 200];
+const CHOL_FACT_1D: [usize; 4] = [50, 100, 200, 400];
+const CHOL_FACT_2D: [usize; 3] = [8, 12, 16];
+const MF_FACT_1D: [usize; 3] = [30, 60, 100];
+
+fn emit_baseline_manifest() {
+    baseline::print_baseline_manifest(&[
+        "BASELINE|bench=direct|group=SparseLu/factorize|1d_sizes=[50,100,200]|2d_grid_sizes=[8,12,16]",
+        "BASELINE|bench=direct|group=SparseLu/solve|1d_sizes=[50,100,200]",
+        "BASELINE|bench=direct|group=SparseCholesky/factorize|1d_sizes=[50,100,200,400]|2d_grid_sizes=[8,12,16]",
+        "BASELINE|bench=direct|group=MultifrontalLu/factorize|1d_sizes=[30,60,100]",
+        "BASELINE|bench=direct|group=Cholesky/ordering|grid=16x16|orderings=[Natural,Rcm,Colamd,NodeNd]",
+    ]);
+}
+
 // ─── matrix generators ────────────────────────────────────────────────────────
 
 fn laplacian_1d(n: usize) -> CsrMatrix<f64> {
@@ -55,9 +75,10 @@ fn ones_rhs(n: usize) -> DenseVec<f64> {
 // ─── SparseLu factorization ───────────────────────────────────────────────────
 
 fn bench_lu_factorize(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("SparseLu/factorize");
 
-    for &n in &[50usize, 100, 200] {
+    for &n in &LU_FACT_1D {
         let a = laplacian_1d(n);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("1D/n", n), &n, |b, _| {
@@ -73,7 +94,7 @@ fn bench_lu_factorize(c: &mut Criterion) {
     }
 
     // 2D Laplacian (more fill, exercises ordering impact).
-    for &n in &[8usize, 12, 16] {
+    for &n in &LU_FACT_2D {
         let a = laplacian_2d(n);
         let nn = n * n;
         group.throughput(Throughput::Elements(nn as u64));
@@ -95,9 +116,10 @@ fn bench_lu_factorize(c: &mut Criterion) {
 // ─── SparseLu solve ───────────────────────────────────────────────────────────
 
 fn bench_lu_solve(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("SparseLu/solve");
 
-    for &n in &[50usize, 100, 200] {
+    for &n in &LU_SOLVE_1D {
         let a = laplacian_1d(n);
         let b = ones_rhs(n);
         let mut solver = SparseLu::<f64>::new(DirectOptions {
@@ -122,9 +144,10 @@ fn bench_lu_solve(c: &mut Criterion) {
 // ─── SparseCholesky factorization ─────────────────────────────────────────────
 
 fn bench_cholesky_factorize(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("SparseCholesky/factorize");
 
-    for &n in &[50usize, 100, 200, 400] {
+    for &n in &CHOL_FACT_1D {
         let a = laplacian_1d(n);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("1D/n", n), &n, |b, _| {
@@ -140,7 +163,7 @@ fn bench_cholesky_factorize(c: &mut Criterion) {
     }
 
     // 2D Laplacian.
-    for &n in &[8usize, 12, 16] {
+    for &n in &CHOL_FACT_2D {
         let a = laplacian_2d(n);
         let nn = n * n;
         group.throughput(Throughput::Elements(nn as u64));
@@ -162,9 +185,10 @@ fn bench_cholesky_factorize(c: &mut Criterion) {
 // ─── MultifrontalLu factorization ─────────────────────────────────────────────
 
 fn bench_multifrontal_factorize(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("MultifrontalLu/factorize");
 
-    for &n in &[30usize, 60, 100] {
+    for &n in &MF_FACT_1D {
         let a = laplacian_1d(n);
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("1D/n", n), &n, |b, _| {

@@ -44,6 +44,12 @@ jobs:
       - name: cargo test (no default features)
         run: cargo test --no-default-features --lib --tests
 
+      - name: cargo test (rayon only)
+        run: cargo test --no-default-features --features rayon --lib --tests
+
+      - name: cargo test (native integration gate)
+        run: cargo test --no-default-features --features __native --lib --tests
+
       - name: cargo clippy
         # Deny all clippy lints except pre-existing style/unused issues.
         run: >
@@ -75,6 +81,43 @@ jobs:
 
       - name: cargo build --benches
         run: cargo build --benches
+
+      - name: check benchmark baseline manifest
+        run: scripts/check_benchmark_manifest.sh
+
+      - name: prepare perf baseline from main
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin main
+          if git show origin/main:benches/PERF_GUARD_BASELINE.txt > benches/PERF_GUARD_BASELINE_MAIN.txt 2>/dev/null; then
+            echo "PERF_GUARD_BASELINE_PATH=$PWD/benches/PERF_GUARD_BASELINE_MAIN.txt" >> "$GITHUB_ENV"
+          else
+            echo "main branch baseline not found; fallback to repository baseline"
+          fi
+
+      - name: perf guard (warning only)
+        continue-on-error: true
+        env:
+          PERF_GUARD_TOLERANCE: "0.60"
+          PERF_GUARD_TOLERANCE_MAP: "spmv_1d_n5000_p50_ms=0.45,spmv_1d_n5000_p95_ms=0.70,cg_1d_n1000_p50_ms=0.55,cg_1d_n1000_p95_ms=0.80"
+          PERF_GUARD_BASELINE_PATH: ${{ env.PERF_GUARD_BASELINE_PATH }}
+        run: scripts/check_perf_guard.sh
+
+      - name: upload benchmark baseline manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline-manifest
+          path: benches/BASELINE_MANIFEST.txt
+
+      - name: upload perf guard report
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-guard-report
+          path: |
+            benches/PERF_GUARD_BASELINE.txt
+            benches/PERF_GUARD_BASELINE_MAIN.txt
+            benches/PERF_GUARD_REPORT.txt
+            benches/PERF_GUARD_CURRENT.txt
 
   # ── WASM cross-compile ──────────────────────────────────────────────────────
   wasm:

@@ -9,6 +9,19 @@ use linger::{
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
 
+#[path = "baseline.rs"]
+mod baseline;
+
+const SOLVER_SIZES: [usize; 3] = [100, 500, 1000];
+const PCG_PRECOND_SIZE: usize = 500;
+
+fn emit_baseline_manifest() {
+    baseline::print_baseline_manifest(&[
+        "BASELINE|bench=krylov|group=krylov_solvers|solvers=[CG,GMRES30,BiCGSTAB]|sizes=[100,500,1000]",
+        "BASELINE|bench=krylov|group=pcg_preconditioners|n=500|preconds=[none,jacobi,ilu0,ilu1,icc0,ildlt0,ldlt_exact]",
+    ]);
+}
+
 fn make_poisson_1d(n: usize) -> (CsrMatrix<f64>, Vec<f64>, Vec<f64>) {
     let mut coo = CooMatrix::new(n, n);
     for i in 0..n {
@@ -29,10 +42,11 @@ fn solver_params(rtol: f64, max_iter: usize) -> SolverParams {
 // ─── Solver comparison ────────────────────────────────────────────────────────
 
 fn bench_solvers(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("krylov_solvers");
     let params = solver_params(1e-8, 2000);
 
-    for &n in &[100usize, 500, 1000] {
+    for &n in &SOLVER_SIZES {
         let (a, b_vec, _) = make_poisson_1d(n);
         let b = DenseVec::from_vec(b_vec);
 
@@ -70,9 +84,10 @@ fn bench_solvers(c: &mut Criterion) {
 // ─── Preconditioner quality (iteration counts) ────────────────────────────────
 
 fn bench_preconditioners(c: &mut Criterion) {
+    emit_baseline_manifest();
     let mut group = c.benchmark_group("pcg_preconditioners");
     let params = solver_params(1e-8, 2000);
-    let n = 500;
+    let n = PCG_PRECOND_SIZE;
     let (a, b_vec, _) = make_poisson_1d(n);
     let b = DenseVec::from_vec(b_vec);
 
