@@ -16,6 +16,7 @@ use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 
 const PARALLEL_SPMV_MIN_ROWS: usize = 256;
+const PARALLEL_SPMV_MIN_NNZ: usize = 32_768;
 const PARALLEL_VECTOR_MIN_LEN: usize = 2048;
 const PARALLEL_TARGET_CHUNKS_PER_THREAD: usize = 8;
 const PARALLEL_SPMV_MIN_CHUNK_ROWS: usize = 32;
@@ -56,6 +57,54 @@ fn balanced_row_chunks(
     chunks
 }
 
+#[cfg(feature = "rayon")]
+#[inline(always)]
+unsafe fn csr_row_dot_unchecked<T: Scalar>(
+    col_idx: &[usize],
+    values: &[T],
+    x: &[T],
+    start: usize,
+    end: usize,
+) -> T {
+    match end - start {
+        0 => T::zero(),
+        1 => *values.get_unchecked(start) * *x.get_unchecked(*col_idx.get_unchecked(start)),
+        2 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+        }
+        3 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            let c2 = *col_idx.get_unchecked(start + 2);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
+        }
+        4 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            let c2 = *col_idx.get_unchecked(start + 2);
+            let c3 = *col_idx.get_unchecked(start + 3);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
+                + *values.get_unchecked(start + 3) * *x.get_unchecked(c3)
+        }
+        _ => {
+            let mut sum = T::zero();
+            let mut k = start;
+            while k < end {
+                sum += *values.get_unchecked(k) * *x.get_unchecked(*col_idx.get_unchecked(k));
+                k += 1;
+            }
+            sum
+        }
+    }
+}
+
 // ─── SpMV ─────────────────────────────────────────────────────────────────────
 
 /// Parallel `y ← A · x` for CSR matrices.
@@ -76,7 +125,7 @@ pub fn parallel_spmv<T: Scalar + Send + Sync>(
         let n = mat.nrows();
 
         // Rayon overhead dominates for very small systems; keep serial path fast.
-        if n < PARALLEL_SPMV_MIN_ROWS {
+        if n < PARALLEL_SPMV_MIN_ROWS || vs.len() < PARALLEL_SPMV_MIN_NNZ {
             mat.spmv(x, y);
             return;
         }
@@ -98,11 +147,7 @@ pub fn parallel_spmv<T: Scalar + Send + Sync>(
         y_chunks.into_par_iter().for_each(|(row_start, y_chunk)| {
             for (local_i, yi) in y_chunk.iter_mut().enumerate() {
                 let i = row_start + local_i;
-                let mut sum = T::zero();
-                for k in rp[i]..rp[i + 1] {
-                    sum += vs[k] * x[ci[k]];
-                }
-                *yi = sum;
+                *yi = unsafe { csr_row_dot_unchecked(ci, vs, x, rp[i], rp[i + 1]) };
             }
         });
     }
@@ -130,7 +175,7 @@ pub fn parallel_spmv_add<T: Scalar + Send + Sync>(
         let vs = mat.values();
         let n = mat.nrows();
 
-        if n < PARALLEL_SPMV_MIN_ROWS {
+        if n < PARALLEL_SPMV_MIN_ROWS || vs.len() < PARALLEL_SPMV_MIN_NNZ {
             mat.spmv_add(alpha, x, beta, y);
             return;
         }
@@ -152,10 +197,7 @@ pub fn parallel_spmv_add<T: Scalar + Send + Sync>(
         y_chunks.into_par_iter().for_each(|(row_start, y_chunk)| {
             for (local_i, yi) in y_chunk.iter_mut().enumerate() {
                 let i = row_start + local_i;
-                let mut sum = T::zero();
-                for k in rp[i]..rp[i + 1] {
-                    sum += vs[k] * x[ci[k]];
-                }
+                let sum = unsafe { csr_row_dot_unchecked(ci, vs, x, rp[i], rp[i + 1]) };
                 *yi = alpha * sum + beta * *yi;
             }
         });

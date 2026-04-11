@@ -215,14 +215,13 @@ impl<T: Scalar> CsrMatrix<T> {
     pub fn spmv(&self, x: &[T], y: &mut [T]) {
         assert_eq!(x.len(), self.ncols, "spmv: x length mismatch");
         assert_eq!(y.len(), self.nrows, "spmv: y length mismatch");
-        for i in 0..self.nrows {
-            let mut sum = T::zero();
-            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
-                // SAFETY: row_ptr and col_idx are consistent by construction.
-                sum += unsafe { *self.values.get_unchecked(k) }
-                    * unsafe { *x.get_unchecked(*self.col_idx.get_unchecked(k)) };
-            }
-            y[i] = sum;
+        let row_ptr = &self.row_ptr;
+        let col_idx = &self.col_idx;
+        let values = &self.values;
+        for (i, yi) in y.iter_mut().enumerate() {
+            let start = row_ptr[i];
+            let end = row_ptr[i + 1];
+            *yi = unsafe { csr_row_dot_unchecked(col_idx, values, x, start, end) };
         }
     }
 
@@ -230,13 +229,14 @@ impl<T: Scalar> CsrMatrix<T> {
     pub fn spmv_add(&self, alpha: T, x: &[T], beta: T, y: &mut [T]) {
         assert_eq!(x.len(), self.ncols, "spmv_add: x length mismatch");
         assert_eq!(y.len(), self.nrows, "spmv_add: y length mismatch");
-        for i in 0..self.nrows {
-            let mut sum = T::zero();
-            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
-                sum += unsafe { *self.values.get_unchecked(k) }
-                    * unsafe { *x.get_unchecked(*self.col_idx.get_unchecked(k)) };
-            }
-            y[i] = alpha * sum + beta * y[i];
+        let row_ptr = &self.row_ptr;
+        let col_idx = &self.col_idx;
+        let values = &self.values;
+        for (i, yi) in y.iter_mut().enumerate() {
+            let start = row_ptr[i];
+            let end = row_ptr[i + 1];
+            let sum = unsafe { csr_row_dot_unchecked(col_idx, values, x, start, end) };
+            *yi = alpha * sum + beta * *yi;
         }
     }
 
@@ -387,6 +387,53 @@ impl<T: Scalar> CsrMatrix<T> {
         }
 
         CsrMatrix { nrows: n, ncols: m, row_ptr, col_idx, values }
+    }
+}
+
+#[inline(always)]
+unsafe fn csr_row_dot_unchecked<T: Scalar>(
+    col_idx: &[usize],
+    values: &[T],
+    x: &[T],
+    start: usize,
+    end: usize,
+) -> T {
+    match end - start {
+        0 => T::zero(),
+        1 => *values.get_unchecked(start) * *x.get_unchecked(*col_idx.get_unchecked(start)),
+        2 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+        }
+        3 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            let c2 = *col_idx.get_unchecked(start + 2);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
+        }
+        4 => {
+            let c0 = *col_idx.get_unchecked(start);
+            let c1 = *col_idx.get_unchecked(start + 1);
+            let c2 = *col_idx.get_unchecked(start + 2);
+            let c3 = *col_idx.get_unchecked(start + 3);
+            *values.get_unchecked(start) * *x.get_unchecked(c0)
+                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
+                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
+                + *values.get_unchecked(start + 3) * *x.get_unchecked(c3)
+        }
+        _ => {
+            let mut sum = T::zero();
+            let mut k = start;
+            while k < end {
+                sum += *values.get_unchecked(k) * *x.get_unchecked(*col_idx.get_unchecked(k));
+                k += 1;
+            }
+            sum
+        }
     }
 }
 
