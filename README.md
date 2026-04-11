@@ -123,6 +123,47 @@ let result = ConjugateGradient::<f64>::default()
 assert!(result.converged);
 ```
 
+### Example programs
+
+The repository ships with runnable examples that cover the main workflows:
+
+| Example | Focus |
+|---------|-------|
+| `ex01_csr_basics` | COO assembly, CSR conversion, SpMV, transpose, diagonal queries |
+| `ex02_poisson_1d` | 1-D Poisson assembly, manufactured-solution verification, SpMV timing |
+| `ex03_poisson_2d` | 2-D Poisson assembly, stencil structure checks, SpMV timing |
+| `ex04_nalgebra` | Native `nalgebra_sparse::CsrMatrix` interoperability |
+| `ex05_preconditioned_cg` | Jacobi / ILU(0) preconditioners and preconditioned CG |
+| `ex06_richardson` | Minimal end-to-end custom iterative solver implementation |
+| `ex07_amg` | AMG-preconditioned CG on 2-D Poisson (SA and RS coarsening) |
+| `ex08_direct_solvers` | Sparse Cholesky, sparse LU, and direct-solver preconditioning |
+| `ex09_eigen` | Power iteration and LOBPCG on the 1-D Laplacian spectrum |
+| `ex10_matrix_market` | Matrix Market string/file read-write round-trip and solve |
+| `ex11_builder` | High-level `SolverBuilder` API for direct, iterative, and auto solve |
+| `ex12_ams_ads` | AMS/ADS auxiliary-space preconditioners on discrete chain/grid complexes |
+| `ex13_ordering_compare` | Natural/RCM/COLAMD/NodeNd ordering comparison via bandwidth/profile and direct solves |
+| `ex14_matrix_free_operator` | Custom matrix-free `LinearOperator` with eigen solvers |
+
+Run an example with:
+
+```bash
+cargo run --example ex05_preconditioned_cg
+cargo run --example ex07_amg
+cargo run --example ex08_direct_solvers
+cargo run --example ex09_eigen
+cargo run --example ex10_matrix_market
+cargo run --example ex11_builder
+cargo run --example ex12_ams_ads
+cargo run --example ex13_ordering_compare
+cargo run --example ex14_matrix_free_operator
+```
+
+`ex04_nalgebra` is native-only and requires:
+
+```bash
+cargo run --example ex04_nalgebra --features __native
+```
+
 ---
 
 ## Module map
