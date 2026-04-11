@@ -7,8 +7,8 @@ pub mod lgmres;
 pub mod idrs;
 pub mod tfqmr;
 
-pub use cg::ConjugateGradient;
-pub use gmres::Gmres;
+pub use cg::{CgWorkspace, ConjugateGradient};
+pub use gmres::{Gmres, GmresWorkspace};
 pub use bicgstab::BiCgStab;
 pub use minres::Minres;
 pub use fgmres::Fgmres;

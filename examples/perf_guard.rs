@@ -1,9 +1,9 @@
 use std::time::Instant;
 
 use linger::{
-    iterative::ConjugateGradient,
+    iterative::{CgWorkspace, ConjugateGradient},
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, KrylovSolver, SolverParams, VerboseLevel,
+    DenseVec, SolverParams, VerboseLevel,
 };
 
 fn laplacian_1d(n: usize) -> CsrMatrix<f64> {
@@ -66,6 +66,7 @@ fn bench_cg_1d_n1000() -> (f64, f64, f64) {
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec(vec![1.0_f64; n]);
     let cg = ConjugateGradient::<f64>::default();
+    let mut workspace = CgWorkspace::new(n);
     let params = SolverParams {
         rtol: 1e-8,
         max_iter: 4000,
@@ -75,7 +76,7 @@ fn bench_cg_1d_n1000() -> (f64, f64, f64) {
 
     for _ in 0..2 {
         let mut x = DenseVec::zeros(n);
-        let _ = cg.solve(&a, None, &b, &mut x, &params);
+        let _ = cg.solve_with_workspace(&a, None, &b, &mut x, &params, &mut workspace);
     }
 
     let rounds = 6;
@@ -84,10 +85,11 @@ fn bench_cg_1d_n1000() -> (f64, f64, f64) {
 
     for _ in 0..rounds {
         let t0 = Instant::now();
+        let mut x = DenseVec::zeros(n);
         for _ in 0..reps_per_round {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             let result = cg
-                .solve(&a, None, &b, &mut x, &params)
+                .solve_with_workspace(&a, None, &b, &mut x, &params, &mut workspace)
                 .expect("perf_guard: CG solve failed");
             assert!(result.converged, "perf_guard: CG did not converge");
         }

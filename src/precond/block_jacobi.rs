@@ -95,7 +95,13 @@ impl<T: Scalar> Preconditioner for BlockJacobiPrecond<T> {
             let off = b * bs;
             // Copy the source block to output and solve in-place to avoid per-block allocations.
             ys[off..off + bs].copy_from_slice(&xs[off..off + bs]);
-            dense_lu_solve(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs], bs);
+            match bs {
+                1 => dense_lu_solve_1x1(&self.blocks[b], &mut ys[off..off + bs]),
+                2 => dense_lu_solve_small::<T, 2>(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs]),
+                3 => dense_lu_solve_small::<T, 3>(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs]),
+                4 => dense_lu_solve_small::<T, 4>(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs]),
+                _ => dense_lu_solve(&self.blocks[b], &self.pivots[b], &mut ys[off..off + bs], bs),
+            }
         }
     }
 }
@@ -171,4 +177,36 @@ fn dense_lu_solve<T: Scalar>(block: &[T], pivots: &[usize], rhs: &mut [T], bs: u
         }
         rhs[i] = rhs[i] / block[i * bs + i];
     }
+}
+
+#[inline]
+fn dense_lu_solve_1x1<T: Scalar>(block: &[T], rhs: &mut [T]) {
+    rhs[0] = rhs[0] / block[0];
+}
+
+#[inline]
+fn dense_lu_solve_small<T: Scalar, const BS: usize>(
+    block: &[T],
+    pivots: &[usize],
+    rhs: &mut [T],
+) {
+    let mut vals = [T::zero(); BS];
+    vals.copy_from_slice(&rhs[..BS]);
+
+    for (k, &pivot) in pivots.iter().take(BS).enumerate() {
+        vals.swap(k, pivot);
+    }
+    for i in 1..BS {
+        for j in 0..i {
+            vals[i] -= block[i * BS + j] * vals[j];
+        }
+    }
+    for i in (0..BS).rev() {
+        for j in (i + 1)..BS {
+            vals[i] -= block[i * BS + j] * vals[j];
+        }
+        vals[i] /= block[i * BS + i];
+    }
+
+    rhs[..BS].copy_from_slice(&vals);
 }

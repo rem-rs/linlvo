@@ -3,7 +3,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use linger::{
     direct::{DirectSolverPrecond, SparseLdlt},
-    iterative::{BiCgStab, ConjugateGradient, Gmres},
+    iterative::{BiCgStab, CgWorkspace, ConjugateGradient, Gmres, GmresWorkspace},
     precond::{Icc0Precond, Ilu0Precond, IlukPrecond, IldltPrecond, JacobiPrecond},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
@@ -51,19 +51,23 @@ fn bench_solvers(c: &mut Criterion) {
         let b = DenseVec::from_vec(b_vec);
 
         group.bench_with_input(BenchmarkId::new("CG", n), &n, |bench, _| {
+            let mut x = DenseVec::zeros(n);
+            let mut workspace = CgWorkspace::new(n);
             bench.iter(|| {
-                let mut x = DenseVec::zeros(n);
+                x.as_mut_slice().fill(0.0);
                 ConjugateGradient::<f64>::default()
-                    .solve(black_box(&a), None, black_box(&b), black_box(&mut x), &params)
+                    .solve_with_workspace(black_box(&a), None, black_box(&b), black_box(&mut x), &params, &mut workspace)
                     .unwrap();
             });
         });
 
         group.bench_with_input(BenchmarkId::new("GMRES30", n), &n, |bench, _| {
+            let mut x = DenseVec::zeros(n);
+            let mut workspace = GmresWorkspace::new(n, 30);
             bench.iter(|| {
-                let mut x = DenseVec::zeros(n);
+                x.as_mut_slice().fill(0.0);
                 Gmres::<f64>::new(30)
-                    .solve(black_box(&a), None, black_box(&b), black_box(&mut x), &params)
+                    .solve_with_workspace(black_box(&a), None, black_box(&b), black_box(&mut x), &params, &mut workspace)
                     .unwrap();
             });
         });
@@ -92,50 +96,60 @@ fn bench_preconditioners(c: &mut Criterion) {
     let b = DenseVec::from_vec(b_vec);
 
     group.bench_function("none", |bench| {
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), None, black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), None, black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
 
     group.bench_function("jacobi", |bench| {
         let jac = JacobiPrecond::<f64>::from_csr(&a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&jac), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&jac), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
 
     group.bench_function("ilu0", |bench| {
         let ilu = Ilu0Precond::<f64>::from_csr(&a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&ilu), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&ilu), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
 
     group.bench_function("ilu1", |bench| {
         let ilu = IlukPrecond::<f64>::from_csr(&a, 1).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&ilu), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&ilu), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
 
     group.bench_function("icc0", |bench| {
         let icc = Icc0Precond::<f64>::from_csr(&a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&icc), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&icc), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
@@ -143,10 +157,12 @@ fn bench_preconditioners(c: &mut Criterion) {
     // ILDLᵀ(0) — incomplete LDLᵀ for symmetric matrices.
     group.bench_function("ildlt0", |bench| {
         let ildlt = IldltPrecond::<f64>::from_csr(&a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&ildlt), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&ildlt), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });
@@ -154,10 +170,12 @@ fn bench_preconditioners(c: &mut Criterion) {
     // SparseLdlt (exact sparse LDLᵀ) as preconditioner.
     group.bench_function("ldlt_exact", |bench| {
         let precond = DirectSolverPrecond::new(SparseLdlt::<f64>::default(), &a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let mut workspace = CgWorkspace::new(n);
         bench.iter(|| {
-            let mut x = DenseVec::zeros(n);
+            x.as_mut_slice().fill(0.0);
             ConjugateGradient::<f64>::default()
-                .solve(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &params)
+                .solve_with_workspace(black_box(&a), Some(&precond), black_box(&b), black_box(&mut x), &params, &mut workspace)
                 .unwrap();
         });
     });

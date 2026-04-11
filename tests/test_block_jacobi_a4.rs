@@ -112,6 +112,33 @@ fn block_jacobi_3x3_blocks() {
     assert!(rel_res(&a, &x, &b) < 1e-7);
 }
 
+/// 3b. 4×4 blocks hit the small-block specialised solve path.
+#[test]
+fn block_jacobi_4x4_blocks() {
+    let n_blocks = 20;
+    let n = n_blocks * 4;
+    let mut coo = CooMatrix::new(n, n);
+    for b in 0..n_blocks {
+        let off = b * 4;
+        for i in 0..4 {
+            coo.push(off + i, off + i, 8.0);
+            for j in 0..4 {
+                if i != j {
+                    coo.push(off + i, off + j, -1.0);
+                }
+            }
+        }
+    }
+    let a = CsrMatrix::from_coo(&coo);
+    let b = DenseVec::from_vec(vec![1.0f64; n]);
+    let mut x = DenseVec::zeros(n);
+
+    let bjac = BlockJacobiPrecond::<f64>::from_csr(&a, 4).unwrap();
+    let res = BiCgStab::<f64>::new().solve(&a, Some(&bjac), &b, &mut x, &default_params()).unwrap();
+    assert!(res.converged, "Block(4)+BiCGSTAB did not converge");
+    assert!(rel_res(&a, &x, &b) < 1e-7);
+}
+
 /// 4. Non-divisible n returns SolverError.
 #[test]
 fn block_jacobi_non_divisible_n_error() {

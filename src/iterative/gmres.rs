@@ -35,6 +35,47 @@ use crate::core::{
 };
 use crate::sparse::CsrMatrix;
 
+/// Reusable scratch buffers for repeated GMRES solves with fixed dimension/restart.
+pub struct GmresWorkspace<T: Scalar> {
+    restart: usize,
+    r: DenseVec<T>,
+    v: Vec<DenseVec<T>>,
+    z_scratch: DenseVec<T>,
+    w_scratch: DenseVec<T>,
+    mz_scratch: DenseVec<T>,
+    ax_scratch: DenseVec<T>,
+    h: Vec<Vec<T>>,
+    cs: Vec<T>,
+    sn: Vec<T>,
+    g: Vec<T>,
+}
+
+impl<T: Scalar> GmresWorkspace<T> {
+    pub fn new(n: usize, restart: usize) -> Self {
+        let restart = restart.max(1);
+        Self {
+            restart,
+            r: DenseVec::zeros(n),
+            v: (0..=restart).map(|_| DenseVec::zeros(n)).collect(),
+            z_scratch: DenseVec::zeros(n),
+            w_scratch: DenseVec::zeros(n),
+            mz_scratch: DenseVec::zeros(n),
+            ax_scratch: DenseVec::zeros(n),
+            h: (0..restart).map(|_| Vec::with_capacity(restart + 1)).collect(),
+            cs: Vec::with_capacity(restart),
+            sn: Vec::with_capacity(restart),
+            g: vec![T::zero(); restart + 1],
+        }
+    }
+
+    fn ensure_shape(&mut self, n: usize, restart: usize) {
+        let restart = restart.max(1);
+        if self.restart != restart || self.r.len() != n {
+            *self = Self::new(n, restart);
+        }
+    }
+}
+
 /// GMRES(m) solver with restart.
 pub struct Gmres<T> {
     /// Number of Krylov vectors before restart.
@@ -46,23 +87,16 @@ impl<T: Scalar> Gmres<T> {
     pub fn new(restart: usize) -> Self {
         Gmres { restart: restart.max(1), _phantom: std::marker::PhantomData }
     }
-}
 
-impl<T: Scalar> Default for Gmres<T> {
-    fn default() -> Self { Self::new(30) }
-}
-
-impl<T: Scalar> KrylovSolver for Gmres<T> {
-    type Vector = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
-
-    fn solve(
+    /// Solve `A x = b` using caller-owned scratch buffers to amortize allocations.
+    pub fn solve_with_workspace(
         &self,
         op: &CsrMatrix<T>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
         params: &SolverParams,
+        workspace: &mut GmresWorkspace<T>,
     ) -> Result<SolverResult, SolverError> {
         let n = b.len();
         if op.nrows() != n || op.ncols() != x.len() {
@@ -78,36 +112,19 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
         let tol = T::from_f64(params.rtol);
         let atol = T::from_f64(params.atol);
         let m = self.restart;
+        workspace.ensure_shape(n, m);
         let mut residual_history: Vec<f64> = Vec::new();
-
         let mut total_iters = 0usize;
 
-        // Pre-allocate restart-cycle buffers once; reuse each restart.
-        // v[0..=m]: Arnoldi basis (m+1 vectors); z, w, mz: scratch.
-        let mut v: Vec<DenseVec<T>> = (0..=m).map(|_| DenseVec::zeros(n)).collect();
-        let mut z_scratch = DenseVec::zeros(n);
-        let mut w_scratch = DenseVec::zeros(n);
-        let mut mz_scratch = DenseVec::zeros(n);
-        // Hessenberg columns: each column j has length j+2, still re-allocate inner
-        // Vecs but reuse the outer Vec's backing array across restarts.
-        let mut h: Vec<Vec<T>> = Vec::with_capacity(m);
-        let mut cs: Vec<T> = Vec::with_capacity(m);
-        let mut sn: Vec<T> = Vec::with_capacity(m);
-        let mut g: Vec<T> = vec![T::zero(); m + 1];
-        let mut ax_scratch = DenseVec::zeros(n);
-
-        // Outer restart loop
         loop {
-            // r = b - A x  (reuse ax_scratch)
-            let mut r = b.zero_like();
+            op.apply(x, &mut workspace.ax_scratch);
             {
-                op.apply(x, &mut ax_scratch);
-                let rs = r.as_mut_slice();
+                let rs = workspace.r.as_mut_slice();
                 let bs = b.as_slice();
-                let axs = ax_scratch.as_slice();
+                let axs = workspace.ax_scratch.as_slice();
                 for i in 0..n { rs[i] = bs[i] - axs[i]; }
             }
-            let beta = r.norm2();
+            let beta = workspace.r.norm2();
             if !beta.is_finite() {
                 return Err(SolverError::NumericalBreakdown {
                     detail: format!(
@@ -134,20 +151,18 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                 break;
             }
 
-            // V[0] = r / β  (copy into pre-allocated slot)
             {
-                let v0s = v[0].as_mut_slice();
-                let rs  = r.as_slice();
+                let v0s = workspace.v[0].as_mut_slice();
+                let rs = workspace.r.as_slice();
                 let inv_beta = T::one() / beta;
                 for i in 0..n { v0s[i] = rs[i] * inv_beta; }
             }
 
-            // Reset per-restart state (reuse allocations)
-            h.clear();
-            cs.clear();
-            sn.clear();
-            for gi in g.iter_mut() { *gi = T::zero(); }
-            g[0] = beta;
+            for col in workspace.h.iter_mut() { col.clear(); }
+            workspace.cs.clear();
+            workspace.sn.clear();
+            for gi in workspace.g.iter_mut() { *gi = T::zero(); }
+            workspace.g[0] = beta;
 
             let mut inner_converged = false;
             let mut j_final = 0;
@@ -155,20 +170,19 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
             'inner: for j in 0..m {
                 if total_iters >= params.max_iter { break; }
 
-                // z = M⁻¹ v[j],  w = A z
-                apply_precond_or_copy(precond, &v[j], &mut z_scratch);
-                op.apply(&z_scratch, &mut w_scratch);
+                apply_precond_or_copy(precond, &workspace.v[j], &mut workspace.z_scratch);
+                op.apply(&workspace.z_scratch, &mut workspace.w_scratch);
 
-                // Modified Gram-Schmidt orthogonalisation
-                let mut hcol: Vec<T> = Vec::with_capacity(j + 2);
-                for vi in &v[..=j] {
-                    let hij = dot_slice(vi.as_slice(), w_scratch.as_slice());
-                    hcol.push(hij);
-                    let ws  = w_scratch.as_mut_slice();
+                let hj = &mut workspace.h[j];
+                hj.clear();
+                for vi in &workspace.v[..=j] {
+                    let hij = dot_slice(vi.as_slice(), workspace.w_scratch.as_slice());
+                    hj.push(hij);
+                    let ws = workspace.w_scratch.as_mut_slice();
                     let vis = vi.as_slice();
                     for i in 0..n { ws[i] -= hij * vis[i]; }
                 }
-                let h_next = w_scratch.norm2();
+                let h_next = workspace.w_scratch.norm2();
                 if !h_next.is_finite() {
                     return Err(SolverError::NumericalBreakdown {
                         detail: format!(
@@ -178,13 +192,11 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                         ),
                     });
                 }
-                hcol.push(h_next);
-                h.push(hcol);
+                hj.push(h_next);
 
-                // Normalise w → v[j+1]  (copy into pre-allocated slot)
                 {
-                    let vj1 = v[j + 1].as_mut_slice();
-                    let ws  = w_scratch.as_slice();
+                    let vj1 = workspace.v[j + 1].as_mut_slice();
+                    let ws = workspace.w_scratch.as_slice();
                     if h_next > T::machine_epsilon() {
                         let inv = T::one() / h_next;
                         for i in 0..n { vj1[i] = ws[i] * inv; }
@@ -193,30 +205,25 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                     }
                 }
 
-                // Apply previous Givens rotations to column j
-                let hj = h.last_mut().unwrap();
                 for i in 0..j {
-                    let tmp = cs[i] * hj[i] + sn[i] * hj[i + 1];
-                    hj[i + 1] = -sn[i] * hj[i] + cs[i] * hj[i + 1];
+                    let tmp = workspace.cs[i] * hj[i] + workspace.sn[i] * hj[i + 1];
+                    hj[i + 1] = -workspace.sn[i] * hj[i] + workspace.cs[i] * hj[i + 1];
                     hj[i] = tmp;
                 }
 
-                // Compute new Givens rotation for entry (j, j+1)
                 let (c, s) = givens(hj[j], hj[j + 1]);
-                cs.push(c);
-                sn.push(s);
-
-                hj[j]     = c * hj[j] + s * hj[j + 1];
+                workspace.cs.push(c);
+                workspace.sn.push(s);
+                hj[j] = c * hj[j] + s * hj[j + 1];
                 hj[j + 1] = T::zero();
 
-                // Update g
-                g[j + 1] = -s * g[j];
-                g[j]     =  c * g[j];
+                workspace.g[j + 1] = -s * workspace.g[j];
+                workspace.g[j] = c * workspace.g[j];
 
                 total_iters += 1;
                 j_final = j + 1;
 
-                let res = g[j + 1].abs() / norm_b_f;
+                let res = workspace.g[j + 1].abs() / norm_b_f;
                 if !res.is_finite() {
                     return Err(SolverError::NumericalBreakdown {
                         detail: format!(
@@ -231,17 +238,16 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                     println!("    GMRES iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", total_iters);
                 }
 
-                if res < tol || g[j + 1].abs() < atol {
+                if res < tol || workspace.g[j + 1].abs() < atol {
                     inner_converged = true;
                     break 'inner;
                 }
             }
 
-            // Back-substitution: y = H^{-1} g  (j_final × j_final upper triangular)
             let jf = j_final;
             let mut y = vec![T::zero(); jf];
             for i in (0..jf).rev() {
-                if h[i][i].abs() <= T::machine_epsilon() {
+                if workspace.h[i][i].abs() <= T::machine_epsilon() {
                     return Err(SolverError::NumericalBreakdown {
                         detail: format!(
                             "GMRES: near-zero Hessenberg diagonal at backsolve i={}; try larger restart or stronger preconditioner",
@@ -249,25 +255,23 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
                         ),
                     });
                 }
-                let mut s = g[i];
+                let mut s = workspace.g[i];
                 for k in (i + 1)..jf {
-                    s -= h[k][i] * y[k];
+                    s -= workspace.h[k][i] * y[k];
                 }
-                y[i] = s / h[i][i];
+                y[i] = s / workspace.h[i][i];
             }
 
-            // x += sum_j y[j] * M⁻¹ v[j]  (right-preconditioned update)
-            for j in 0..jf {
-                apply_precond_or_copy(precond, &v[j], &mut mz_scratch);
-                x.axpy(y[j], &mz_scratch);
+            for (j, &yj) in y.iter().enumerate() {
+                apply_precond_or_copy(precond, &workspace.v[j], &mut workspace.mz_scratch);
+                x.axpy(yj, &workspace.mz_scratch);
             }
 
             if inner_converged {
-                // Compute true residual using ax_scratch
-                op.apply(x, &mut ax_scratch);
+                op.apply(x, &mut workspace.ax_scratch);
                 let rfnorm = {
-                    let bs  = b.as_slice();
-                    let axs = ax_scratch.as_slice();
+                    let bs = b.as_slice();
+                    let axs = workspace.ax_scratch.as_slice();
                     (0..n).map(|i| { let d = bs[i] - axs[i]; d * d }).fold(T::zero(), |a, v| a + v).sqrt()
                 };
                 let rel = rfnorm / norm_b_f;
@@ -284,18 +288,37 @@ impl<T: Scalar> KrylovSolver for Gmres<T> {
             }
 
             if total_iters >= params.max_iter { break; }
-            // continue restart
         }
 
-        // Compute final residual using ax_scratch
-        op.apply(x, &mut ax_scratch);
+        op.apply(x, &mut workspace.ax_scratch);
         let rfnorm = {
-            let bs  = b.as_slice();
-            let axs = ax_scratch.as_slice();
+            let bs = b.as_slice();
+            let axs = workspace.ax_scratch.as_slice();
             (0..n).map(|i| { let d = bs[i] - axs[i]; d * d }).fold(T::zero(), |a, v| a + v).sqrt()
         };
         let final_residual = to_f64(rfnorm / norm_b_f);
         Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+    }
+}
+
+impl<T: Scalar> Default for Gmres<T> {
+    fn default() -> Self { Self::new(30) }
+}
+
+impl<T: Scalar> KrylovSolver for Gmres<T> {
+    type Vector = DenseVec<T>;
+    type Operator = CsrMatrix<T>;
+
+    fn solve(
+        &self,
+        op: &CsrMatrix<T>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        params: &SolverParams,
+    ) -> Result<SolverResult, SolverError> {
+        let mut workspace = GmresWorkspace::new(b.len(), self.restart);
+        self.solve_with_workspace(op, precond, b, x, params, &mut workspace)
     }
 }
 

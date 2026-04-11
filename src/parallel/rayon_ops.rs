@@ -15,6 +15,47 @@
 use crate::core::scalar::Scalar;
 use crate::sparse::CsrMatrix;
 
+const PARALLEL_SPMV_MIN_ROWS: usize = 256;
+const PARALLEL_VECTOR_MIN_LEN: usize = 2048;
+const PARALLEL_TARGET_CHUNKS_PER_THREAD: usize = 8;
+const PARALLEL_SPMV_MIN_CHUNK_ROWS: usize = 32;
+const PARALLEL_SPMV_MAX_CHUNK_ROWS: usize = 1024;
+
+#[cfg(feature = "rayon")]
+fn balanced_row_chunks(
+    row_ptr: &[usize],
+    nrows: usize,
+    target_chunks: usize,
+) -> Vec<(usize, usize)> {
+    if nrows == 0 {
+        return Vec::new();
+    }
+
+    let total_nnz = row_ptr[nrows].saturating_sub(row_ptr[0]).max(1);
+    let target_chunks = target_chunks.max(1);
+    let target_nnz_per_chunk = total_nnz.div_ceil(target_chunks);
+    let mut chunks = Vec::with_capacity(target_chunks.min(nrows));
+    let mut row_start = 0;
+
+    while row_start < nrows {
+        let mut row_end = (row_start + PARALLEL_SPMV_MIN_CHUNK_ROWS).min(nrows);
+        while row_end < nrows && row_end - row_start < PARALLEL_SPMV_MAX_CHUNK_ROWS {
+            let nnz = row_ptr[row_end] - row_ptr[row_start];
+            if nnz >= target_nnz_per_chunk {
+                break;
+            }
+            row_end += 1;
+        }
+        if row_end == row_start {
+            row_end += 1;
+        }
+        chunks.push((row_start, row_end));
+        row_start = row_end;
+    }
+
+    chunks
+}
+
 // ─── SpMV ─────────────────────────────────────────────────────────────────────
 
 /// Parallel `y ← A · x` for CSR matrices.
@@ -35,32 +76,35 @@ pub fn parallel_spmv<T: Scalar + Send + Sync>(
         let n = mat.nrows();
 
         // Rayon overhead dominates for very small systems; keep serial path fast.
-        if n < 256 {
+        if n < PARALLEL_SPMV_MIN_ROWS {
             mat.spmv(x, y);
             return;
         }
 
-        let threads = rayon::current_num_threads().max(1);
-        let nnz = vs.len().max(1);
-        let avg_nnz_per_row = (nnz / n.max(1)).max(1);
-        let target_chunks = threads * 8;
-        let target_nnz_per_chunk = (nnz + target_chunks - 1) / target_chunks;
-        let mut chunk_rows = (target_nnz_per_chunk / avg_nnz_per_row).max(32);
-        chunk_rows = chunk_rows.min(1024).min(n.max(1));
+        let target_chunks = rayon::current_num_threads().max(1) * PARALLEL_TARGET_CHUNKS_PER_THREAD;
+        let row_chunks = balanced_row_chunks(rp, n, target_chunks);
 
-        y.par_chunks_mut(chunk_rows)
-            .enumerate()
-            .for_each(|(chunk_idx, y_chunk)| {
-                let row_start = chunk_idx * chunk_rows;
-                for (local_i, yi) in y_chunk.iter_mut().enumerate() {
-                    let i = row_start + local_i;
-                    let mut sum = T::zero();
-                    for k in rp[i]..rp[i + 1] {
-                        sum += vs[k] * x[ci[k]];
-                    }
-                    *yi = sum;
+        let mut y_chunks: Vec<(usize, &mut [T])> = Vec::with_capacity(row_chunks.len());
+        let mut rest = y;
+        let mut current = 0;
+        for (row_start, row_end) in row_chunks {
+            debug_assert_eq!(row_start, current);
+            let (chunk, tail) = rest.split_at_mut(row_end - row_start);
+            y_chunks.push((row_start, chunk));
+            rest = tail;
+            current = row_end;
+        }
+
+        y_chunks.into_par_iter().for_each(|(row_start, y_chunk)| {
+            for (local_i, yi) in y_chunk.iter_mut().enumerate() {
+                let i = row_start + local_i;
+                let mut sum = T::zero();
+                for k in rp[i]..rp[i + 1] {
+                    sum += vs[k] * x[ci[k]];
                 }
-            });
+                *yi = sum;
+            }
+        });
     }
 
     #[cfg(not(feature = "rayon"))]
@@ -86,32 +130,35 @@ pub fn parallel_spmv_add<T: Scalar + Send + Sync>(
         let vs = mat.values();
         let n = mat.nrows();
 
-        if n < 256 {
+        if n < PARALLEL_SPMV_MIN_ROWS {
             mat.spmv_add(alpha, x, beta, y);
             return;
         }
 
-        let threads = rayon::current_num_threads().max(1);
-        let nnz = vs.len().max(1);
-        let avg_nnz_per_row = (nnz / n.max(1)).max(1);
-        let target_chunks = threads * 8;
-        let target_nnz_per_chunk = (nnz + target_chunks - 1) / target_chunks;
-        let mut chunk_rows = (target_nnz_per_chunk / avg_nnz_per_row).max(32);
-        chunk_rows = chunk_rows.min(1024).min(n.max(1));
+        let target_chunks = rayon::current_num_threads().max(1) * PARALLEL_TARGET_CHUNKS_PER_THREAD;
+        let row_chunks = balanced_row_chunks(rp, n, target_chunks);
 
-        y.par_chunks_mut(chunk_rows)
-            .enumerate()
-            .for_each(|(chunk_idx, y_chunk)| {
-                let row_start = chunk_idx * chunk_rows;
-                for (local_i, yi) in y_chunk.iter_mut().enumerate() {
-                    let i = row_start + local_i;
-                    let mut sum = T::zero();
-                    for k in rp[i]..rp[i + 1] {
-                        sum += vs[k] * x[ci[k]];
-                    }
-                    *yi = alpha * sum + beta * *yi;
+        let mut y_chunks: Vec<(usize, &mut [T])> = Vec::with_capacity(row_chunks.len());
+        let mut rest = y;
+        let mut current = 0;
+        for (row_start, row_end) in row_chunks {
+            debug_assert_eq!(row_start, current);
+            let (chunk, tail) = rest.split_at_mut(row_end - row_start);
+            y_chunks.push((row_start, chunk));
+            rest = tail;
+            current = row_end;
+        }
+
+        y_chunks.into_par_iter().for_each(|(row_start, y_chunk)| {
+            for (local_i, yi) in y_chunk.iter_mut().enumerate() {
+                let i = row_start + local_i;
+                let mut sum = T::zero();
+                for k in rp[i]..rp[i + 1] {
+                    sum += vs[k] * x[ci[k]];
                 }
-            });
+                *yi = alpha * sum + beta * *yi;
+            }
+        });
     }
 
     #[cfg(not(feature = "rayon"))]
@@ -129,6 +176,10 @@ pub fn parallel_axpy<T: Scalar + Send + Sync>(alpha: T, x: &[T], y: &mut [T]) {
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
+        if x.len() < PARALLEL_VECTOR_MIN_LEN {
+            crate::sparse::ops::axpy(alpha, x, y);
+            return;
+        }
         y.par_iter_mut().zip(x.par_iter()).for_each(|(yi, &xi)| {
             *yi += alpha * xi;
         });
@@ -147,6 +198,10 @@ pub fn parallel_axpby<T: Scalar + Send + Sync>(alpha: T, x: &[T], beta: T, y: &m
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
+        if x.len() < PARALLEL_VECTOR_MIN_LEN {
+            crate::sparse::ops::axpby(alpha, x, beta, y);
+            return;
+        }
         y.par_iter_mut().zip(x.par_iter()).for_each(|(yi, &xi)| {
             *yi = alpha * xi + beta * *yi;
         });
@@ -167,6 +222,9 @@ pub fn parallel_dot<T: Scalar + Send + Sync>(x: &[T], y: &[T]) -> T {
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
+        if x.len() < PARALLEL_VECTOR_MIN_LEN {
+            return crate::sparse::ops::dot(x, y);
+        }
         x.par_iter()
             .zip(y.par_iter())
             .map(|(&a, &b)| a * b)
@@ -184,6 +242,9 @@ pub fn parallel_norm2<T: Scalar + Send + Sync>(x: &[T]) -> T {
     #[cfg(feature = "rayon")]
     {
         use rayon::prelude::*;
+        if x.len() < PARALLEL_VECTOR_MIN_LEN {
+            return crate::sparse::ops::norm2(x);
+        }
         x.par_iter()
             .map(|&v| v * v)
             .reduce(|| T::zero(), |acc, v| acc + v)

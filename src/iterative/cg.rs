@@ -35,6 +35,33 @@ use crate::core::{
 };
 use crate::sparse::CsrMatrix;
 
+/// Reusable scratch buffers for repeated CG solves with the same vector length.
+pub struct CgWorkspace<T: Scalar> {
+    r: DenseVec<T>,
+    z: DenseVec<T>,
+    p: DenseVec<T>,
+    ap: DenseVec<T>,
+    ax: DenseVec<T>,
+}
+
+impl<T: Scalar> CgWorkspace<T> {
+    pub fn new(n: usize) -> Self {
+        Self {
+            r: DenseVec::zeros(n),
+            z: DenseVec::zeros(n),
+            p: DenseVec::zeros(n),
+            ap: DenseVec::zeros(n),
+            ax: DenseVec::zeros(n),
+        }
+    }
+
+    fn ensure_len(&mut self, n: usize) {
+        if self.r.len() != n {
+            *self = Self::new(n);
+        }
+    }
+}
+
 /// Preconditioned Conjugate Gradient solver.
 ///
 /// Suitable for **symmetric positive definite** systems only.
@@ -52,6 +79,174 @@ impl<T: Scalar> ConjugateGradient<T> {
     /// `check_interval`: recompute residual every N iterations (default 50).
     pub fn new(check_interval: usize) -> Self {
         ConjugateGradient { check_interval, _phantom: std::marker::PhantomData }
+    }
+
+    /// Solve `A x = b` using caller-owned scratch buffers to amortize allocations.
+    pub fn solve_with_workspace(
+        &self,
+        op: &CsrMatrix<T>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        params: &SolverParams,
+        workspace: &mut CgWorkspace<T>,
+    ) -> Result<SolverResult, SolverError> {
+        let n = b.len();
+        if op.nrows() != n || op.ncols() != x.len() {
+            return Err(SolverError::DimensionMismatch {
+                op_rows: op.nrows(),
+                op_cols: op.ncols(),
+                rhs_len: n,
+            });
+        }
+
+        workspace.ensure_len(n);
+
+        let norm_b = b.norm2();
+        let norm_b_f = if norm_b == T::zero() { T::one() } else { norm_b };
+        let mut residual_history: Vec<f64> = Vec::new();
+        let verbose_history = params.verbose == VerboseLevel::Iterations;
+        let mut history: Option<Vec<f64>> = if verbose_history { Some(Vec::new()) } else { None };
+
+        // r = b − A x₀
+        op.apply(x, &mut workspace.ax);
+        {
+            let rs = workspace.r.as_mut_slice();
+            let bs = b.as_slice();
+            let axs = workspace.ax.as_slice();
+            for i in 0..n { rs[i] = bs[i] - axs[i]; }
+        }
+
+        apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
+        workspace.p.copy_from(&workspace.z);
+
+        let mut rz = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
+        if !rz.is_finite() {
+            return Err(SolverError::NumericalBreakdown {
+                detail: "CG: non-finite <r,z> at initialization; check matrix/RHS values and preconditioner output".into(),
+            });
+        }
+
+        for k in 0..params.max_iter {
+            op.apply(&workspace.p, &mut workspace.ap);
+            let pap = dot_slice(workspace.p.as_slice(), workspace.ap.as_slice());
+            if !pap.is_finite() || !rz.is_finite() {
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "CG: non-finite scalar at iter {} (pAp={:.3e}, rz={:.3e}); try scaling matrix/RHS or a more robust preconditioner",
+                        k + 1,
+                        to_f64(pap),
+                        to_f64(rz),
+                    ),
+                });
+            }
+
+            let r_norm = workspace.r.norm2();
+            let res_now = r_norm / norm_b_f;
+            if res_now < T::from_f64(params.rtol) || r_norm < T::from_f64(params.atol) {
+                let res_f = to_f64(res_now);
+                if params.verbose != VerboseLevel::Silent {
+                    println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
+                }
+                residual_history.push(res_f);
+                return Ok(SolverResult {
+                    converged: true,
+                    iterations: k + 1,
+                    final_residual: res_f,
+                    residual_history: std::mem::take(&mut residual_history),
+                    history: history.take(),
+                });
+            }
+
+            if pap.abs() < T::machine_epsilon() * T::from_f64(1e3) * rz.abs() {
+                if res_now > T::from_f64(params.rtol) && r_norm > T::from_f64(params.atol) {
+                    return Err(SolverError::NumericalBreakdown {
+                        detail: format!(
+                            "CG: pAp≈0 before reaching tolerance at iter {} (rel_res={:.3e}); matrix may be indefinite/singular, try GMRES/MINRES or stronger preconditioner",
+                            k + 1,
+                            to_f64(res_now),
+                        ),
+                    });
+                }
+                let res_f = to_f64(res_now);
+                if params.verbose != VerboseLevel::Silent {
+                    println!("  CG converged (p·Ap≈0) iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
+                }
+                residual_history.push(res_f);
+                return Ok(SolverResult {
+                    converged: true,
+                    iterations: k + 1,
+                    final_residual: res_f,
+                    residual_history: std::mem::take(&mut residual_history),
+                    history: history.take(),
+                });
+            }
+
+            let alpha = rz / pap;
+            x.axpy(alpha, &workspace.p);
+
+            {
+                let rs = workspace.r.as_mut_slice();
+                let aps = workspace.ap.as_slice();
+                for i in 0..n {
+                    rs[i] -= alpha * aps[i];
+                }
+            }
+
+            if (k + 1) % self.check_interval == 0 {
+                op.apply(x, &mut workspace.ax);
+                let rs = workspace.r.as_mut_slice();
+                let bs = b.as_slice();
+                let axs = workspace.ax.as_slice();
+                for i in 0..n {
+                    rs[i] = bs[i] - axs[i];
+                }
+            }
+
+            apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
+            let rz_new = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
+            if !rz_new.is_finite() {
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "CG: non-finite <r,z> at iter {}; preconditioner or operator produced invalid values",
+                        k + 1,
+                    ),
+                });
+            }
+
+            let res = workspace.r.norm2() / norm_b_f;
+            let res_f = to_f64(res);
+            residual_history.push(res_f);
+            if let Some(ref mut h) = history { h.push(res_f); }
+            if params.verbose == VerboseLevel::Iterations {
+                println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
+            }
+            if res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol) {
+                if params.verbose != VerboseLevel::Silent {
+                    println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
+                }
+                return Ok(SolverResult {
+                    converged: true,
+                    iterations: k + 1,
+                    final_residual: res_f,
+                    residual_history: std::mem::take(&mut residual_history),
+                    history: history.take(),
+                });
+            }
+
+            let beta = rz_new / rz;
+            {
+                let ps = workspace.p.as_mut_slice();
+                let zs = workspace.z.as_slice();
+                for i in 0..n {
+                    ps[i] = zs[i] + beta * ps[i];
+                }
+            }
+            rz = rz_new;
+        }
+
+        let final_residual = to_f64(workspace.r.norm2() / norm_b_f);
+        Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
     }
 }
 
@@ -71,176 +266,8 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
         x: &mut DenseVec<T>,
         params: &SolverParams,
     ) -> Result<SolverResult, SolverError> {
-        let n = b.len();
-        if op.nrows() != n || op.ncols() != x.len() {
-            return Err(SolverError::DimensionMismatch {
-                op_rows: op.nrows(),
-                op_cols: op.ncols(),
-                rhs_len: n,
-            });
-        }
-
-        let norm_b = b.norm2();
-        let norm_b_f = if norm_b == T::zero() { T::one() } else { norm_b };
-        let mut residual_history: Vec<f64> = Vec::new();
-        let verbose_history = params.verbose == VerboseLevel::Iterations;
-        let mut history: Option<Vec<f64>> = if verbose_history { Some(Vec::new()) } else { None };
-
-        // r = b − A x₀
-        let mut r = b.zero_like();
-        {
-            let mut ax = b.zero_like();
-            op.apply(x, &mut ax);
-            let rs = r.as_mut_slice();
-            let bs = b.as_slice();
-            let axs = ax.as_slice();
-            for i in 0..n { rs[i] = bs[i] - axs[i]; }
-        }
-
-        // z = M⁻¹ r
-        let mut z = DenseVec::zeros(n);
-        apply_precond_or_copy(precond, &r, &mut z);
-
-        // p = z
-        let mut p = z.clone();
-
-        // rz = r · z  (will be used as denominator)
-        let mut rz = dot_slice(r.as_slice(), z.as_slice());
-        if !rz.is_finite() {
-            return Err(SolverError::NumericalBreakdown {
-                detail: "CG: non-finite <r,z> at initialization; check matrix/RHS values and preconditioner output".into(),
-            });
-        }
-
-        let mut ap = DenseVec::zeros(n);
-
-        for k in 0..params.max_iter {
-            // α = rz / (p · A p)
-            op.apply(&p, &mut ap);
-            let pap = dot_slice(p.as_slice(), ap.as_slice());
-            if !pap.is_finite() || !rz.is_finite() {
-                return Err(SolverError::NumericalBreakdown {
-                    detail: format!(
-                        "CG: non-finite scalar at iter {} (pAp={:.3e}, rz={:.3e}); try scaling matrix/RHS or a more robust preconditioner",
-                        k + 1,
-                        to_f64(pap),
-                        to_f64(rz),
-                    ),
-                });
-            }
-            // Check convergence FIRST to avoid false breakdown when residual ≈ 0.
-            {
-                let res_now = r.norm2() / norm_b_f;
-                if res_now < T::from_f64(params.rtol) || r.norm2() < T::from_f64(params.atol) {
-                    let res_f = to_f64(res_now);
-                    if params.verbose != VerboseLevel::Silent {
-                        println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
-                    }
-                    residual_history.push(res_f);
-                    return Ok(SolverResult {
-                        converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: history.take(),
-                    });
-                }
-            }
-            // If p·Ap ≈ 0 the search direction has collapsed; treat as converged
-            // (this happens when the method has already reached machine precision).
-            if pap.abs() < T::machine_epsilon() * T::from_f64(1e3) * rz.abs() {
-                let res_now = r.norm2() / norm_b_f;
-                if res_now > T::from_f64(params.rtol) && r.norm2() > T::from_f64(params.atol) {
-                    return Err(SolverError::NumericalBreakdown {
-                        detail: format!(
-                            "CG: pAp≈0 before reaching tolerance at iter {} (rel_res={:.3e}); matrix may be indefinite/singular, try GMRES/MINRES or stronger preconditioner",
-                            k + 1,
-                            to_f64(res_now),
-                        ),
-                    });
-                }
-                let res_f = to_f64(res_now);
-                if params.verbose != VerboseLevel::Silent {
-                    println!("  CG converged (p·Ap≈0) iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
-                }
-                residual_history.push(res_f);
-                return Ok(SolverResult {
-                    converged: true, iterations: k + 1, final_residual: res_f, residual_history: std::mem::take(&mut residual_history), history: history.take(),
-                });
-            }
-            let alpha = rz / pap;
-
-            // x += α p
-            x.axpy(alpha, &p);
-
-            // r -= α A p
-            {
-                let rs = r.as_mut_slice();
-                let aps = ap.as_slice();
-                for i in 0..n {
-                    rs[i] -= alpha * aps[i];
-                }
-            }
-
-            // Periodic exact residual recomputation (prevents drift)
-            if (k + 1) % self.check_interval == 0 {
-                let mut ax = b.zero_like();
-                op.apply(x, &mut ax);
-                let rs = r.as_mut_slice();
-                let bs = b.as_slice();
-                let axs = ax.as_slice();
-                for i in 0..n {
-                    rs[i] = bs[i] - axs[i];
-                }
-            }
-
-            // z_new = M⁻¹ r_new
-            apply_precond_or_copy(precond, &r, &mut z);
-
-            let rz_new = dot_slice(r.as_slice(), z.as_slice());
-            if !rz_new.is_finite() {
-                return Err(SolverError::NumericalBreakdown {
-                    detail: format!(
-                        "CG: non-finite <r,z> at iter {}; preconditioner or operator produced invalid values",
-                        k + 1,
-                    ),
-                });
-            }
-
-            let res = r.norm2() / norm_b_f;
-            let res_f = to_f64(res);
-            residual_history.push(res_f);
-            if let Some(ref mut h) = history { h.push(res_f); }
-            if params.verbose == VerboseLevel::Iterations {
-                println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
-            }
-
-            if res < T::from_f64(params.rtol) || r.norm2() < T::from_f64(params.atol) {
-                if params.verbose != VerboseLevel::Silent {
-                    println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
-                }
-                return Ok(SolverResult {
-                    converged: true,
-                    iterations: k + 1,
-                    final_residual: to_f64(res),
-                    residual_history: std::mem::take(&mut residual_history),
-                    history: history.take(),
-                });
-            }
-
-            // β = rz_new / rz
-            let beta = rz_new / rz;
-
-            // p = z + β p
-            {
-                let ps = p.as_mut_slice();
-                let zs = z.as_slice();
-                for i in 0..n {
-                    ps[i] = zs[i] + beta * ps[i];
-                }
-            }
-
-            rz = rz_new;
-        }
-
-        let final_residual = to_f64(r.norm2() / norm_b_f);
-        Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+        let mut workspace = CgWorkspace::new(b.len());
+        self.solve_with_workspace(op, precond, b, x, params, &mut workspace)
     }
 }
 

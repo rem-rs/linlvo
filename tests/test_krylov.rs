@@ -5,7 +5,7 @@
 mod common;
 
 use linger::{
-    iterative::{BiCgStab, ConjugateGradient, Gmres, Minres},
+    iterative::{BiCgStab, CgWorkspace, ConjugateGradient, Gmres, GmresWorkspace, Minres},
     precond::{Ilu0Precond, JacobiPrecond, SsorPrecond},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverError, SolverParams, VerboseLevel,
@@ -191,6 +191,54 @@ fn gmres_nonfinite_rhs_reports_breakdown() {
         Err(SolverError::NumericalBreakdown { .. }) => {}
         other => panic!("expected NumericalBreakdown for non-finite RHS, got {other:?}"),
     }
+}
+
+#[test]
+fn cg_workspace_matches_regular_solve() {
+    let n = 40;
+    let (a, _, b) = common::make_poisson_1d::<f64>(n);
+    let b_vec = DenseVec::from_vec(b);
+    let cg = ConjugateGradient::<f64>::default();
+    let params = default_params(1e-10, 500);
+    let mut x_regular = DenseVec::zeros(n);
+    let mut x_workspace = DenseVec::zeros(n);
+    let regular = cg.solve(&a, None, &b_vec, &mut x_regular, &params).unwrap();
+    let mut workspace = CgWorkspace::new(n);
+    let reused = cg.solve_with_workspace(&a, None, &b_vec, &mut x_workspace, &params, &mut workspace).unwrap();
+
+    assert!(regular.converged && reused.converged);
+    let diff = x_regular
+        .as_slice()
+        .iter()
+        .zip(x_workspace.as_slice())
+        .map(|(&lhs, &rhs)| (lhs - rhs).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(diff < 1e-12, "CG workspace path mismatch: diff={diff:.3e}");
+}
+
+#[test]
+fn gmres_workspace_matches_regular_solve() {
+    let n = 30;
+    let (a, _, b) = common::make_nonsymmetric_convdiff::<f64>(n, 5.0);
+    let b_vec = DenseVec::from_vec(b);
+    let gmres = Gmres::<f64>::new(20);
+    let params = default_params(1e-10, 500);
+    let mut x_regular = DenseVec::zeros(n);
+    let mut x_workspace = DenseVec::zeros(n);
+    let regular = gmres.solve(&a, None, &b_vec, &mut x_regular, &params).unwrap();
+    let mut workspace = GmresWorkspace::new(n, 20);
+    let reused = gmres.solve_with_workspace(&a, None, &b_vec, &mut x_workspace, &params, &mut workspace).unwrap();
+
+    assert!(regular.converged && reused.converged);
+    let diff = x_regular
+        .as_slice()
+        .iter()
+        .zip(x_workspace.as_slice())
+        .map(|(&lhs, &rhs)| (lhs - rhs).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(diff < 1e-12, "GMRES workspace path mismatch: diff={diff:.3e}");
 }
 
 // ─── BiCGSTAB tests ──────────────────────────────────────────────────────────
