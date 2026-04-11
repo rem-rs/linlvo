@@ -13,7 +13,7 @@ Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich precond
 | `rayon` | **on** | Parallel SpMV, AXPY, dot, norm2, and AMG setup phases via Rayon |
 | `wasm` | off | Enables `wasm-bindgen` JS interface (`WasmCsrMatrix`, `WasmCgSolver`, `WasmGmresSolver`) |
 | `mpi` | off | Placeholder for distributed-memory support (not yet implemented) |
-| `hypre-ffi` / `petsc-ffi` / `mumps` / `mkl` | off | Placeholders for FFI backends (Sprint 6) |
+| `mumps` / `mkl` | off | Optional native acceleration placeholders (currently not implemented) |
 
 ```toml
 # Cargo.toml — add linger as a dependency
@@ -81,6 +81,29 @@ let mut x = DenseVec::zeros(n);
 let result = ConjugateGradient::<f64>::default()
     .solve(&a, Some(&precond), &b, &mut x, &params)
     .unwrap();
+```
+
+### AMS/ADS parameter sweep (CSV)
+
+Use the tuning example to generate structured CSV rows for AMS/ADS settings
+(`theta`, `coarse_threshold`, `restart`) including convergence, iterations,
+residual, elapsed time, and AMG complexity metrics.
+
+```bash
+# AMS only
+cargo run --example ex07_ams_ads_tuning -- --mode ams
+
+# ADS only
+cargo run --example ex07_ams_ads_tuning -- --mode ads
+
+# Both families
+cargo run --example ex07_ams_ads_tuning -- --mode both
+```
+
+Pipe the output to a file for post-processing:
+
+```bash
+cargo run --example ex07_ams_ads_tuning -- --mode both > ams_ads_sweep.csv
 ```
 
 ### With `nalgebra_sparse::CsrMatrix`
@@ -239,6 +262,10 @@ linger/
 │   └── nep.rs             NonlinearOperator trait + NepNewton
 ├── parallel/
 │   └── rayon_ops.rs       parallel_spmv, parallel_axpy, parallel_dot, …
+├── parallel_dist/
+│   ├── layout.rs          PartitionLayout + block_partition
+│   ├── halo.rs            HaloExchange trait + LocalHaloExchange
+│   └── dist_csr.rs        DistCsrMatrix scaffold (owned/ghost split)
 └── wasm.rs                WasmCsrMatrix, WasmCgSolver, WasmGmresSolver
 ```
 

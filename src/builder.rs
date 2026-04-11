@@ -40,7 +40,7 @@ use crate::{
     core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}},
     sparse::CsrMatrix,
     iterative::{ConjugateGradient, Gmres, BiCgStab},
-    KrylovSolver, SolverParams, VerboseLevel,
+    KrylovSolver, SolverParams, SolverResult, VerboseLevel,
     direct::{DirectOptions, DirectSolver, DirectSolverPrecond, ordering::OrderingMethod},
     core::preconditioner::Preconditioner,
 };
@@ -128,6 +128,36 @@ pub enum Ordering {
     NodeNd,
 }
 
+/// Structured preconditioner diagnostics emitted by [`SolverBuilder`].
+#[derive(Debug, Clone)]
+pub enum BuilderPrecondReport {
+    /// No preconditioner.
+    None,
+    /// Jacobi preconditioner.
+    Jacobi,
+    /// ILU(0) preconditioner.
+    Ilu0,
+    /// ICC(0) preconditioner.
+    Icc0,
+    /// Exact direct-solver preconditioner.
+    DirectLu { backend: DirectBackend },
+    /// AMS preconditioner with setup profile.
+    Ams(crate::precond::ams::AmsProfile),
+    /// ADS preconditioner with setup profile.
+    Ads(crate::precond::ads::AdsProfile),
+}
+
+/// Structured solve diagnostics emitted by [`SolverBuilder::solve_with_report`].
+#[derive(Debug, Clone)]
+pub struct BuilderSolveReport {
+    /// Method used for this solve.
+    pub method: SolveMethod,
+    /// Selected preconditioner and its setup profile (if available).
+    pub precond: BuilderPrecondReport,
+    /// Krylov iteration result. `None` for direct solves.
+    pub krylov: Option<SolverResult>,
+}
+
 // ─── Builder ─────────────────────────────────────────────────────────────────
 
 /// Fluent builder for configuring and running linear solvers.
@@ -189,6 +219,53 @@ impl SolverBuilder {
     /// Enable iteration-by-iteration convergence logging.
     pub fn verbose(mut self) -> Self { self.verbose = true; self }
 
+    /// Apply HPC-oriented Krylov defaults for large sparse problems.
+    ///
+    /// Sets:
+    /// - GMRES restart = 50
+    /// - rtol = 1e-8
+    /// - atol = 0.0
+    /// - max_iter = 400
+    pub fn hpc_krylov_defaults(mut self) -> Self {
+        self.method = SolveMethod::Gmres { restart: 50 };
+        self.rtol = 1e-8;
+        self.atol = 0.0;
+        self.max_iter = 400;
+        self
+    }
+
+    /// One-shot HPC preset for H(curl) systems using AMS.
+    ///
+    /// Uses [`AmsConfig::hpc_default`] and [`Self::hpc_krylov_defaults`].
+    pub fn hpc_ams(
+        mut self,
+        g: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+    ) -> Self {
+        self = self.hpc_krylov_defaults();
+        self.precond = PrecondChoice::Ams {
+            g,
+            config: crate::precond::ams::AmsConfig::hpc_default(),
+        };
+        self
+    }
+
+    /// One-shot HPC preset for H(div) systems using ADS.
+    ///
+    /// Uses [`AdsConfig::hpc_default`] and [`Self::hpc_krylov_defaults`].
+    pub fn hpc_ads(
+        mut self,
+        c: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+        g: std::sync::Arc<crate::sparse::CsrMatrix<f64>>,
+    ) -> Self {
+        self = self.hpc_krylov_defaults();
+        self.precond = PrecondChoice::Ads {
+            c,
+            g,
+            config: crate::precond::ads::AdsConfig::hpc_default(),
+        };
+        self
+    }
+
     // ─── solve ────────────────────────────────────────────────────────────────
 
     /// Solve `A x = b`.
@@ -203,9 +280,25 @@ impl SolverBuilder {
                 op_rows: n, op_cols: a.ncols(), rhs_len: b.len(),
             });
         }
-        let mut x = DenseVec::zeros(n);
-        self.solve_into(a, b, &mut x)?;
+        let (x, _) = self.solve_with_report(a, b)?;
         Ok(x)
+    }
+
+    /// Solve `A x = b` and return structured diagnostics.
+    pub fn solve_with_report<T: Scalar>(
+        &self,
+        a: &CsrMatrix<T>,
+        b: &DenseVec<T>,
+    ) -> Result<(DenseVec<T>, BuilderSolveReport), SolverError> {
+        let n = a.nrows();
+        if b.len() != n {
+            return Err(SolverError::DimensionMismatch {
+                op_rows: n, op_cols: a.ncols(), rhs_len: b.len(),
+            });
+        }
+        let mut x = DenseVec::zeros(n);
+        let report = self.solve_into_with_report(a, b, &mut x)?;
+        Ok((x, report))
     }
 
     /// Solve `A x = b`, storing the result in the pre-allocated `x`.
@@ -215,9 +308,26 @@ impl SolverBuilder {
         b:  &DenseVec<T>,
         x:  &mut DenseVec<T>,
     ) -> Result<(), SolverError> {
+        self.solve_into_with_report(a, b, x).map(|_| ())
+    }
+
+    /// Solve `A x = b` into `x` and return structured diagnostics.
+    pub fn solve_into_with_report<T: Scalar>(
+        &self,
+        a:  &CsrMatrix<T>,
+        b:  &DenseVec<T>,
+        x:  &mut DenseVec<T>,
+    ) -> Result<BuilderSolveReport, SolverError> {
         match &self.method {
-            SolveMethod::Direct(backend) => self.run_direct(backend, a, b, x),
-            _ => self.run_krylov(a, b, x),
+            SolveMethod::Direct(backend) => {
+                self.run_direct(backend, a, b, x)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::None,
+                    krylov: None,
+                })
+            }
+            _ => self.run_krylov_with_report(a, b, x),
         }
     }
 
@@ -277,67 +387,107 @@ impl SolverBuilder {
 
     // ─── internal: Krylov ─────────────────────────────────────────────────────
 
-    fn run_krylov<T: Scalar>(
+    fn run_krylov_with_report<T: Scalar>(
         &self,
         a: &CsrMatrix<T>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
-    ) -> Result<(), SolverError> {
+    ) -> Result<BuilderSolveReport, SolverError> {
         let params = self.krylov_params();
         match &self.precond {
             PrecondChoice::None => {
-                self.dispatch_krylov::<T>(a, None, b, x, &params)
+                let result = self.dispatch_krylov_result::<T>(a, None, b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::None,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Jacobi => {
                 let p = crate::JacobiPrecond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Jacobi,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ilu0 => {
                 let p = crate::Ilu0Precond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ilu0,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Icc0 => {
                 let p = crate::Icc0Precond::from_csr(a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Icc0,
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::DirectLu(backend) => {
-                self.run_krylov_direct_precond(backend, a, b, x, &params)
+                let result = self.run_krylov_direct_precond(backend, a, b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::DirectLu { backend: backend.clone() },
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ams { g, config } => {
                 let g_t = cast_csr_f64_to::<T>(g);
                 let p = crate::precond::ams::AmsPrecond::new(a, &g_t, config.clone())?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                if self.verbose {
+                    print_ams_profile_summary(p.profile());
+                }
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ams(p.profile().clone()),
+                    krylov: Some(result),
+                })
             }
             PrecondChoice::Ads { c, g, config } => {
                 let c_t = cast_csr_f64_to::<T>(c);
                 let g_t = cast_csr_f64_to::<T>(g);
                 let p = crate::precond::ads::AdsPrecond::new(a, &c_t, &g_t, config.clone())?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)
+                if self.verbose {
+                    print_ads_profile_summary(p.profile());
+                }
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ads(p.profile().clone()),
+                    krylov: Some(result),
+                })
             }
         }
     }
 
-    fn dispatch_krylov<T: Scalar>(
+    fn dispatch_krylov_result<T: Scalar>(
         &self,
         a:       &CsrMatrix<T>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
-    ) -> Result<(), SolverError> {
+    ) -> Result<SolverResult, SolverError> {
         match &self.method {
             SolveMethod::Cg => {
-                ConjugateGradient::<T>::default().solve(a, precond, b, x, params)?;
+                ConjugateGradient::<T>::default().solve(a, precond, b, x, params)
             }
             SolveMethod::Gmres { restart } => {
-                Gmres::<T>::new(*restart).solve(a, precond, b, x, params)?;
+                Gmres::<T>::new(*restart).solve(a, precond, b, x, params)
             }
             SolveMethod::BiCgStab => {
-                BiCgStab::<T>::default().solve(a, precond, b, x, params)?;
+                BiCgStab::<T>::default().solve(a, precond, b, x, params)
             }
             SolveMethod::Direct(_) => unreachable!(),
         }
-        Ok(())
     }
 
     fn run_krylov_direct_precond<T: Scalar>(
@@ -347,18 +497,18 @@ impl SolverBuilder {
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
-    ) -> Result<(), SolverError> {
+    ) -> Result<SolverResult, SolverError> {
         use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
         match backend {
             DirectBackend::Lu => {
                 let s = SparseLu::<T>::new(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Cholesky => {
                 let s = SparseCholesky::<T>::new(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Multifrontal => {
                 let s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
@@ -366,7 +516,7 @@ impl SolverBuilder {
                     ..Default::default()
                 });
                 let p = DirectSolverPrecond::new(s, a)?;
-                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
         }
     }
@@ -406,4 +556,46 @@ fn cast_csr_f64_to<T: Scalar>(m: &crate::sparse::CsrMatrix<f64>) -> crate::spars
         m.col_idx().to_vec(),
         m.values().iter().map(|&v| T::from_f64(v)).collect(),
     )
+}
+
+fn print_ams_profile_summary(profile: &crate::precond::ams::AmsProfile) {
+    println!(
+        "[AMS] edges={} nodes={} nnz(A)={} nnz(G)={} nnz(G^T A G)={} aux={}",
+        profile.n_edges,
+        profile.n_nodes,
+        profile.a_nnz,
+        profile.g_nnz,
+        profile.a_node_nnz,
+        format_aux_solver_profile(&profile.node_solver),
+    );
+}
+
+fn print_ads_profile_summary(profile: &crate::precond::ads::AdsProfile) {
+    println!(
+        "[ADS] faces={} edges={} nodes={} nnz(A)={} nnz(C)={} nnz(G)={} nnz(C^T A C)={} nnz(G^T A_e G)={} edge_aux={} node_aux={}",
+        profile.n_faces,
+        profile.n_edges,
+        profile.n_nodes,
+        profile.a_nnz,
+        profile.c_nnz,
+        profile.g_nnz,
+        profile.a_edge_nnz,
+        profile.a_node_nnz,
+        format_aux_solver_profile(&profile.edge_solver),
+        format_aux_solver_profile(&profile.node_solver),
+    );
+}
+
+fn format_aux_solver_profile(profile: &crate::precond::ams::AuxSolverProfile) -> String {
+    match profile {
+        crate::precond::ams::AuxSolverProfile::Amg(amg) => {
+            format!(
+                "AMG(levels={}, op_cx={:.2}, grid_cx={:.2})",
+                amg.n_levels, amg.operator_complexity, amg.grid_complexity
+            )
+        }
+        crate::precond::ams::AuxSolverProfile::Ilu0 { n, nnz } => {
+            format!("ILU0(n={}, nnz={})", n, nnz)
+        }
+    }
 }

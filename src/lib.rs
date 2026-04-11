@@ -12,6 +12,7 @@ pub mod precond;
 pub mod iterative;
 pub mod amg;
 pub mod parallel;
+pub mod parallel_dist;
 pub mod eigen;
 pub mod direct;
 pub mod builder;
@@ -36,8 +37,8 @@ pub use crate::precond::{
     JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
     IlukPrecond, IlutPrecond, Icc0Precond, IldltPrecond, SpaiPrecond,
     AdditivePrecond, MultiplicativePrecond, BlockJacobiPrecond,
-    AmsPrecond, AmsConfig, AuxSpaceSolver,
-    AdsPrecond, AdsConfig,
+    AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile,
+    AdsPrecond, AdsConfig, AdsProfile,
 };
 pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType, LevelInfo};
@@ -53,6 +54,12 @@ pub use crate::parallel::{
     parallel_spmv, parallel_spmv_add,
     parallel_axpy, parallel_axpby,
     parallel_dot, parallel_norm2,
+};
+pub use crate::parallel_dist::{
+    PartitionLayout, block_partition,
+    HaloExchange, HaloError, LocalHaloExchange,
+    HaloPlan, NeighborHaloPlan,
+    DistCsrMatrix,
 };
 
 pub use crate::eigen::{
@@ -74,5 +81,6 @@ pub use crate::direct::{
 
 pub use crate::builder::{
     SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering as SolverOrdering,
+    BuilderPrecondReport, BuilderSolveReport,
     solve_auto,
 };

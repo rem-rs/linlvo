@@ -8,7 +8,7 @@ mod common;
 
 use linger::{
     iterative::Gmres,
-    precond::{AdsPrecond, AdsConfig, AmsPrecond, AmsConfig, AuxSpaceSolver},
+    precond::{AdsPrecond, AdsConfig, AmsPrecond, AmsConfig, AuxSolverProfile, AuxSpaceSolver},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, LinearOperator, Preconditioner, SolverParams, VerboseLevel,
 };
@@ -305,4 +305,124 @@ fn discrete_complex_curl_of_gradient_is_zero() {
             "C·G should be zero everywhere, got {v}"
         );
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Group F — HPC diagnostics and scaling regression
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn ams_profile_exposes_amg_complexity() {
+    let (g, a) = common::make_chain_graph(41, 1e-3);
+    let p = AmsPrecond::new(&a, &g, AmsConfig::hpc_default()).unwrap();
+    let prof = p.profile();
+
+    assert_eq!(prof.n_edges, a.nrows());
+    assert_eq!(prof.n_nodes, g.ncols());
+    assert!(prof.a_nnz > 0);
+    assert!(prof.g_nnz > 0);
+    assert!(prof.a_node_nnz > 0);
+
+    match &prof.node_solver {
+        AuxSolverProfile::Amg(amg) => {
+            assert!(amg.n_levels >= 1);
+            assert!(amg.operator_complexity >= 1.0);
+            assert!(amg.grid_complexity >= 1.0);
+        }
+        AuxSolverProfile::Ilu0 { .. } => panic!("expected AMG node solver for hpc_default"),
+    }
+}
+
+#[test]
+fn ads_profile_exposes_amg_complexity() {
+    let (g, c, a) = common::make_rect_complex(6, 6, 1e-3);
+    let p = AdsPrecond::new(&a, &c, &g, AdsConfig::hpc_default()).unwrap();
+    let prof = p.profile();
+
+    assert_eq!(prof.n_faces, a.nrows());
+    assert_eq!(prof.n_edges, c.ncols());
+    assert_eq!(prof.n_nodes, g.ncols());
+    assert!(prof.a_nnz > 0);
+    assert!(prof.c_nnz > 0);
+    assert!(prof.g_nnz > 0);
+    assert!(prof.a_edge_nnz > 0);
+    assert!(prof.a_node_nnz > 0);
+
+    match &prof.edge_solver {
+        AuxSolverProfile::Amg(amg) => {
+            assert!(amg.n_levels >= 1);
+            assert!(amg.operator_complexity >= 1.0);
+            assert!(amg.grid_complexity >= 1.0);
+        }
+        AuxSolverProfile::Ilu0 { .. } => panic!("expected AMG edge solver for hpc_default"),
+    }
+    match &prof.node_solver {
+        AuxSolverProfile::Amg(amg) => {
+            assert!(amg.n_levels >= 1);
+            assert!(amg.operator_complexity >= 1.0);
+            assert!(amg.grid_complexity >= 1.0);
+        }
+        AuxSolverProfile::Ilu0 { .. } => panic!("expected AMG node solver for hpc_default"),
+    }
+}
+
+#[test]
+fn ams_iteration_scaling_regression() {
+    fn run_case(n_nodes: usize) -> usize {
+        let (g, a) = common::make_chain_graph(n_nodes, 1e-3);
+        let n = a.nrows();
+        let x_exact: Vec<f64> = (1..=n)
+            .map(|k| (std::f64::consts::PI * k as f64 / (n + 1) as f64).sin())
+            .collect();
+        let mut b_raw = vec![0.0f64; n];
+        a.spmv(&x_exact, &mut b_raw);
+        let b = DenseVec::from_vec(b_raw);
+
+        let p = AmsPrecond::new(&a, &g, AmsConfig::hpc_default()).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let params = SolverParams {
+            rtol: 1e-8,
+            max_iter: 500,
+            verbose: VerboseLevel::Silent,
+            ..Default::default()
+        };
+        let result = Gmres::new(50).solve(&a, Some(&p), &b, &mut x, &params).unwrap();
+        assert!(result.converged, "AMS case n_nodes={n_nodes} failed to converge");
+        result.iterations
+    }
+
+    let it_small = run_case(21);
+    let it_large = run_case(81);
+    assert!(
+        it_large <= it_small * 3 + 10,
+        "AMS iteration growth too large: small={it_small}, large={it_large}"
+    );
+}
+
+#[test]
+fn ads_iteration_scaling_regression() {
+    fn run_case(nx: usize, ny: usize) -> usize {
+        let (g, c, a) = common::make_rect_complex(nx, ny, 1e-3);
+        let n = a.nrows();
+        let b = DenseVec::from_vec(vec![1.0_f64; n]);
+
+        let p = AdsPrecond::new(&a, &c, &g, AdsConfig::hpc_default()).unwrap();
+        let mut x = DenseVec::zeros(n);
+        let params = SolverParams {
+            rtol: 1e-8,
+            max_iter: 600,
+            verbose: VerboseLevel::Silent,
+            ..Default::default()
+        };
+        let result = Gmres::new(50).solve(&a, Some(&p), &b, &mut x, &params).unwrap();
+        assert!(result.converged, "ADS case nx={nx}, ny={ny} failed to converge");
+        result.iterations
+    }
+
+    let it_small = run_case(4, 4);
+    let it_large = run_case(10, 10);
+    assert!(
+        it_large <= 550 && it_large <= it_small * 60 + 20,
+        "ADS large-grid convergence regressed: small={it_small}, large={it_large}"
+    );
 }
