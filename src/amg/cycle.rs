@@ -19,6 +19,63 @@
 use crate::amg::{setup::AmgHierarchy, smoother::{smooth_with_hint, SmootherType}};
 use crate::core::{operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
 
+struct LevelScratch<T: Scalar> {
+    ax: DenseVec<T>,
+    res: DenseVec<T>,
+    coarse_rhs: DenseVec<T>,
+    coarse_x: DenseVec<T>,
+    pe: DenseVec<T>,
+}
+
+impl<T: Scalar> LevelScratch<T> {
+    fn new(n: usize, nc: usize) -> Self {
+        Self {
+            ax: DenseVec::zeros(n),
+            res: DenseVec::zeros(n),
+            coarse_rhs: DenseVec::zeros(nc),
+            coarse_x: DenseVec::zeros(nc),
+            pe: DenseVec::zeros(n),
+        }
+    }
+}
+
+pub(crate) struct CycleWorkspace<T: Scalar> {
+    levels: Vec<LevelScratch<T>>,
+}
+
+impl<T: Scalar> CycleWorkspace<T> {
+    pub(crate) fn new(hier: &AmgHierarchy<T>) -> Self {
+        let levels = hier.levels
+            .iter()
+            .map(|level| {
+                let n = level.a.nrows();
+                let nc = level.p.as_ref().map(|p| p.ncols()).unwrap_or(0);
+                LevelScratch::new(n, nc)
+            })
+            .collect();
+        Self { levels }
+    }
+}
+
+fn residual_norm_into<T: Scalar>(
+    a: &crate::sparse::CsrMatrix<T>,
+    x: &DenseVec<T>,
+    b: &DenseVec<T>,
+    ax: &mut DenseVec<T>,
+) -> f64 {
+    a.apply(x, ax);
+    let bs = b.as_slice();
+    let axs = ax.as_slice();
+    let nrm2 = (0..b.len())
+        .map(|i| {
+            let diff = bs[i] - axs[i];
+            diff * diff
+        })
+        .fold(T::zero(), |acc, value| acc + value)
+        .sqrt();
+    num_traits::ToPrimitive::to_f64(&nrm2).unwrap_or(f64::INFINITY)
+}
+
 /// Number of coarse-level recursions per cycle level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CycleType {
@@ -37,30 +94,24 @@ impl<T: Scalar> AmgHierarchy<T> {
     /// Records ‖b - A x_after‖ / ‖b - A x_before‖ in `self.last_cycle_rate`
     /// (accessible via [`convergence_rate()`]).
     pub fn apply_cycle(&self, b: &DenseVec<T>, x: &mut DenseVec<T>, cycle: CycleType) {
+        let mut workspace = CycleWorkspace::new(self);
+        self.apply_cycle_with_workspace(b, x, cycle, &mut workspace);
+    }
+
+    pub(crate) fn apply_cycle_with_workspace(
+        &self,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        cycle: CycleType,
+        workspace: &mut CycleWorkspace<T>,
+    ) {
         let a0 = &self.levels[0].a;
-        let n = b.len();
 
-        // Helper: compute ‖b - A·x‖ as f64.
-        let residual_norm = |a: &crate::sparse::CsrMatrix<T>, x: &DenseVec<T>, b: &DenseVec<T>| -> f64 {
-            let mut ax = DenseVec::zeros(n);
-            a.apply(x, &mut ax);
-            let bs = b.as_slice();
-            let axs = ax.as_slice();
-            let nrm2 = (0..n)
-                .map(|i| {
-                    let diff = bs[i] - axs[i];
-                    diff * diff
-                })
-                .fold(T::zero(), |acc, value| acc + value)
-                .sqrt();
-            num_traits::ToPrimitive::to_f64(&nrm2).unwrap_or(f64::INFINITY)
-        };
+        let r_before = residual_norm_into(a0, x, b, &mut workspace.levels[0].ax);
 
-        let r_before = residual_norm(a0, x, b);
+        vcycle(self, &mut workspace.levels, 0, b, x, cycle);
 
-        vcycle(self, 0, b, x, cycle);
-
-        let r_after = residual_norm(a0, x, b);
+        let r_after = residual_norm_into(a0, x, b, &mut workspace.levels[0].ax);
 
         let rate = if r_before < 1e-300 { 0.0 } else { r_after / r_before };
         self.last_cycle_rate.store(
@@ -72,12 +123,14 @@ impl<T: Scalar> AmgHierarchy<T> {
 
 fn vcycle<T: Scalar>(
     hier:  &AmgHierarchy<T>,
+    workspace: &mut [LevelScratch<T>],
     level: usize,
     b:     &DenseVec<T>,
     x:     &mut DenseVec<T>,
     cycle: CycleType,
 ) {
     let lv = &hier.levels[level];
+    let (scratch, child_workspace) = workspace.split_first_mut().expect("workspace must cover all AMG levels");
 
     // Coarsest level: solve approximately with many sweeps.
     // Use weighted Jacobi on the coarsest level regardless of the configured
@@ -100,54 +153,49 @@ fn vcycle<T: Scalar>(
 
     // Residual: res = b - A x.
     let n = b.len();
-    let mut ax  = DenseVec::zeros(n);
-    lv.a.apply(x, &mut ax);
-    let mut res = DenseVec::zeros(n);
+    lv.a.apply(x, &mut scratch.ax);
     {
-        let rs  = res.as_mut_slice();
+        let rs  = scratch.res.as_mut_slice();
         let bs  = b.as_slice();
-        let axs = ax.as_slice();
+        let axs = scratch.ax.as_slice();
         for i in 0..n { rs[i] = bs[i] - axs[i]; }
     }
 
     // Restrict: r_c = R * res.
-    let nc = r.nrows();
-    let mut res_c = DenseVec::zeros(nc);
-    r.apply(&res, &mut res_c);
+    r.apply(&scratch.res, &mut scratch.coarse_rhs);
 
     // Coarse-grid correction.
-    let mut e_c = DenseVec::zeros(nc);
+    scratch.coarse_x.as_mut_slice().fill(T::zero());
     match cycle {
         CycleType::V => {
-            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::V);
+            vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::V);
         }
         CycleType::W => {
-            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::W);
-            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::W);
+            vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::W);
+            vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::W);
         }
         CycleType::F => {
             // F-cycle: first call with V, then call with F (recursive).
-            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::V);
-            vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::F);
+            vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::V);
+            vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::F);
         }
         CycleType::K { inner_iters } => {
             // K-cycle: run `inner_iters` steps of flexible CG on the coarse
             // system, using vcycle(level+1, V) as preconditioner.
             // inner_iters=0: fall back to V-cycle (same as CycleType::V).
             if inner_iters == 0 {
-                vcycle(hier, level + 1, &res_c, &mut e_c, CycleType::V);
+                vcycle(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, CycleType::V);
             } else {
-                inner_cg_solve(hier, level + 1, &res_c, &mut e_c, inner_iters);
+                inner_cg_solve(hier, child_workspace, level + 1, &scratch.coarse_rhs, &mut scratch.coarse_x, inner_iters);
             }
         }
     }
 
     // Prolongate and update: x += P e_c.
-    let mut pe = DenseVec::zeros(n);
-    p.apply(&e_c, &mut pe);
+    p.apply(&scratch.coarse_x, &mut scratch.pe);
     {
         let xs  = x.as_mut_slice();
-        let pes = pe.as_slice();
+        let pes = scratch.pe.as_slice();
         for i in 0..n { xs[i] += pes[i]; }
     }
 
@@ -162,6 +210,7 @@ fn vcycle<T: Scalar>(
 /// is performed — the fixed iteration count is intentional for the K-cycle.
 fn inner_cg_solve<T: Scalar>(
     hier:     &AmgHierarchy<T>,
+    workspace: &mut [LevelScratch<T>],
     level:    usize,
     b:        &DenseVec<T>,
     x:        &mut DenseVec<T>,
@@ -183,14 +232,14 @@ fn inner_cg_solve<T: Scalar>(
 
     // z = M^{-1} r  (one V-cycle applied to r, not b)
     let mut z = DenseVec::zeros(n);
-    vcycle(hier, level, &r, &mut z, CycleType::V);
+    vcycle(hier, workspace, level, &r, &mut z, CycleType::V);
 
     let mut p   = z.clone();
+    let mut v   = DenseVec::zeros(n);
     let mut rho = dot_dense(&r, &z);
 
     for _ in 0..max_iter {
         // v = A * p
-        let mut v = DenseVec::zeros(n);
         lv.a.apply(&p, &mut v);
 
         let pv = dot_dense(&p, &v);
@@ -211,8 +260,8 @@ fn inner_cg_solve<T: Scalar>(
         }
 
         // z = M^{-1} r (V-cycle at this level)
-        z = DenseVec::zeros(n);
-        vcycle(hier, level, &r, &mut z, CycleType::V);
+    z.as_mut_slice().fill(T::zero());
+        vcycle(hier, workspace, level, &r, &mut z, CycleType::V);
 
         let rho_new = dot_dense(&r, &z);
         if rho.abs() < T::machine_epsilon() * T::from_f64(1e4) { break; }
