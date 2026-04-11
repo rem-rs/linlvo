@@ -41,7 +41,7 @@
 use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond};
 use crate::core::{
     error::SolverError,
-    operator::{LinearOperator, TransposeOperator},
+    operator::TransposeOperator,
     preconditioner::Preconditioner,
     scalar::Scalar,
     vector::DenseVec,
@@ -298,18 +298,9 @@ impl<T: Scalar> Preconditioner for AmsPrecond<T> {
         let mut s_node = DenseVec::zeros(self.n_nodes);
         self.node_precond.apply_precond(&t_node, &mut s_node);
 
-        // 2c. e_edge ← G s_node
-        let mut e_edge = DenseVec::zeros(self.n_edges);
-        self.g.apply(&s_node, &mut e_edge);
-
-        // 2d. y += e_edge
-        {
-            let ys = y.as_mut_slice();
-            let es = e_edge.as_slice();
-            for i in 0..self.n_edges {
-                ys[i] += es[i];
-            }
-        }
+        // 2c. y += G s_node
+        self.g
+            .spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
     }
 }
 
@@ -327,8 +318,8 @@ pub(super) fn build_aux_solver<T: Scalar>(
             let hier = AmgHierarchy::build(mat, cfg.clone());
             let profile = AuxSolverProfile::Amg(AuxAmgProfile {
                 n_levels: hier.n_levels(),
-                operator_complexity: hier.operator_complexity(),
-                grid_complexity: hier.grid_complexity(),
+                operator_complexity: hier.operator_complexity().max(1.0),
+                grid_complexity: hier.grid_complexity().max(1.0),
             });
             Ok((Box::new(AmgPrecond::new(hier)), profile))
         }

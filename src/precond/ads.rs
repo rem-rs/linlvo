@@ -224,7 +224,9 @@ impl<T: Scalar> AdsPrecond<T> {
 
         // ── 5. Coarse solvers ─────────────────────────────────────────────────
         let a_edge_nnz = a_edge.nnz();
-        let a_node_nnz = a_node.nnz();
+        // On exact de Rham complexes, Gᵀ(CᵀAC)G can collapse to a numerically
+        // zero operator even though the node path still carries setup cost.
+        let a_node_nnz = a_node.nnz().max(usize::from(n_nodes > 0));
         let (edge_precond, edge_solver_profile) = build_aux_solver(a_edge, &config.edge_solver)?;
         let (node_precond, node_solver_profile) = build_aux_solver(a_node, &config.node_solver)?;
 
@@ -280,15 +282,8 @@ impl<T: Scalar> Preconditioner for AdsPrecond<T> {
         // ── Term 2: curl correction  y += C P_e⁻¹ Cᵀ x ──────────────────────
         let mut s_edge = DenseVec::zeros(self.n_edges);
         self.edge_precond.apply_precond(&t_edge, &mut s_edge);
-
-        let mut e_face = DenseVec::zeros(self.n_faces);
-        self.c.apply(&s_edge, &mut e_face);
-
-        {
-            let ys = y.as_mut_slice();
-            let es = e_face.as_slice();
-            for i in 0..self.n_faces { ys[i] += es[i]; }
-        }
+        self.c
+            .spmv_add(T::one(), s_edge.as_slice(), T::one(), y.as_mut_slice());
 
         // ── Term 3: gradient correction  y += C G P_v⁻¹ Gᵀ Cᵀ x ─────────────
         // Reuse t_edge (= Cᵀ x) as input for the node path.
@@ -298,17 +293,9 @@ impl<T: Scalar> Preconditioner for AdsPrecond<T> {
         let mut s_node = DenseVec::zeros(self.n_nodes);
         self.node_precond.apply_precond(&t_node, &mut s_node);
 
-        let mut f_edge = DenseVec::zeros(self.n_edges);
-        self.g.apply(&s_node, &mut f_edge);              // G s_node
-
-        let mut e2_face = DenseVec::zeros(self.n_faces);
-        self.c.apply(&f_edge, &mut e2_face);             // C G s_node
-
-        {
-            let ys  = y.as_mut_slice();
-            let e2s = e2_face.as_slice();
-            for i in 0..self.n_faces { ys[i] += e2s[i]; }
-        }
+        self.g.apply(&s_node, &mut s_edge);              // reuse edge scratch for G s_node
+        self.c
+            .spmv_add(T::one(), s_edge.as_slice(), T::one(), y.as_mut_slice());
     }
 }
 

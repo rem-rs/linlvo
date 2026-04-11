@@ -12,7 +12,7 @@ pub use setup::{AmgConfig, AmgHierarchy, CoarsenStrategy, AmgLevel, LevelInfo};
 pub use smoother::SmootherType;
 pub use cycle::CycleType;
 
-use crate::core::{preconditioner::Preconditioner, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec};
 
 /// AMG preconditioner (wraps the hierarchy and applies one V- or W-cycle).
 pub struct AmgPrecond<T> {
@@ -35,9 +35,7 @@ impl<T: Scalar> Preconditioner for AmgPrecond<T> {
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
         // Start from zero initial guess (preconditioner convention).
-        let n = x.len();
-        let mut tmp = DenseVec::zeros(n);
-        self.hier.apply_cycle(x, &mut tmp, self.cycle);
-        y.copy_from(&tmp);
+        y.as_mut_slice().fill(T::zero());
+        self.hier.apply_cycle(x, y, self.cycle);
     }
 }

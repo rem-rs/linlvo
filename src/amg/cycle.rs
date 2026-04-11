@@ -44,14 +44,16 @@ impl<T: Scalar> AmgHierarchy<T> {
         let residual_norm = |a: &crate::sparse::CsrMatrix<T>, x: &DenseVec<T>, b: &DenseVec<T>| -> f64 {
             let mut ax = DenseVec::zeros(n);
             a.apply(x, &mut ax);
-            let mut res = DenseVec::zeros(n);
-            {
-                let rs = res.as_mut_slice();
-                let bs = b.as_slice(); let axs = ax.as_slice();
-                for i in 0..n { rs[i] = bs[i] - axs[i]; }
-            }
-            let nrm = res.norm2(); // returns T
-            num_traits::ToPrimitive::to_f64(&nrm).unwrap_or(f64::INFINITY)
+            let bs = b.as_slice();
+            let axs = ax.as_slice();
+            let nrm2 = (0..n)
+                .map(|i| {
+                    let diff = bs[i] - axs[i];
+                    diff * diff
+                })
+                .fold(T::zero(), |acc, value| acc + value)
+                .sqrt();
+            num_traits::ToPrimitive::to_f64(&nrm2).unwrap_or(f64::INFINITY)
         };
 
         let r_before = residual_norm(a0, x, b);

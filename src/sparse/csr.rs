@@ -303,22 +303,35 @@ impl<T: Scalar> CsrMatrix<T> {
         let n = b.ncols;
 
         let mut c_rows: Vec<Vec<(usize, T)>> = vec![Vec::new(); m];
+        let mut marks = vec![usize::MAX; n];
+        let mut accum = vec![T::zero(); n];
+        let mut touched_cols: Vec<usize> = Vec::new();
 
         for i in 0..m {
-            // Dense accumulator for row i of C.
-            let mut acc: std::collections::HashMap<usize, T> =
-                std::collections::HashMap::new();
+            touched_cols.clear();
             for ka in self.row_ptr[i]..self.row_ptr[i + 1] {
                 let k   = self.col_idx[ka];
                 let a_ik = self.values[ka];
                 for kb in b.row_ptr[k]..b.row_ptr[k + 1] {
                     let j   = b.col_idx[kb];
                     let b_kj = b.values[kb];
-                    let e = acc.entry(j).or_insert(T::zero());
-                    *e += a_ik * b_kj;
+                    if marks[j] != i {
+                        marks[j] = i;
+                        accum[j] = a_ik * b_kj;
+                        touched_cols.push(j);
+                    } else {
+                        accum[j] += a_ik * b_kj;
+                    }
                 }
             }
-            let mut row: Vec<(usize, T)> = acc.into_iter().collect();
+
+            let mut row: Vec<(usize, T)> = Vec::with_capacity(touched_cols.len());
+            for &j in &touched_cols {
+                let value = accum[j];
+                if value != T::zero() {
+                    row.push((j, value));
+                }
+            }
             row.sort_unstable_by_key(|&(j, _)| j);
             c_rows[i] = row;
         }
@@ -368,21 +381,6 @@ impl<T: Scalar> CsrMatrix<T> {
                 col_idx[pos] = i;
                 values[pos]  = self.values[k];
                 cursor[j] += 1;
-            }
-        }
-
-        // Sort each row of Aᵀ by column index.
-        for j in 0..n {
-            let start = row_ptr[j];
-            let end   = row_ptr[j + 1];
-            let mut pairs: Vec<(usize, T)> = col_idx[start..end]
-                .iter().zip(values[start..end].iter())
-                .map(|(&c, &v)| (c, v))
-                .collect();
-            pairs.sort_unstable_by_key(|&(c, _)| c);
-            for (k, (c, v)) in pairs.into_iter().enumerate() {
-                col_idx[start + k] = c;
-                values[start + k]  = v;
             }
         }
 
