@@ -6,6 +6,14 @@ Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich precond
 
 ---
 
+## Current status
+
+- Crate version: `0.2.0`
+- Core delivered: Krylov (CG/GMRES/FGMRES/BiCGSTAB/MINRES/LGMRES/IDR(s)/TFQMR), AMG, direct solvers, eigen-solvers, and WASM bindings
+- CI coverage: multi-OS test + clippy + bench build + wasm cross-compile
+
+---
+
 ## Feature flags
 
 | Flag | Default | Effect |
@@ -22,6 +30,22 @@ linger = { path = ".", features = ["rayon"] }
 # Without parallelism (e.g., embedding in a single-threaded context)
 linger = { path = ".", default-features = false }
 ```
+
+---
+
+## Release checklist
+
+Before tagging a release, run this checklist:
+
+- Version consistency: `Cargo.toml`, README status section, and docs all use the same crate version
+- Feature-path validation: `default`, `--no-default-features`, `--features rayon`, `--features __native`, and wasm build all pass
+- Regression validation: `cargo test --all-targets` and `cargo clippy --all-targets` are green in CI
+- Baseline sanity: `cargo build --benches` succeeds and benchmark input sizes remain unchanged
+- Baseline manifest: `scripts/check_benchmark_manifest.sh` passes; if benchmark sizes changed intentionally, run `scripts/check_benchmark_manifest.sh --write`
+- Perf guard: `scripts/check_perf_guard.sh` passes; if hardware baseline needs refresh, run `scripts/check_perf_guard.sh --write`
+- Perf guard baseline override (optional): `PERF_GUARD_BASELINE_PATH=... scripts/check_perf_guard.sh`
+- Perf guard per-metric tolerance (optional): `PERF_GUARD_TOLERANCE_MAP="spmv_1d_n5000_p50_ms=0.45,cg_1d_n1000_p95_ms=0.80" scripts/check_perf_guard.sh`
+- Changelog summary: list user-visible API additions, behavior changes, and migration notes
 
 ---
 
@@ -63,6 +87,16 @@ assert!(result.converged);
 println!("Converged in {} iterations, residual = {:.3e}",
     result.iterations, result.final_residual);
 ```
+
+### Solver quick guide
+
+| Scenario | Recommended solver | Recommended preconditioner |
+|----------|--------------------|----------------------------|
+| SPD, well-conditioned | `ConjugateGradient` | `JacobiPrecond` |
+| SPD, large ill-conditioned | `ConjugateGradient` / `Lobpcg` | `AmgPrecond` |
+| General non-symmetric | `Gmres` / `Fgmres` | `IlutPrecond` or `BlockJacobiPrecond` |
+| Robust fallback on hard non-symmetric cases | `Tfqmr` / `Idrs` | `IlutPrecond` |
+| Small-to-medium exact solve | `SparseLu` / `SparseCholesky` / `MultifrontalLu` | `DirectSolverPrecond` |
 
 ### With AMG preconditioning
 

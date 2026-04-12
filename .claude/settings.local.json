@@ -5,7 +5,7 @@
       "Bash(rustup target:*)",
       "Bash(git -C c:/Users/lilu/works/linger diff --stat HEAD)",
       "Bash(git -C c:/Users/lilu/works/linger status --short)",
-      "Bash(git -C c:/Users/lilu/works/linger add src/eigen/ src/lib.rs tests/test_eigen.rs tests/test_eigen_s8_s10.rs docs/eigenvalue-comparison.md)",
+      "Bash(git -C c:/Users/lilu/works/linger add src/eigen/ src/lib.rs tests/test_eigen.rs tests/test_eigen_s8_s10.rs)",
       "Bash(git -C c:/Users/lilu/works/linger commit -m ':*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",

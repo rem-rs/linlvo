@@ -1,8 +1,38 @@
 # 设计与开发文档：linger
 
 **适用对象**：AI Agent 驱动的自动化开发流程
-**版本**：v0.9.0
+**文档版本**：v1.0.0
+**crate 版本**：v0.2.0
 **日期**：2026-04-08
+
+---
+
+## 0. 立即执行检查清单
+
+发布前和大改动合并前，至少完成以下检查：
+
+1. 版本一致性
+  - `Cargo.toml` 的 `version`
+  - `README.md` 的 Current status
+  - 本文档头部 crate 版本
+2. 特性路径回归
+  - `cargo test --all-targets`
+  - `cargo test --no-default-features --lib --tests`
+  - `cargo test --no-default-features --features rayon --lib --tests`
+  - `cargo test --no-default-features --features __native --lib --tests`
+3. wasm 交叉编译
+  - `cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --lib`
+4. 基准构建可用性
+  - `cargo build --benches`
+5. 基线清单一致性
+  - `scripts/check_benchmark_manifest.sh`
+  - 若基准规模有意变更：`scripts/check_benchmark_manifest.sh --write`
+6. 轻量性能守护
+  - `scripts/check_perf_guard.sh`
+  - 若需要调整容差：`PERF_GUARD_TOLERANCE=0.60 scripts/check_perf_guard.sh`
+  - 若需要分指标容差：`PERF_GUARD_TOLERANCE_MAP="spmv_1d_n5000_p50_ms=0.45,cg_1d_n1000_p95_ms=0.80" scripts/check_perf_guard.sh`
+  - 若需指定对比基线：`PERF_GUARD_BASELINE_PATH=... scripts/check_perf_guard.sh`
+  - 若基线机器变化：`scripts/check_perf_guard.sh --write`
 
 ---
 

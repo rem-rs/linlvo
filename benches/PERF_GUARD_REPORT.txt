@@ -1,0 +1,9 @@
+PERF_GUARD_REPORT
+tolerance=0.50
+tolerance_map=
+baseline=/Users/alex/works/fem-rs/vendor/linger/benches/PERF_GUARD_BASELINE.txt
+current=/Users/alex/works/fem-rs/vendor/linger/benches/PERF_GUARD_CURRENT.txt
+metric=spmv_1d_n5000_p50_ms status=ok tolerance=0.50 current_ms=0.008580 baseline_ms=0.009938 limit_ms=0.014907 ratio=0.8634
+metric=spmv_1d_n5000_p95_ms status=ok tolerance=0.50 current_ms=0.010154 baseline_ms=0.010271 limit_ms=0.015407 ratio=0.9886
+metric=cg_1d_n1000_p50_ms status=ok tolerance=0.50 current_ms=3.508161 baseline_ms=3.835599 limit_ms=5.753399 ratio=0.9146
+metric=cg_1d_n1000_p95_ms status=ok tolerance=0.50 current_ms=4.707708 baseline_ms=3.897260 limit_ms=5.845890 ratio=1.2080
