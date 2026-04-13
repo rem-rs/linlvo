@@ -92,17 +92,8 @@ linger/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
 │   │   └── mpi_stub.rs           # MPI trait 接口（暂 stub）
-│   └── ffi/                      # feature = "hypre-ffi" / "petsc-ffi"
-│       ├── mod.rs
-│       ├── hypre/
-│       │   ├── mod.rs
-│       │   ├── sys.rs            # 原始 C 绑定（hypre-sys crate）
-│       │   └── boomeramg.rs      # BoomerAMG 包装
-│       └── petsc/
-│           ├── mod.rs
-│           ├── sys.rs            # 原始 C 绑定（petsc-sys crate）
-│           ├── ksp.rs            # KSP 包装
-│           └── pc.rs             # PC 包装
+│   └── ffi/                      # optional external backends (e.g., "mumps"/"mkl")
+│       └── mod.rs
 ├── tests/
 │   ├── common/
 │   │   └── mod.rs                # 共用测试辅助（MMS 制造解）
@@ -734,11 +725,11 @@ pub fn solve_cg_js(
 
 **Sprint 5 完成时状态**：73 项测试全部通过，`cargo build --benches` 编译通过，wasm32 双模式编译通过。
 
-### Sprint 6（M6，可选）：FFI 后端
-- [ ] `ffi/hypre/` BoomerAMG 绑定
-- [ ] `ffi/petsc/` KSP/PC 绑定
+### Sprint 6（M6，可选）：HYPRE 等价纯 Rust能力 + 外部后端补充
+- [ ] 纯 Rust BoomerAMG 等价路径能力补齐（AIR / AMS / ADS）
+- [ ] 纯 Rust PETSc-equivalent KSP/PC 路径能力补齐
 - [ ] feature flag 集成测试
-- [ ] 对比基准：纯 Rust vs FFI 后端
+- [ ] 对比基准：纯 Rust HYPRE 等价路径 vs 可选外部后端
 
 ### Sprint 7（M7）：特征值求解器基础 ✅ 已完成
 - [x] `eigen/power.rs`（PowerIter）

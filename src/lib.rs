@@ -74,5 +74,6 @@ pub use crate::direct::{
 
 pub use crate::builder::{
     SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering as SolverOrdering,
+    ExternalBackend, BackendCapabilities, EffectiveBackend, BackendSelectionReport,
     solve_auto,
 };

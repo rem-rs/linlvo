@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 default = ["rayon"]
 rayon   = ["dep:rayon"]
 mpi     = []                         # placeholder: dep:rsmpi
+hypre-rs = []                        # pure-Rust HYPRE-equivalent capability track
 hypre-ffi = []                       # placeholder: C-lib binding
 petsc-ffi = []                       # placeholder: C-lib binding
 mumps   = []                         # placeholder: dep:mumps-sys

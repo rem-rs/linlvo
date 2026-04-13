@@ -16,13 +16,13 @@
 - 提供结构清晰的 Krylov 迭代器 + 预条件器组合框架
 - 支持代数多重网格（AMG）等 FEA 特有的高效预条件策略
 - **支持编译为 WebAssembly（wasm32-unknown-unknown）**：核心 solver 层（`core/`、`sparse/`、`iterative/`、`precond/`）可在浏览器或 WASM 运行时中运行，用于 Web 端轻量 FEA 工具或可视化仿真
-- 长期目标：提供可选的 HYPRE/PETSc C 库 FFI 绑定作为后端
+- 长期目标：以纯 Rust 提供 HYPRE/PETSc 等价能力；外部后端仅保留可选补充
 
 ### 1.2 参照系统
 
 | 参照系统 | 主要贡献 | 本库对应实现策略 |
 |---------|---------|----------------|
-| HYPRE   | BoomerAMG、ParaSails、Euclid ILU、结构化网格多重网格 | 纯 Rust 实现等价算法；可选 FFI feature |
+| HYPRE   | BoomerAMG、ParaSails、Euclid ILU、结构化网格多重网格 | 纯 Rust 实现等价算法（默认路径，无外部 hypre FFI 依赖） |
 | PETSc   | KSP（Krylov）、PC（预条件）、Mat/Vec 抽象、并行分布式对象 | trait 体系 + rayon 共享内存并行；MPI 留接口 |
 
 ### 1.3 约束与假设
@@ -31,10 +31,10 @@
 - 初期目标：单节点共享内存并行（rayon）
 - 矩阵规模假设：中等规模（$10^4$–$10^7$ 自由度）；WASM 场景下以小规模（< $10^4$ DOF）为主
 - 数值精度：默认 `f64`，泛型支持 `f32`
-- 禁止 unsafe 的范围：核心 solver trait 层全部 safe；FFI 绑定层隔离在单独 crate
+- 禁止 unsafe 的范围：核心 solver trait 层全部 safe；可选外部后端绑定层隔离在单独 crate
 - **WASM 兼容性约束**：
   - `rayon` 并行在 WASM 目标下自动禁用（`#[cfg(not(target_arch = "wasm32"))]`）
-  - FFI 后端（hypre-ffi、petsc-ffi）在 WASM 目标下不可用
+    - 外部后端绑定（如 `mumps`/`mkl`）在 WASM 目标下不可用
   - 核心算法层禁止依赖系统线程、文件 I/O 等不可移植 API
   - `std::time` 计时在 WASM 下替换为可选 feature 或忽略
 
@@ -52,7 +52,7 @@ linger
 ├── precond/        # 预条件器
 ├── amg/            # 代数多重网格
 ├── parallel/       # 并行基础设施
-└── ffi/            # 可选：HYPRE/PETSc FFI（feature-gated）
+└── ffi/            # 可选：非 hypre 外部后端（如 PETSc，feature-gated）
 ```
 
 ### 2.2 功能清单（对标 HYPRE + PETSc）
@@ -262,8 +262,8 @@ let result = solver.solve(&matrix, &rhs, &mut x)?;
 | crate/库 | Feature 名 | 用途 |
 |---------|-----------|------|
 | `rsmpi` | `mpi` | MPI 分布式并行 |
-| HYPRE C 库 | `hypre-ffi` | BoomerAMG 外部后端 |
-| PETSc C 库 | `petsc-ffi` | KSP/PC 外部后端 |
+| HYPRE 等价能力 | `hypre-rs` | 纯 Rust BoomerAMG/AIR/AMS/ADS 路径 |
+| PETSc 等价能力 | `petsc-rs` | 纯 Rust KSP/PC parity 路径 |
 | MUMPS | `mumps` | 大规模稀疏直接法 |
 | `intel-mkl-src` | `mkl` | MKL 加速 BLAS |
 | `wasm-bindgen` | `wasm` | WASM JS 绑定（暴露 solver API 给 JavaScript） |
@@ -281,8 +281,8 @@ rust-version = "1.80"
 [features]
 default = ["rayon"]
 mpi = ["dep:rsmpi"]
-hypre-ffi = ["dep:hypre-sys"]
-petsc-ffi = ["dep:petsc-sys"]
+hypre-rs = []
+petsc-rs = []
 mumps = ["dep:mumps-sys"]
 mkl = ["dep:intel-mkl-src"]
 wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
@@ -330,4 +330,4 @@ nalgebra-sparse = "0.4"
 | M4 | rayon 并行化 + 性能基准 | ✓ 完成 |
 | M5 | 特征值框架：幂法族 + IRLM + IRAM + KS + LOBPCG | ✓ 完成 (S7–S10) |
 | M6 | ComplexScalar + SVD + QEP + NEP | ✓ 完成 (S11–S12) |
-| M7 | HYPRE/PETSc FFI 可选后端 | 规划中 |
+| M7 | HYPRE/PETSc 等价纯 Rust能力 + 可选外部后端 | 规划中 |
