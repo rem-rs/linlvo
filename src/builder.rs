@@ -56,6 +56,10 @@ pub enum DirectBackend {
     Cholesky,
     /// Multifrontal LU with optional BLR compression (general square).
     Multifrontal,
+    /// MUMPS-compatible direct path (native multifrontal-backed baseline in linger).
+    Mumps,
+    /// MKL-compatible direct path (native multifrontal-backed baseline in linger).
+    Mkl,
 }
 
 /// External backend families coordinated across subprojects.
@@ -343,7 +347,7 @@ impl SolverBuilder {
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
     ) -> Result<(), SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
         match backend {
             DirectBackend::Lu => {
                 let mut s = SparseLu::<T>::new(self.direct_opts());
@@ -360,6 +364,16 @@ impl SolverBuilder {
                     base: self.direct_opts(),
                     ..Default::default()
                 });
+                s.factor(a)?;
+                s.solve(b, x)
+            }
+            DirectBackend::Mumps => {
+                let mut s = MumpsSolver::<T>::with_options(self.direct_opts());
+                s.factor(a)?;
+                s.solve(b, x)
+            }
+            DirectBackend::Mkl => {
+                let mut s = MklSolver::<T>::with_options(self.direct_opts());
                 s.factor(a)?;
                 s.solve(b, x)
             }
@@ -439,7 +453,7 @@ impl SolverBuilder {
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
     ) -> Result<(), SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
         match backend {
             DirectBackend::Lu => {
                 let s = SparseLu::<T>::new(self.direct_opts());
@@ -456,6 +470,16 @@ impl SolverBuilder {
                     base: self.direct_opts(),
                     ..Default::default()
                 });
+                let p = DirectSolverPrecond::new(s, a)?;
+                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+            }
+            DirectBackend::Mumps => {
+                let s = MumpsSolver::<T>::with_options(self.direct_opts());
+                let p = DirectSolverPrecond::new(s, a)?;
+                self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+            }
+            DirectBackend::Mkl => {
+                let s = MklSolver::<T>::with_options(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
                 self.dispatch_krylov(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
@@ -562,16 +586,16 @@ fn resolve_external_backend(
             } else if caps.mumps {
                 BackendSelectionReport {
                     requested,
-                    effective: EffectiveBackend::NativeLinger,
+                    effective: EffectiveBackend::External(ExternalBackend::Mumps),
                     capabilities: caps,
-                    note: "Requested mumps. Feature is enabled; execution remains on native linger until external backend wiring is completed.".to_string(),
+                    note: "Requested mumps. Feature is enabled and MUMPS-compatible direct path is available via SolverBuilder::Direct(DirectBackend::Mumps).".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps, but feature mumps is disabled. Falling back to native linger path.".to_string(),
+                    note: "Requested mumps, but feature mumps is disabled. Falling back to native linger path; MumpsSolver remains available as a native multifrontal-backed baseline.".to_string(),
                 }
             }
         }
@@ -586,16 +610,16 @@ fn resolve_external_backend(
             } else if caps.mkl {
                 BackendSelectionReport {
                     requested,
-                    effective: EffectiveBackend::NativeLinger,
+                    effective: EffectiveBackend::External(ExternalBackend::Mkl),
                     capabilities: caps,
-                    note: "Requested mkl. Feature is enabled; execution remains on native linger until external backend wiring is completed.".to_string(),
+                    note: "Requested mkl. Feature is enabled and MKL-compatible direct path is available via SolverBuilder::Direct(DirectBackend::Mkl).".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl, but feature mkl is disabled. Falling back to native linger path.".to_string(),
+                    note: "Requested mkl, but feature mkl is disabled. Falling back to native linger path; MklSolver remains available as a native multifrontal-backed baseline.".to_string(),
                 }
             }
         }
@@ -643,7 +667,59 @@ mod tests {
         if !rep.capabilities.mumps {
             assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
             assert!(rep.note.contains("mumps"));
+        } else {
+            assert_eq!(rep.effective, EffectiveBackend::External(ExternalBackend::Mumps));
         }
+    }
+
+    #[test]
+    fn direct_backend_mumps_solves_system() {
+        use crate::sparse::CooMatrix;
+
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 2.0);
+        coo.push(0, 1, -1.0);
+        coo.push(1, 0, -1.0);
+        coo.push(1, 1, 2.0);
+        coo.push(1, 2, -1.0);
+        coo.push(2, 1, -1.0);
+        coo.push(2, 2, 2.0);
+        let a = CsrMatrix::from_coo(&coo);
+
+        let b = DenseVec::from_vec(vec![1.0, 0.0, 1.0]);
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Direct(DirectBackend::Mumps))
+            .solve(&a, &b)
+            .unwrap();
+
+        assert!((x[0] - 1.0).abs() < 1e-10);
+        assert!((x[1] - 1.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn direct_backend_mkl_solves_system() {
+        use crate::sparse::CooMatrix;
+
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 2.0);
+        coo.push(0, 1, -1.0);
+        coo.push(1, 0, -1.0);
+        coo.push(1, 1, 2.0);
+        coo.push(1, 2, -1.0);
+        coo.push(2, 1, -1.0);
+        coo.push(2, 2, 2.0);
+        let a = CsrMatrix::from_coo(&coo);
+
+        let b = DenseVec::from_vec(vec![1.0, 0.0, 1.0]);
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Direct(DirectBackend::Mkl))
+            .solve(&a, &b)
+            .unwrap();
+
+        assert!((x[0] - 1.0).abs() < 1e-10);
+        assert!((x[1] - 1.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
     }
 
     #[test]
@@ -654,6 +730,8 @@ mod tests {
         if !rep.capabilities.mkl {
             assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
             assert!(rep.note.contains("mkl"));
+        } else {
+            assert_eq!(rep.effective, EffectiveBackend::External(ExternalBackend::Mkl));
         }
     }
 }
