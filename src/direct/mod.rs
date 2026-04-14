@@ -46,6 +46,8 @@ mod cholesky;
 mod cholesky_sn;
 mod ldlt;
 mod multifrontal;
+mod mumps;
+mod mkl;
 
 pub use lu::SparseLu;
 pub use lu_sn::{SupernodalSparseLu, SNode as SupernodalSNode};
@@ -53,6 +55,8 @@ pub use cholesky::SparseCholesky;
 pub use cholesky_sn::{SupernodalSparseCholesky, SNode as CholeskySNode};
 pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
+pub use mumps::MumpsSolver;
+pub use mkl::MklSolver;
 pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};

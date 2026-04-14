@@ -16,13 +16,13 @@
 - 提供结构清晰的 Krylov 迭代器 + 预条件器组合框架
 - 支持代数多重网格（AMG）等 FEA 特有的高效预条件策略
 - **支持编译为 WebAssembly（wasm32-unknown-unknown）**：核心 solver 层（`core/`、`sparse/`、`iterative/`、`precond/`）可在浏览器或 WASM 运行时中运行，用于 Web 端轻量 FEA 工具或可视化仿真
-- 长期目标：完善纯 Rust 算法栈（AMG/Krylov/直接法）并补齐分布式并行能力（MPI 抽象 + halo 通信 + 分布式粗网格）
+- 长期目标：以纯 Rust 提供 HYPRE/PETSc 等价能力；外部后端仅保留可选补充
 
 ### 1.2 参照系统
 
 | 参照系统 | 主要贡献 | 本库对应实现策略 |
 |---------|---------|----------------|
-| HYPRE   | BoomerAMG、ParaSails、Euclid ILU、结构化网格多重网格 | 纯 Rust 实现等价算法与可观测性指标 |
+| HYPRE   | BoomerAMG、ParaSails、Euclid ILU、结构化网格多重网格 | 纯 Rust 实现等价算法（默认路径，无外部 hypre FFI 依赖） |
 | PETSc   | KSP（Krylov）、PC（预条件）、Mat/Vec 抽象、并行分布式对象 | trait 体系 + rayon 共享内存并行；MPI 留接口 |
 
 ### 1.3 约束与假设
@@ -31,9 +31,10 @@
 - 初期目标：单节点共享内存并行（rayon）
 - 矩阵规模假设：中等规模（$10^4$–$10^7$ 自由度）；WASM 场景下以小规模（< $10^4$ DOF）为主
 - 数值精度：默认 `f64`，泛型支持 `f32`
-- 禁止 unsafe 的范围：核心 solver trait 层全部 safe；性能关键路径优先使用 safe Rust + 基准验证
+- 禁止 unsafe 的范围：核心 solver trait 层全部 safe；可选外部后端绑定层隔离在单独 crate
 - **WASM 兼容性约束**：
   - `rayon` 并行在 WASM 目标下自动禁用（`#[cfg(not(target_arch = "wasm32"))]`）
+        - native direct 兼容入口（如 `mumps`/`mkl`）在 WASM 目标下不可用
   - 核心算法层禁止依赖系统线程、文件 I/O 等不可移植 API
   - `std::time` 计时在 WASM 下替换为可选 feature 或忽略
 
@@ -51,7 +52,8 @@ linger
 ├── precond/        # 预条件器
 ├── amg/            # 代数多重网格
 ├── parallel/       # 并行基础设施
-└── parallel_dist/  # 规划：纯 Rust 分布式并行抽象与实现（MPI halo/分布式 CSR）
+├── parallel_dist/  # 规划：纯 Rust 分布式并行抽象与实现（MPI halo/分布式 CSR）
+└── ffi/            # 可选：兼容入口或未来外部适配层
 ```
 
 ### 2.2 功能清单（对标 HYPRE + PETSc）
@@ -75,7 +77,7 @@ linger
 |--------|------|--------|
 | Sparse LU（KLU 算法） | 适合中等规模、电路/结构问题 | P1 |
 | Sparse Cholesky（supernodal） | 对称正定大规模问题 | P1 |
-| MUMPS FFI | 可选外部库绑定 | P2 |
+| MUMPS-compatible API | 兼容入口名，由 linger 原生 multifrontal 实现承载 | P1 |
 | SuperLU FFI | 可选外部库绑定 | P2 |
 
 #### 2.2.3 Krylov 迭代法（对标 PETSc KSP、HYPRE Krylov）
@@ -261,8 +263,10 @@ let result = solver.solve(&matrix, &rhs, &mut x)?;
 | crate/库 | Feature 名 | 用途 |
 |---------|-----------|------|
 | `rsmpi` | `mpi` | MPI 分布式并行 |
-| MUMPS | `mumps` | 大规模稀疏直接法 |
-| `intel-mkl-src` | `mkl` | MKL 加速 BLAS |
+| HYPRE 等价能力 | `hypre-rs` | 纯 Rust BoomerAMG/AIR/AMS/ADS 路径 |
+| PETSc 等价能力 | `petsc-rs` | 纯 Rust KSP/PC parity 路径 |
+| MUMPS-compatible profile | `mumps` | 兼容 MUMPS 风格接口名，底层仍为 linger 原生直接法 |
+| MKL-compatible profile | `mkl` | 兼容 MKL 风格接口名，底层仍为 linger 原生直接法 |
 | `wasm-bindgen` | `wasm` | WASM JS 绑定（暴露 solver API 给 JavaScript） |
 | `console_error_panic_hook` | `wasm` | WASM 环境下 panic 信息重定向到 `console.error` |
 
@@ -278,8 +282,10 @@ rust-version = "1.80"
 [features]
 default = ["rayon"]
 mpi = ["dep:rsmpi"]
-mumps = ["dep:mumps-sys"]
-mkl = ["dep:intel-mkl-src"]
+hypre-rs = []
+petsc-rs = []
+mumps = []
+mkl = []
 wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]
@@ -325,12 +331,12 @@ nalgebra-sparse = "0.4"
 | M4 | rayon 并行化 + 性能基准 | ✓ 完成 |
 | M5 | 特征值框架：幂法族 + IRLM + IRAM + KS + LOBPCG | ✓ 完成 (S7–S10) |
 | M6 | ComplexScalar + SVD + QEP + NEP | ✓ 完成 (S11–S12) |
-| M7 | 纯 Rust 分布式求解（MPI 抽象、分布式 CSR、halo 通信） | 规划中 |
+| M7 | 纯 Rust 分布式求解 + HYPRE/PETSc 等价能力补齐 | 规划中 |
 
-### 7.1 纯 Rust 路线（替代外部 FFI 后端）
+### 7.1 纯 Rust 主线规划
 
 1. 数据层：实现分布式 CSR（owned/ghost）与 halo 交换抽象，先 trait 化接口，再接 `rsmpi`。
 2. 算法层：保持 Krylov/AMG API 不变，在 `LinearOperator`/`Preconditioner` trait 下增加分布式实现。
-3. AMG 层：优先补齐并行粗化、并行插值构造与 coarse-level 通信路径，持续监控 operator/grid complexity。
+3. AMG 层：补齐 HYPRE-equivalent 路线（AIR / AMS / ADS）与 coarse-level 通信路径，持续监控 operator/grid complexity。
 4. 预条件层：AMS/ADS 作为主线，强化 profile 可观测性，基于参数扫描形成推荐配置。
 5. 工程层：统一基准（强扩展/弱扩展、迭代数、残差、耗时、通信占比），在 CI 中做回归门禁。

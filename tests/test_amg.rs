@@ -7,7 +7,7 @@ mod common;
 
 use linger::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType},
-    iterative::ConjugateGradient,
+    iterative::{ConjugateGradient, Gmres},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverParams, VerboseLevel, Vector,
 };
@@ -248,4 +248,31 @@ fn amg_pcg_gs_smoother() {
 
     assert!(res.converged, "AMG(SGS)-PCG didn't converge; iters={}", res.iterations);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-8);
+}
+
+#[test]
+fn amg_air_gmres_nonsymmetric_convdiff_1d() {
+    // AIR path should be usable on a nonsymmetric system.
+    let n = 120;
+    let (a, x_exact, b) = common::make_nonsymmetric_convdiff::<f64>(n, 8.0);
+    let b_vec = DenseVec::from_vec(b);
+    let mut x = DenseVec::zeros(n);
+
+    let config = AmgConfig {
+        strategy: CoarsenStrategy::Air,
+        coarse_threshold: 4,
+        ..Default::default()
+    };
+    let hier = AmgHierarchy::build(a.clone(), config);
+    let precond = AmgPrecond::new(hier);
+
+    let solver = Gmres::<f64>::new(30);
+    let res = solver
+        .solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-8, 250))
+        .unwrap();
+
+    assert!(res.converged,
+        "AIR-AMG GMRES didn't converge on nonsymmetric convdiff; iters={}, rel={:.3e}",
+        res.iterations, res.final_residual);
+    assert!(solution_error(x.as_slice(), &x_exact) < 1e-6);
 }

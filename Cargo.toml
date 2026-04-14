@@ -10,10 +10,11 @@ license = "MIT OR Apache-2.0"
 default = ["rayon"]
 rayon   = ["dep:rayon"]
 mpi     = []                         # placeholder: dep:rsmpi
+hypre-rs = []                        # pure-Rust HYPRE-equivalent capability track
 hypre-ffi = []                       # placeholder: C-lib binding
 petsc-ffi = []                       # placeholder: C-lib binding
-mumps   = []                         # placeholder: dep:mumps-sys
-mkl     = []                         # placeholder: dep:intel-mkl-src
+mumps   = []                         # compatibility flag for native linger multifrontal MUMPS-style entrypoint
+mkl     = []                         # compatibility flag for native linger multifrontal MKL-style entrypoint
 wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 __native = []                        # internal: gates native-only examples (nalgebra etc.)
 

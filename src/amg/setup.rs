@@ -9,6 +9,7 @@
 //! - **SA-AMG**: smoothed aggregation with smoothed prolongation.
 
 use crate::amg::{
+    air::air_restriction_diag,
     coarsen_agg::{build_aggregates, tentative_prolongation},
     coarsen_rs::rs_coarsen,
     interpolation::{rs_interpolation, smooth_prolongation},
@@ -25,6 +26,8 @@ pub enum CoarsenStrategy {
     RugeStüben,
     /// Smoothed aggregation.
     SmoothedAggregation,
+    /// AIR baseline: RS C/F splitting + diagonal-A_ff ideal-restriction approximation.
+    Air,
 }
 
 /// Configuration for the AMG setup phase.
@@ -128,17 +131,23 @@ impl<T: Scalar> AmgHierarchy<T> {
             // Strong connection graph.
             let s = strong_connections(&a_now, config.theta);
 
-            // Build prolongation P.
-            let p = match &config.strategy {
+            // Build prolongation P and (optionally) custom restriction R.
+            let (p, r_custom) = match &config.strategy {
                 CoarsenStrategy::RugeStüben => {
                     let status = rs_coarsen::<T>(&s);
-                    rs_interpolation(&a_now, &status)
+                    (rs_interpolation(&a_now, &status), None)
                 }
                 CoarsenStrategy::SmoothedAggregation => {
                     let agg_id   = build_aggregates::<T>(&s);
                     let n_coarse = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(1);
                     let p0 = tentative_prolongation::<T>(&agg_id, n_coarse);
-                    smooth_prolongation(&a_now, &p0, config.sa_omega)
+                    (smooth_prolongation(&a_now, &p0, config.sa_omega), None)
+                }
+                CoarsenStrategy::Air => {
+                    let status = rs_coarsen::<T>(&s);
+                    let p = rs_interpolation(&a_now, &status);
+                    let r = air_restriction_diag(&a_now, &status);
+                    (p, Some(r))
                 }
             };
 
@@ -149,8 +158,8 @@ impl<T: Scalar> AmgHierarchy<T> {
                 break;
             }
 
-            // R = Pᵀ
-            let r = p.transpose_csr();
+            // Restriction: default R=Pᵀ, AIR uses custom R.
+            let r = r_custom.unwrap_or_else(|| p.transpose_csr());
 
             // Galerkin coarse-grid operator: Ac = R * A * P
             let a_coarse = r.matmat(&a_now.matmat(&p));

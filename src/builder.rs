@@ -56,6 +56,81 @@ pub enum DirectBackend {
     Cholesky,
     /// Multifrontal LU with optional BLR compression (general square).
     Multifrontal,
+    /// MUMPS-compatible direct path implemented by linger's own multifrontal solver.
+    Mumps,
+    /// MKL-compatible direct path implemented by linger's own multifrontal solver.
+    Mkl,
+}
+
+/// External backend families coordinated across subprojects.
+///
+/// Note: these selections are a contract-level API in C1. Execution remains
+/// on the native linger path until per-backend wiring lands in later stages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalBackend {
+    /// Pure-Rust HYPRE-equivalent track.
+    HypreRs,
+    /// Pure-Rust PETSc-equivalent track (canonical ID: petsc-rs).
+    PetscRs,
+    /// Legacy compatibility name for the PETSc-equivalent track.
+    PetscFfi,
+    /// Compatibility request ID for a MUMPS-shaped direct-solver contract.
+    ///
+    /// linger resolves this to its native multifrontal replacement path rather
+    /// than an external MUMPS dependency.
+    Mumps,
+    /// Compatibility request ID for an MKL-shaped direct-solver contract.
+    ///
+    /// linger resolves this to its native multifrontal replacement path rather
+    /// than an external MKL dependency.
+    Mkl,
+}
+
+/// Compile-time capability snapshot for optional solver backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendCapabilities {
+    pub hypre_rs: bool,
+    pub petsc_ffi: bool,
+    /// Whether the MUMPS-compatibility profile is advertised by this build.
+    pub mumps: bool,
+    pub mkl: bool,
+    pub wasm_target: bool,
+}
+
+impl BackendCapabilities {
+    /// Detect capabilities from compile-time feature flags.
+    pub fn detect() -> Self {
+        Self {
+            hypre_rs: cfg!(feature = "hypre-rs"),
+            petsc_ffi: cfg!(feature = "petsc-ffi"),
+            mumps: cfg!(feature = "mumps"),
+            mkl: cfg!(feature = "mkl"),
+            wasm_target: cfg!(target_arch = "wasm32"),
+        }
+    }
+
+    /// Canonical petsc-rs capability alias for roadmap-aligned naming.
+    pub fn petsc_rs(&self) -> bool {
+        self.petsc_ffi
+    }
+}
+
+/// Effective execution route for the current solve request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectiveBackend {
+    /// Native linger implementation path.
+    NativeLinger,
+    /// Selected external backend path.
+    External(ExternalBackend),
+}
+
+/// Result of external-backend selection and fallback policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendSelectionReport {
+    pub requested: Option<ExternalBackend>,
+    pub effective: EffectiveBackend,
+    pub capabilities: BackendCapabilities,
+    pub note: String,
 }
 
 /// Top-level solver selection.
@@ -178,6 +253,7 @@ pub struct SolverBuilder {
     atol:     f64,
     max_iter: usize,
     verbose:  bool,
+    external_backend: Option<ExternalBackend>,
 }
 
 impl Default for SolverBuilder {
@@ -190,6 +266,7 @@ impl Default for SolverBuilder {
             atol:     0.0,
             max_iter: 1000,
             verbose:  false,
+            external_backend: None,
         }
     }
 }
@@ -266,6 +343,26 @@ impl SolverBuilder {
         self
     }
 
+    /// Request an external backend route.
+    ///
+    /// In C1 this is an interface-freeze API: unsupported or not-yet-wired
+    /// requests deterministically fall back to native linger execution.
+    pub fn external_backend(mut self, b: ExternalBackend) -> Self {
+        self.external_backend = Some(b);
+        self
+    }
+
+    /// Return compile-time backend capability information.
+    pub fn backend_capabilities() -> BackendCapabilities {
+        BackendCapabilities::detect()
+    }
+
+    /// Resolve the currently requested external backend into an effective route.
+    pub fn backend_selection_report(&self) -> BackendSelectionReport {
+        let caps = BackendCapabilities::detect();
+        resolve_external_backend(self.external_backend, caps)
+    }
+
     // ─── solve ────────────────────────────────────────────────────────────────
 
     /// Solve `A x = b`.
@@ -318,6 +415,10 @@ impl SolverBuilder {
         b:  &DenseVec<T>,
         x:  &mut DenseVec<T>,
     ) -> Result<BuilderSolveReport, SolverError> {
+        let backend_report = self.backend_selection_report();
+        if self.verbose && self.external_backend.is_some() {
+            eprintln!("[linger::SolverBuilder] {}", backend_report.note);
+        }
         match &self.method {
             SolveMethod::Direct(backend) => {
                 self.run_direct(backend, a, b, x)?;
@@ -362,7 +463,7 @@ impl SolverBuilder {
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
     ) -> Result<(), SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
         match backend {
             DirectBackend::Lu => {
                 let mut s = SparseLu::<T>::new(self.direct_opts());
@@ -379,6 +480,16 @@ impl SolverBuilder {
                     base: self.direct_opts(),
                     ..Default::default()
                 });
+                s.factor(a)?;
+                s.solve(b, x)
+            }
+            DirectBackend::Mumps => {
+                let mut s = MumpsSolver::<T>::with_options(self.direct_opts());
+                s.factor(a)?;
+                s.solve(b, x)
+            }
+            DirectBackend::Mkl => {
+                let mut s = MklSolver::<T>::with_options(self.direct_opts());
                 s.factor(a)?;
                 s.solve(b, x)
             }
@@ -498,7 +609,7 @@ impl SolverBuilder {
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
     ) -> Result<SolverResult, SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
         match backend {
             DirectBackend::Lu => {
                 let s = SparseLu::<T>::new(self.direct_opts());
@@ -515,6 +626,16 @@ impl SolverBuilder {
                     base: self.direct_opts(),
                     ..Default::default()
                 });
+                let p = DirectSolverPrecond::new(s, a)?;
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+            }
+            DirectBackend::Mumps => {
+                let s = MumpsSolver::<T>::with_options(self.direct_opts());
+                let p = DirectSolverPrecond::new(s, a)?;
+                self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
+            }
+            DirectBackend::Mkl => {
+                let s = MklSolver::<T>::with_options(self.direct_opts());
                 let p = DirectSolverPrecond::new(s, a)?;
                 self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
@@ -597,5 +718,210 @@ fn format_aux_solver_profile(profile: &crate::precond::ams::AuxSolverProfile) ->
         crate::precond::ams::AuxSolverProfile::Ilu0 { n, nnz } => {
             format!("ILU0(n={}, nnz={})", n, nnz)
         }
+    }
+}
+
+fn resolve_external_backend(
+    requested: Option<ExternalBackend>,
+    caps: BackendCapabilities,
+) -> BackendSelectionReport {
+    match requested {
+        None => BackendSelectionReport {
+            requested: None,
+            effective: EffectiveBackend::NativeLinger,
+            capabilities: caps,
+            note: "No external backend requested; using native linger path.".to_string(),
+        },
+        Some(ExternalBackend::HypreRs) => {
+            if caps.hypre_rs {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested hypre-rs. Feature is enabled; C1 keeps execution on native linger while parity wiring is staged in later milestones.".to_string(),
+                }
+            } else {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested hypre-rs, but feature hypre-rs is disabled. Falling back to native linger path.".to_string(),
+                }
+            }
+        }
+        Some(ExternalBackend::PetscRs) | Some(ExternalBackend::PetscFfi) => {
+            if caps.wasm_target {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested petsc-rs on wasm32 target. External solver backends are unsupported on wasm; using native linger path.".to_string(),
+                }
+            } else if caps.petsc_rs() {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested petsc-rs. Capability is enabled; execution remains on native linger until external backend wiring is completed.".to_string(),
+                }
+            } else {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested petsc-rs, but capability is disabled. Falling back to native linger path.".to_string(),
+                }
+            }
+        }
+        Some(ExternalBackend::Mumps) => {
+            if caps.wasm_target {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mumps on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
+                }
+            } else if caps.mumps {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mumps. Feature is enabled; linger provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
+                }
+            } else {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mumps, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MUMPS backend.".to_string(),
+                }
+            }
+        }
+        Some(ExternalBackend::Mkl) => {
+            if caps.wasm_target {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mkl on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
+                }
+            } else if caps.mkl {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mkl. Feature is enabled; linger provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
+                }
+            } else {
+                BackendSelectionReport {
+                    requested,
+                    effective: EffectiveBackend::NativeLinger,
+                    capabilities: caps,
+                    note: "Requested mkl, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MKL backend.".to_string(),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_report_defaults_to_native() {
+        let rep = SolverBuilder::new().backend_selection_report();
+        assert_eq!(rep.requested, None);
+        assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+    }
+
+    #[test]
+    fn backend_report_hypre_rs_with_feature_off_falls_back() {
+        let rep = SolverBuilder::new()
+            .external_backend(ExternalBackend::HypreRs)
+            .backend_selection_report();
+        if !rep.capabilities.hypre_rs {
+            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+            assert!(rep.note.contains("hypre-rs"));
+        }
+    }
+
+    #[test]
+    fn backend_report_petsc_feature_off_falls_back() {
+        let rep = SolverBuilder::new()
+            .external_backend(ExternalBackend::PetscRs)
+            .backend_selection_report();
+        if !rep.capabilities.petsc_rs() {
+            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+            assert!(rep.note.contains("petsc-rs"));
+        }
+    }
+
+    #[test]
+    fn backend_report_mumps_feature_off_falls_back() {
+        let rep = SolverBuilder::new()
+            .external_backend(ExternalBackend::Mumps)
+            .backend_selection_report();
+        assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+        assert!(rep.note.contains("mumps"));
+    }
+
+    #[test]
+    fn direct_backend_mumps_solves_system() {
+        use crate::sparse::CooMatrix;
+
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 2.0);
+        coo.push(0, 1, -1.0);
+        coo.push(1, 0, -1.0);
+        coo.push(1, 1, 2.0);
+        coo.push(1, 2, -1.0);
+        coo.push(2, 1, -1.0);
+        coo.push(2, 2, 2.0);
+        let a = CsrMatrix::from_coo(&coo);
+
+        let b = DenseVec::from_vec(vec![1.0, 0.0, 1.0]);
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Direct(DirectBackend::Mumps))
+            .solve(&a, &b)
+            .unwrap();
+
+        assert!((x[0] - 1.0).abs() < 1e-10);
+        assert!((x[1] - 1.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn direct_backend_mkl_solves_system() {
+        use crate::sparse::CooMatrix;
+
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 2.0);
+        coo.push(0, 1, -1.0);
+        coo.push(1, 0, -1.0);
+        coo.push(1, 1, 2.0);
+        coo.push(1, 2, -1.0);
+        coo.push(2, 1, -1.0);
+        coo.push(2, 2, 2.0);
+        let a = CsrMatrix::from_coo(&coo);
+
+        let b = DenseVec::from_vec(vec![1.0, 0.0, 1.0]);
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Direct(DirectBackend::Mkl))
+            .solve(&a, &b)
+            .unwrap();
+
+        assert!((x[0] - 1.0).abs() < 1e-10);
+        assert!((x[1] - 1.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn backend_report_mkl_feature_off_falls_back() {
+        let rep = SolverBuilder::new()
+            .external_backend(ExternalBackend::Mkl)
+            .backend_selection_report();
+        assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+        assert!(rep.note.contains("mkl"));
     }
 }

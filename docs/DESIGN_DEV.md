@@ -127,6 +127,8 @@ linger/
 │       ├── layout.rs             # 全局/局部 DOF 映射与分区元数据
 │       ├── halo.rs               # halo 打包/交换接口
 │       └── dist_csr.rs           # 分布式 CSR 结构与局部 SpMV
+│   └── ffi/                      # optional compatibility shims / future external adapters
+│       └── mod.rs
 ├── tests/
 │   ├── common/
 │   │   └── mod.rs                # 共用测试辅助（MMS 制造解）
@@ -762,6 +764,14 @@ pub fn solve_cg_js(
 - [ ] `parallel_dist/halo.rs`：邻域通信抽象（先 trait，后接 rsmpi）
 - [ ] `parallel_dist/dist_csr.rs`：分布式 CSR + 局部 SpMV + halo 合并
 - [ ] 对比基准：单机多线程 vs 分布式（弱扩展/强扩展）
+### Sprint 6（M6，可选）：分布式基础 + 兼容后端补充
+- [ ] `parallel_dist/layout.rs`：分区元数据（owned/ghost）
+- [ ] `parallel_dist/halo.rs`：邻域通信抽象（先 trait，后接 rsmpi）
+- [ ] `parallel_dist/dist_csr.rs`：分布式 CSR + 局部 SpMV + halo 合并
+- [ ] 纯 Rust BoomerAMG 等价路径能力补齐（AIR / AMS / ADS）
+- [ ] 纯 Rust PETSc-equivalent KSP/PC 路径能力补齐
+- [ ] feature flag 集成测试
+- [ ] 对比基准：分布式 / 纯 Rust HYPRE 等价路径 / 兼容后端请求路径
 
 ### Sprint 7（M7）：特征值求解器基础 ✅ 已完成
 - [x] `eigen/power.rs`（PowerIter）

@@ -281,6 +281,23 @@ fn amg_hierarchy_rs_levels_decrease_monotonically() {
 }
 
 #[test]
+fn amg_hierarchy_air_levels_decrease_monotonically() {
+    let a = poisson_1d(30);
+    let config = AmgConfig {
+        strategy: CoarsenStrategy::Air,
+        coarse_threshold: 4,
+        ..Default::default()
+    };
+    let hier = AmgHierarchy::build(a, config);
+
+    assert!(hier.levels.len() >= 2, "AIR hierarchy should have at least 2 levels");
+    for (l, pair) in hier.levels.windows(2).enumerate() {
+        assert!(pair[1].a.nrows() < pair[0].a.nrows(),
+            "AIR level {} must be coarser than level {}", l + 1, l);
+    }
+}
+
+#[test]
 fn amg_hierarchy_coarsest_level_below_threshold() {
     let threshold = 5;
     let a = poisson_1d(50);
