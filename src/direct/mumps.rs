@@ -5,18 +5,19 @@
 //! linger's native multifrontal LU core and keeps the same 3-phase direct-solver
 //! lifecycle (`analyze -> factorize -> solve`).
 //!
-//! When an external MUMPS backend is introduced, this struct becomes the single
-//! integration point without API churn to downstream crates.
+//! The intent is compatibility, not an external MUMPS dependency: downstream
+//! crates can keep a MUMPS-shaped entrypoint while executing on linger's own
+//! direct-solver implementation.
 
 use crate::core::{error::SolverError, scalar::Scalar, vector::DenseVec};
 use crate::direct::{DirectOptions, DirectSolver, MultifrontalLu, MultifrontalOptions};
 use crate::sparse::CsrMatrix;
 
-/// MUMPS-facing direct solver wrapper.
+/// MUMPS-facing compatibility wrapper over linger's native multifrontal solver.
 ///
 /// Baseline behavior:
 /// - non-wasm targets: native multifrontal implementation
-/// - wasm targets: unsupported (same as external native backends)
+/// - wasm targets: unsupported (same as other native direct backends)
 pub struct MumpsSolver<T: Scalar> {
     inner: MultifrontalLu<T>,
 }
@@ -39,7 +40,7 @@ impl<T: Scalar> MumpsSolver<T> {
         }
     }
 
-    /// Returns whether this build has a native MUMPS feature flag enabled.
+    /// Returns whether this build advertises the MUMPS-compatibility feature flag.
     pub fn has_mumps_feature() -> bool {
         cfg!(feature = "mumps")
     }
@@ -49,7 +50,7 @@ impl<T: Scalar> DirectSolver<T> for MumpsSolver<T> {
     fn analyze(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError> {
         if cfg!(target_arch = "wasm32") {
             return Err(SolverError::PrecondSetupFailed {
-                reason: "MUMPS direct backend is unavailable on wasm32 targets".to_string(),
+                reason: "MUMPS-compatible native direct path is unavailable on wasm32 targets".to_string(),
             });
         }
         self.inner.analyze(a)

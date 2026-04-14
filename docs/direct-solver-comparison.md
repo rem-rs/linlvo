@@ -506,7 +506,8 @@ mpi          = ["dep:rsmpi"]
 superlu      = ["dep:superlu-sys", "dep:openblas-src"]   # Sprint 14
 strumpack    = []          # Sprint 15（通过 build.rs 链接系统 STRUMPACK）
 mumps        = []          # 保留规划项
-mkl          = ["dep:intel-mkl-src"]
+mumps        = []          # MUMPS-compatible 兼容标志，底层仍走 linger 原生 multifrontal
+mkl          = []          # MKL-compatible 兼容标志，底层仍走 linger 原生 multifrontal
 wasm         = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

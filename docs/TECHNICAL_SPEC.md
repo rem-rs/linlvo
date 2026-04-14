@@ -34,7 +34,7 @@
 - 禁止 unsafe 的范围：核心 solver trait 层全部 safe；可选外部后端绑定层隔离在单独 crate
 - **WASM 兼容性约束**：
   - `rayon` 并行在 WASM 目标下自动禁用（`#[cfg(not(target_arch = "wasm32"))]`）
-    - 外部后端绑定（如 `mumps`/`mkl`）在 WASM 目标下不可用
+        - native direct 兼容入口（如 `mumps`/`mkl`）在 WASM 目标下不可用
   - 核心算法层禁止依赖系统线程、文件 I/O 等不可移植 API
   - `std::time` 计时在 WASM 下替换为可选 feature 或忽略
 
@@ -76,7 +76,7 @@ linger
 |--------|------|--------|
 | Sparse LU（KLU 算法） | 适合中等规模、电路/结构问题 | P1 |
 | Sparse Cholesky（supernodal） | 对称正定大规模问题 | P1 |
-| MUMPS FFI | 可选外部库绑定 | P2 |
+| MUMPS-compatible API | 兼容入口名，由 linger 原生 multifrontal 实现承载 | P1 |
 | SuperLU FFI | 可选外部库绑定 | P2 |
 
 #### 2.2.3 Krylov 迭代法（对标 PETSc KSP、HYPRE Krylov）
@@ -264,8 +264,8 @@ let result = solver.solve(&matrix, &rhs, &mut x)?;
 | `rsmpi` | `mpi` | MPI 分布式并行 |
 | HYPRE 等价能力 | `hypre-rs` | 纯 Rust BoomerAMG/AIR/AMS/ADS 路径 |
 | PETSc 等价能力 | `petsc-rs` | 纯 Rust KSP/PC parity 路径 |
-| MUMPS | `mumps` | 大规模稀疏直接法 |
-| `intel-mkl-src` | `mkl` | MKL 加速 BLAS |
+| MUMPS-compatible profile | `mumps` | 兼容 MUMPS 风格接口名，底层仍为 linger 原生直接法 |
+| MKL-compatible profile | `mkl` | 兼容 MKL 风格接口名，底层仍为 linger 原生直接法 |
 | `wasm-bindgen` | `wasm` | WASM JS 绑定（暴露 solver API 给 JavaScript） |
 | `console_error_panic_hook` | `wasm` | WASM 环境下 panic 信息重定向到 `console.error` |
 
@@ -283,8 +283,8 @@ default = ["rayon"]
 mpi = ["dep:rsmpi"]
 hypre-rs = []
 petsc-rs = []
-mumps = ["dep:mumps-sys"]
-mkl = ["dep:intel-mkl-src"]
+mumps = []
+mkl = []
 wasm = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]

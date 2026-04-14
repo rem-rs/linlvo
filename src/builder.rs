@@ -56,9 +56,9 @@ pub enum DirectBackend {
     Cholesky,
     /// Multifrontal LU with optional BLR compression (general square).
     Multifrontal,
-    /// MUMPS-compatible direct path (native multifrontal-backed baseline in linger).
+    /// MUMPS-compatible direct path implemented by linger's own multifrontal solver.
     Mumps,
-    /// MKL-compatible direct path (native multifrontal-backed baseline in linger).
+    /// MKL-compatible direct path implemented by linger's own multifrontal solver.
     Mkl,
 }
 
@@ -74,9 +74,15 @@ pub enum ExternalBackend {
     PetscRs,
     /// Legacy compatibility name for the PETSc-equivalent track.
     PetscFfi,
-    /// Optional MUMPS direct-solver backend.
+    /// Compatibility request ID for a MUMPS-shaped direct-solver contract.
+    ///
+    /// linger resolves this to its native multifrontal replacement path rather
+    /// than an external MUMPS dependency.
     Mumps,
-    /// Optional MKL backend.
+    /// Compatibility request ID for an MKL-shaped direct-solver contract.
+    ///
+    /// linger resolves this to its native multifrontal replacement path rather
+    /// than an external MKL dependency.
     Mkl,
 }
 
@@ -85,6 +91,7 @@ pub enum ExternalBackend {
 pub struct BackendCapabilities {
     pub hypre_rs: bool,
     pub petsc_ffi: bool,
+    /// Whether the MUMPS-compatibility profile is advertised by this build.
     pub mumps: bool,
     pub mkl: bool,
     pub wasm_target: bool,
@@ -581,21 +588,21 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps on wasm32 target. External FFI backends are unsupported on wasm; using native linger path.".to_string(),
+                    note: "Requested mumps on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
                 }
             } else if caps.mumps {
                 BackendSelectionReport {
                     requested,
-                    effective: EffectiveBackend::External(ExternalBackend::Mumps),
+                    effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps. Feature is enabled and MUMPS-compatible direct path is available via SolverBuilder::Direct(DirectBackend::Mumps).".to_string(),
+                    note: "Requested mumps. Feature is enabled; linger provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps, but feature mumps is disabled. Falling back to native linger path; MumpsSolver remains available as a native multifrontal-backed baseline.".to_string(),
+                    note: "Requested mumps, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MUMPS backend.".to_string(),
                 }
             }
         }
@@ -605,21 +612,21 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl on wasm32 target. External FFI backends are unsupported on wasm; using native linger path.".to_string(),
+                    note: "Requested mkl on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
                 }
             } else if caps.mkl {
                 BackendSelectionReport {
                     requested,
-                    effective: EffectiveBackend::External(ExternalBackend::Mkl),
+                    effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl. Feature is enabled and MKL-compatible direct path is available via SolverBuilder::Direct(DirectBackend::Mkl).".to_string(),
+                    note: "Requested mkl. Feature is enabled; linger provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl, but feature mkl is disabled. Falling back to native linger path; MklSolver remains available as a native multifrontal-backed baseline.".to_string(),
+                    note: "Requested mkl, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MKL backend.".to_string(),
                 }
             }
         }
@@ -664,12 +671,8 @@ mod tests {
         let rep = SolverBuilder::new()
             .external_backend(ExternalBackend::Mumps)
             .backend_selection_report();
-        if !rep.capabilities.mumps {
-            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
-            assert!(rep.note.contains("mumps"));
-        } else {
-            assert_eq!(rep.effective, EffectiveBackend::External(ExternalBackend::Mumps));
-        }
+        assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+        assert!(rep.note.contains("mumps"));
     }
 
     #[test]
@@ -727,11 +730,7 @@ mod tests {
         let rep = SolverBuilder::new()
             .external_backend(ExternalBackend::Mkl)
             .backend_selection_report();
-        if !rep.capabilities.mkl {
-            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
-            assert!(rep.note.contains("mkl"));
-        } else {
-            assert_eq!(rep.effective, EffectiveBackend::External(ExternalBackend::Mkl));
-        }
+        assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
+        assert!(rep.note.contains("mkl"));
     }
 }

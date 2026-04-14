@@ -12,13 +12,13 @@ Provide production-grade solver integration with pure-Rust default paths:
 
 - `hypre-rs` parity track (pure Rust, no external hypre FFI dependency)
 - `petsc-rs` parity track (pure Rust, no external PETSc FFI dependency)
-- `mumps` (optional)
-- `mkl` (optional, integrated in `reed` and consumed through `linger` contract)
+- `mkl` compatibility profile remains native to `linger` and is not an external-backend delivery target
+- `mumps` compatibility profile remains native to `linger` and is not an external-backend delivery target
 
 Ownership split:
 
-- `linger`: backend contracts + pure-Rust solver cores (`hypre-rs`, `petsc-rs`)
-- `reed`: optional backend landing paths (`mkl`) and GPU execution path
+- `linger`: backend contracts + pure-Rust solver cores (`hypre-rs`, `petsc-rs`, native `mumps`-compatible direct path)
+- `reed`: GPU execution path and operator/export integration with `linger`
 - `jsmpi`: wasm/browser runtime constraints and fallback reporting
 
 ## 1. Common Integration Requirements
@@ -51,7 +51,7 @@ Ownership split:
 - [ ] Optional eigen path handoff (SLEPc) reserved extension point
 - [ ] No dependency on external PETSc C library in default or advanced paths
 
-## 4. MUMPS (`mumps`) Requirements
+## 4. Native Direct-Compatibility Requirements (`mumps` / `mkl`)
 
 - [ ] Sparse factorization bridge from `linger` matrix storage
 - [ ] Numeric factor reuse across solves
@@ -59,24 +59,16 @@ Ownership split:
 - [ ] Ordering and pivoting controls exposed in builder config
 - [ ] Deterministic cleanup and resource release
 
-## 5. MKL (`mkl`) Requirements (`reed`-led)
-
-- [ ] Pardiso wrapper lifecycle
-- [ ] Reordering, phase control, and thread control options
-- [ ] Factor reuse and multi-RHS support
-- [ ] Clear fallback path when MKL runtime is unavailable
-
 ## 6. Delivery Order
 
 1. `hypre-rs` minimal BoomerAMG-equivalent path
 2. `hypre-rs` AMS/ADS and AIR options
-3. `mumps` direct-solver path
-4. `mkl` direct-solver path
-5. `petsc-rs` KSP/PC parity path
+3. native direct-compatibility hardening (`mumps` / `mkl`)
+4. `petsc-rs` KSP/PC parity path
 
 ## 7. Done Criteria
 
-- [ ] Each backend has at least one integration test solving Poisson-like SPD system
+- [ ] Each external backend has at least one integration test solving Poisson-like SPD system
 - [ ] `fem-rs` can select backend through `linger` without app-level API changes
 - [ ] Disabled feature path compiles cleanly and reports clear runtime errors
 
@@ -100,25 +92,24 @@ Exit criteria:
 
 ### M2 - HYPRE-Equivalent Advanced + Direct Solvers
 
-Target: cover production options and first external direct backend.
+Target: cover production options and native direct-compatibility hardening.
 
 - [ ] Expose BoomerAMG option set (coarsening/interp/relax/cycle)
 - [ ] Add AIR option path for non-symmetric systems
 - [ ] Add AMS wrapper path
 - [ ] Add ADS wrapper path
-- [ ] Implement `mumps` factorization/solve/reuse path
-- [ ] Add multi-RHS tests for `mumps`
+- [ ] Harden native `mumps`/`mkl`-compatible paths in docs/examples as replacement contracts
+- [ ] Keep builder/runtime reporting aligned with native replacement semantics
 
 Exit criteria:
 
 - [ ] HYPRE-equivalent advanced options validated by integration tests
-- [ ] MUMPS backend can be selected from `SolverBuilder`
+- [ ] Native `mumps`/`mkl`-compatible replacement paths remain selectable from `SolverBuilder`
 
 ### M3 - MKL + PETSc-Equivalent + CI Matrix
 
-Target: complete backend portfolio and operationalize in CI.
+Target: complete PETSc-equivalent path and operationalize compatibility matrix in CI.
 
-- [ ] Implement MKL Pardiso wrapper in `reed` (phase control, threading, reuse)
 - [ ] Implement PETSc-equivalent KSP/PC path (AIJ-equivalent + shell mode) in pure Rust
 - [ ] Add backend capability flags reporting (`supports_multi_rhs`, `supports_nonsym_amg`, etc.)
 - [ ] Add CI jobs for feature combinations with backend smoke tests
@@ -131,7 +122,7 @@ Exit criteria:
 
 ## 9. Implementation Notes
 
-- Prefer introducing one backend at a time behind a stable builder-facing API.
+- Prefer introducing one external backend at a time behind a stable builder-facing API.
 - Keep pure-Rust default behavior unchanged when optional FFI features are disabled.
 - Any backend-specific matrix conversion should be isolated in dedicated bridge modules.
 
@@ -144,7 +135,7 @@ integration points in `reed` and `jsmpi` are satisfied.
 
 - [ ] Provide stable operator/matrix export bridge from `reed` objects into `linger` backend selection path
 - [ ] Preserve current backend resource naming and selection behavior for CPU and future GPU paths
-- [ ] Own `mkl` backend integration and runtime capability reporting in reed-side selection path
+- [ ] Preserve `mkl` compatibility resource naming while routing to linger-native reporting
 - [ ] Own GPU backend implementation milestones and publish capability matrix consumed by linger contract
 - [ ] Add at least one `reed` integration test that selects an external solver backend via `linger`
 

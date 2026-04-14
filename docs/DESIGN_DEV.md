@@ -92,7 +92,7 @@ linger/
 │   │   ├── mod.rs
 │   │   ├── rayon_ops.rs          # rayon 并行 SpMV、向量操作
 │   │   └── mpi_stub.rs           # MPI trait 接口（暂 stub）
-│   └── ffi/                      # optional external backends (e.g., "mumps"/"mkl")
+│   └── ffi/                      # optional external backends / compatibility shims (e.g., "mkl")
 │       └── mod.rs
 ├── tests/
 │   ├── common/

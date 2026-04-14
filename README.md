@@ -13,7 +13,7 @@ Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich precond
 | `rayon` | **on** | Parallel SpMV, AXPY, dot, norm2, and AMG setup phases via Rayon |
 | `wasm` | off | Enables `wasm-bindgen` JS interface (`WasmCsrMatrix`, `WasmCgSolver`, `WasmGmresSolver`) |
 | `mpi` | off | Placeholder for distributed-memory support (not yet implemented) |
-| `hypre-rs` / `petsc-rs` / `mumps` / `mkl` | off | `hypre-rs` + `petsc-rs`: pure-Rust capability tracks in linger; `mumps`/`mkl` remain optional external backends |
+| `hypre-rs` / `petsc-rs` / `mumps` / `mkl` | off | `hypre-rs` + `petsc-rs`: pure-Rust capability tracks in linger; `mumps` / `mkl`: compatibility flags for linger's own multifrontal replacement paths |
 
 External solver capability checklist (owned by `linger`):
 

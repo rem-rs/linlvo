@@ -5,18 +5,19 @@
 //! linger's native multifrontal LU core and keeps the same 3-phase direct-solver
 //! lifecycle (`analyze -> factorize -> solve`).
 //!
-//! When an external MKL backend is introduced, this struct becomes the single
-//! integration point without API churn to downstream crates.
+//! The intent is compatibility, not an external MKL dependency: downstream
+//! crates can keep an MKL-shaped entrypoint while executing on linger's own
+//! direct-solver implementation.
 
 use crate::core::{error::SolverError, scalar::Scalar, vector::DenseVec};
 use crate::direct::{DirectOptions, DirectSolver, MultifrontalLu, MultifrontalOptions};
 use crate::sparse::CsrMatrix;
 
-/// MKL-facing direct solver wrapper.
+/// MKL-facing compatibility wrapper over linger's native multifrontal solver.
 ///
 /// Baseline behavior:
 /// - non-wasm targets: native multifrontal implementation
-/// - wasm targets: unsupported (same as external native backends)
+/// - wasm targets: unsupported (same as other native direct backends)
 pub struct MklSolver<T: Scalar> {
     inner: MultifrontalLu<T>,
 }
@@ -39,7 +40,7 @@ impl<T: Scalar> MklSolver<T> {
         }
     }
 
-    /// Returns whether this build has a native MKL feature flag enabled.
+    /// Returns whether this build advertises the MKL-compatibility feature flag.
     pub fn has_mkl_feature() -> bool {
         cfg!(feature = "mkl")
     }
@@ -49,7 +50,7 @@ impl<T: Scalar> DirectSolver<T> for MklSolver<T> {
     fn analyze(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError> {
         if cfg!(target_arch = "wasm32") {
             return Err(SolverError::PrecondSetupFailed {
-                reason: "MKL direct backend is unavailable on wasm32 targets".to_string(),
+                reason: "MKL-compatible native direct path is unavailable on wasm32 targets".to_string(),
             });
         }
         self.inner.analyze(a)
