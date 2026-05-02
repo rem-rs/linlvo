@@ -184,8 +184,8 @@ impl<T: Scalar> AmsPrecond<T> {
     ///
     /// * `a`      — Edge stiffness matrix, square `n_edges × n_edges`.
     /// * `g`      — Discrete gradient matrix, `n_edges × n_nodes`.
-    ///              Each row has exactly two non-zeros: −1 at the tail node
-    ///              and +1 at the head node (standard FE convention).
+    ///   Each row has exactly two non-zeros: −1 at the tail node
+    ///   and +1 at the head node (standard FE convention).
     /// * `config` — Smoother weight and coarse-solver choice.
     ///
     /// # Errors
@@ -309,6 +309,7 @@ impl<T: Scalar> Preconditioner for AmsPrecond<T> {
 /// Build a boxed coarse-space solver from the given operator and strategy.
 ///
 /// `pub(super)` so that `ads.rs` can call it without duplicating the match.
+#[allow(clippy::type_complexity)]
 pub(super) fn build_aux_solver<T: Scalar>(
     mat:    CsrMatrix<T>,
     solver: &AuxSpaceSolver,

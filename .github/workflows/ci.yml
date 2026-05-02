@@ -88,11 +88,27 @@ jobs:
       - name: prepare perf baseline from main
         if: github.event_name == 'pull_request'
         run: |
-          git fetch --depth=1 origin main
-          if git show origin/main:benches/PERF_GUARD_BASELINE.txt > benches/PERF_GUARD_BASELINE_MAIN.txt 2>/dev/null; then
-            echo "PERF_GUARD_BASELINE_PATH=$PWD/benches/PERF_GUARD_BASELINE_MAIN.txt" >> "$GITHUB_ENV"
+          # Prefer the CI-generated artifact baseline (more reproducible than
+          # the in-repo file which may lag behind main).
+          # Falls back to git-fetching the in-repo baseline from origin/main.
+          echo "Trying to download perf-guard-baseline-main artifact via gh CLI..."
+          if command -v gh &>/dev/null && gh artifact download perf-guard-baseline-main \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir benches/artifact_baseline 2>/dev/null; then
+            ARTIFACT_FILE="$(find benches/artifact_baseline -name 'PERF_GUARD_BASELINE.txt' | head -n1)"
+            if [[ -n "$ARTIFACT_FILE" ]]; then
+              cp "$ARTIFACT_FILE" benches/PERF_GUARD_BASELINE_MAIN.txt
+              echo "PERF_GUARD_BASELINE_PATH=$PWD/benches/PERF_GUARD_BASELINE_MAIN.txt" >> "$GITHUB_ENV"
+              echo "Using CI artifact baseline: $ARTIFACT_FILE"
+            fi
           else
-            echo "main branch baseline not found; fallback to repository baseline"
+            git fetch --depth=1 origin main
+            if git show origin/main:benches/PERF_GUARD_BASELINE.txt > benches/PERF_GUARD_BASELINE_MAIN.txt 2>/dev/null; then
+              echo "PERF_GUARD_BASELINE_PATH=$PWD/benches/PERF_GUARD_BASELINE_MAIN.txt" >> "$GITHUB_ENV"
+              echo "Using git-sourced in-repo baseline from origin/main"
+            else
+              echo "main branch baseline not found; fallback to repository baseline"
+            fi
           fi
 
       - name: perf guard (warning only)
@@ -149,3 +165,41 @@ jobs:
           --no-default-features
           --features wasm
           --lib
+
+  # ── Perf baseline update (runs only on push to main) ───────────────────────
+  # Generates a fresh perf-guard baseline from the current main HEAD and uploads
+  # it as a GitHub Actions artifact named "perf-guard-baseline-main".
+  # Pull-request checks (bench-build job) will download this artifact as the
+  # reference baseline instead of relying on the file checked in to the repo,
+  # giving CI-to-CI comparison that accounts for host variance over time.
+  perf-baseline-update:
+    name: Update perf baseline (main)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-perf-baseline-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-perf-baseline-
+
+      - name: Generate perf baseline
+        run: cargo run --release --example perf_guard --quiet > benches/PERF_GUARD_BASELINE.txt
+
+      - name: Upload perf baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-guard-baseline-main
+          path: benches/PERF_GUARD_BASELINE.txt
+          # Keep for 90 days so PRs opened months later still have a reference.
+          retention-days: 90

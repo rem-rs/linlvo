@@ -35,7 +35,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// Flexible GMRES(m) with restart.
 pub struct Fgmres<T> {
@@ -56,11 +55,10 @@ impl<T: Scalar> Default for Fgmres<T> {
 
 impl<T: Scalar> KrylovSolver for Fgmres<T> {
     type Vector   = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op:      &CsrMatrix<T>,
+        op:      &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,

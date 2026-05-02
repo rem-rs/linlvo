@@ -80,15 +80,19 @@ pub struct SolverResult {
 /// ```
 pub trait KrylovSolver: Send + Sync {
     type Vector: Vector;
-    type Operator: LinearOperator<Vector = Self::Vector>;
 
     /// Solve  `A · x = b`  with optional preconditioning.
     ///
-    /// * `op`     — the linear operator A
+    /// `op` accepts any [`LinearOperator`] — a concrete `CsrMatrix`, a
+    /// matrix-free operator, or a `DistCsrMatrix`.  Pass a reference to any
+    /// type that implements [`LinearOperator<Vector = Self::Vector>`]; Rust
+    /// will coerce it to `&dyn LinearOperator` automatically.
+    ///
+    /// * `op`      — the linear operator A
     /// * `precond` — optional preconditioner M⁻¹
-    /// * `b`      — right-hand side
-    /// * `x`      — initial guess on entry, solution on exit
-    /// * `params` — convergence and verbosity settings
+    /// * `b`       — right-hand side
+    /// * `x`       — initial guess on entry, solution on exit
+    /// * `params`  — convergence and verbosity settings
     ///
     /// # Errors
     /// Returns [`SolverError::ConvergenceFailed`] if `max_iter` is reached
@@ -96,7 +100,7 @@ pub trait KrylovSolver: Send + Sync {
     /// iteration cannot continue.
     fn solve(
         &self,
-        op: &Self::Operator,
+        op: &dyn LinearOperator<Vector = Self::Vector>,
         precond: Option<&dyn Preconditioner<Vector = Self::Vector>>,
         b: &Self::Vector,
         x: &mut Self::Vector,

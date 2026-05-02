@@ -2,7 +2,6 @@
 
 use linger::{
     iterative::Tfqmr,
-    iterative::BiCgStab,
     precond::{JacobiPrecond, Ilu0Precond},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,

@@ -148,7 +148,7 @@ fn dense_lu_factor<T: Scalar>(
             block[i * bs + k] = factor; // store multiplier in L
             for j in (k + 1)..bs {
                 let u_kj = block[k * bs + j];
-                block[i * bs + j] = block[i * bs + j] - factor * u_kj;
+                block[i * bs + j] -= factor * u_kj;
             }
         }
     }
@@ -159,29 +159,29 @@ fn dense_lu_factor<T: Scalar>(
 /// Overwrites `rhs` with the solution.
 fn dense_lu_solve<T: Scalar>(block: &[T], pivots: &[usize], rhs: &mut [T], bs: usize) {
     // Apply row permutations (forward pass).
-    for k in 0..bs {
-        rhs.swap(k, pivots[k]);
+    for (k, &piv) in pivots[..bs].iter().enumerate() {
+        rhs.swap(k, piv);
     }
     // Forward substitution: L * y = rhs (L has 1s on diagonal, stored below).
     for i in 1..bs {
         for j in 0..i {
             let lij = block[i * bs + j];
-            rhs[i] = rhs[i] - lij * rhs[j];
+            rhs[i] -= lij * rhs[j];
         }
     }
     // Back substitution: U * x = y.
     for i in (0..bs).rev() {
         for j in (i + 1)..bs {
             let uij = block[i * bs + j];
-            rhs[i] = rhs[i] - uij * rhs[j];
+            rhs[i] -= uij * rhs[j];
         }
-        rhs[i] = rhs[i] / block[i * bs + i];
+        rhs[i] /= block[i * bs + i];
     }
 }
 
 #[inline]
 fn dense_lu_solve_1x1<T: Scalar>(block: &[T], rhs: &mut [T]) {
-    rhs[0] = rhs[0] / block[0];
+    rhs[0] /= block[0];
 }
 
 #[inline]

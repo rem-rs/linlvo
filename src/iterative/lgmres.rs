@@ -49,7 +49,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// LGMRES with inner restart dimension `m` and augmentation depth `k`.
 pub struct Lgmres<T> {
@@ -72,11 +71,10 @@ impl<T: Scalar> Default for Lgmres<T> {
 
 impl<T: Scalar> KrylovSolver for Lgmres<T> {
     type Vector   = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op:      &CsrMatrix<T>,
+        op:      &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b:       &DenseVec<T>,
         x:       &mut DenseVec<T>,

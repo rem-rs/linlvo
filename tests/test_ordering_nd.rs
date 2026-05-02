@@ -65,6 +65,7 @@ fn relative_residual(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -
     if nb < 1e-300 { r } else { r / nb }
 }
 
+#[allow(dead_code)]
 fn nnz_lower_cholesky(a: &CsrMatrix<f64>, ordering: OrderingMethod) -> usize {
     let mut solver = SparseCholesky::<f64>::new(DirectOptions {
         ordering, ..Default::default()

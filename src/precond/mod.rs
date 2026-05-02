@@ -10,6 +10,7 @@ pub mod composite;
 pub mod block_jacobi;
 pub mod ams;
 pub mod ads;
+pub mod fieldsplit;
 
 pub use jacobi::JacobiPrecond;
 pub use sor::{SorPrecond, SsorPrecond};
@@ -23,3 +24,4 @@ pub use composite::{AdditivePrecond, MultiplicativePrecond};
 pub use block_jacobi::BlockJacobiPrecond;
 pub use ams::{AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile};
 pub use ads::{AdsPrecond, AdsConfig, AdsProfile};
+pub use fieldsplit::{FieldSplitPrecond, SplitMode};

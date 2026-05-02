@@ -86,7 +86,7 @@ fn subspace_iter_diagonal_top3() {
     params.max_iter = 2000;
     let res = SubspaceIter::default().solve(&a, &params).unwrap();
     assert_eq!(res.converged, 3);
-    let mut got: Vec<f64> = res.eigenvalues.iter().map(|&v| v).collect();
+    let mut got: Vec<f64> = res.eigenvalues.to_vec();
     got.sort_by(|a, b| b.partial_cmp(a).unwrap());
     let expected = [5.0, 4.0, 3.0];
     for (g, e) in got.iter().zip(&expected) {
@@ -102,7 +102,7 @@ fn subspace_iter_sym2x2_both() {
     params.max_iter = 5000;
     let res = SubspaceIter::default().solve(&a, &params).unwrap();
     assert_eq!(res.converged, 2);
-    let mut got: Vec<f64> = res.eigenvalues.iter().map(|&v| v).collect();
+    let mut got: Vec<f64> = res.eigenvalues.to_vec();
     got.sort_by(|a, b| b.partial_cmp(a).unwrap());
     assert!((got[0] - 3.0).abs() < 1e-6, "got {}", got[0]);
     assert!((got[1] - 1.0).abs() < 1e-6, "got {}", got[1]);

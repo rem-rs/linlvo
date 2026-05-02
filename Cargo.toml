@@ -9,9 +9,10 @@ license = "MIT OR Apache-2.0"
 [features]
 default = ["rayon"]
 rayon   = ["dep:rayon"]
-mpi     = []                         # placeholder: dep:rsmpi
+mpi     = ["dep:mpi"]                # distributed memory via Open MPI (rsmpi 0.8)
 hypre-rs = []                        # pure-Rust HYPRE-equivalent capability track
 hypre-ffi = []                       # placeholder: C-lib binding
+petsc-rs  = []                       # pure-Rust PETSc KSP-compatible interface
 petsc-ffi = []                       # placeholder: C-lib binding
 mumps   = []                         # compatibility flag for native linger multifrontal MUMPS-style entrypoint
 mkl     = []                         # compatibility flag for native linger multifrontal MKL-style entrypoint
@@ -23,6 +24,7 @@ num-traits  = "0.2"
 num-complex = "0.4"
 thiserror   = "2"
 rayon       = { version = "1.10", optional = true }
+mpi         = { version = "0.8", optional = true }
 
 # WASM optional deps
 wasm-bindgen            = { version = "0.2", optional = true }
@@ -60,3 +62,7 @@ harness = false
 [[example]]
 name = "ex04_nalgebra"
 required-features = ["__native"]
+
+[[example]]
+name = "ex_mpi_dist_cg"
+required-features = ["mpi"]

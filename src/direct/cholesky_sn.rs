@@ -450,7 +450,7 @@ fn backward_solve_lt<T: Scalar>(
         if d.abs() < T::machine_epsilon() * T::from_f64(1e6) {
             return Err(SolverError::SingularMatrix { row: i });
         }
-        xs[i] = xs[i] / d;
+        xs[i] /= d;
 
         // Update: xs[j] -= L[i,j] * xs[i]  for j < i (L is lower, so L[i,j] with j<i)
         for k in row_ptr[i]..row_ptr[i + 1] {

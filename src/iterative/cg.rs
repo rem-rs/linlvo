@@ -33,7 +33,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// Reusable scratch buffers for repeated CG solves with the same vector length.
 pub struct CgWorkspace<T: Scalar> {
@@ -84,7 +83,7 @@ impl<T: Scalar> ConjugateGradient<T> {
     /// Solve `A x = b` using caller-owned scratch buffers to amortize allocations.
     pub fn solve_with_workspace(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
@@ -256,11 +255,10 @@ impl<T: Scalar> Default for ConjugateGradient<T> {
 
 impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
     type Vector = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,

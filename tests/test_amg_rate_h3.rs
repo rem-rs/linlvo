@@ -3,7 +3,7 @@
 use linger::{
     amg::{AmgConfig, AmgHierarchy, CoarsenStrategy, CycleType},
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, Vector, LinearOperator,
+    DenseVec, LinearOperator,
 };
 
 fn laplacian_1d(n: usize) -> CsrMatrix<f64> {
@@ -96,7 +96,7 @@ fn h3_rate_w_cycle() {
         hier.apply_cycle(&b, &mut x, CycleType::W);
     }
     let rate = hier.convergence_rate();
-    assert!(rate.is_finite() && rate >= 0.0 && rate < 1.0,
+    assert!(rate.is_finite() && (0.0..1.0).contains(&rate),
         "W-cycle rate after 5 cycles = {rate:.4}");
 }
 

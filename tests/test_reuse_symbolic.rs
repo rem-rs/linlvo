@@ -57,7 +57,7 @@ fn solve_check(mut solver: impl DirectSolver<f64>, a: &CsrMatrix<f64>, b: &Dense
 fn cholesky_reuse_symbolic_same_size_skips_ordering() {
     let n = 40;
     let a = spd_laplacian(n);
-    let b = DenseVec::from_vec(vec![1.0_f64; n]);
+    let _b = DenseVec::from_vec(vec![1.0_f64; n]);
 
     let opts = DirectOptions {
         reuse_symbolic: true,

@@ -212,7 +212,7 @@ impl<T: Scalar> Preconditioner for IldltPrecond<T> {
 
         // ── Step 1: Forward solve L z = x (unit lower triangular) ────────────
         // z[i] = x[i] - sum_{j < i, L[i,j] != 0} L[i,j] * z[j]
-        for i in 0..n { ys[i] = xs[i]; }
+        ys.copy_from_slice(xs);
         for i in 0..n {
             for pos in self.row_ptr[i]..self.row_ptr[i + 1] {
                 let j = self.col_idx[pos]; // j < i (lower triangle)

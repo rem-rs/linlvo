@@ -2,11 +2,12 @@
 //!
 //! Verifies that `symbolic_cholesky` produces exactly the same non-zero
 //! pattern as the numeric `SparseCholesky` factorization.
+#![allow(clippy::needless_range_loop)]
 
 use linger::{
     direct::{
         DirectSolver, DirectOptions, SparseCholesky,
-        symbolic_cholesky, SymbolicCholesky,
+        symbolic_cholesky,
         ordering::OrderingMethod,
     },
     direct::etree::elimination_tree,
@@ -42,8 +43,8 @@ fn laplacian_2d(n: usize) -> CsrMatrix<f64> {
 
 /// Extract the non-zero pattern of L from a factored SparseCholesky solver.
 /// Returns col_count[j] = nnz in column j of L (including diagonal).
+#[allow(dead_code)]
 fn numeric_col_counts(a: &CsrMatrix<f64>) -> Vec<usize> {
-    use linger::core::operator::LinearOperator;
     let n = a.nrows();
     let mut solver = SparseCholesky::<f64>::new(DirectOptions {
         ordering: OrderingMethod::Natural,

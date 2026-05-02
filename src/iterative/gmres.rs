@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 //! GMRES(m) — Generalized Minimal Residual with restart.
 //!
 //! Builds an orthonormal Krylov basis V_m via Arnoldi/modified Gram-Schmidt,
@@ -33,7 +34,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// Reusable scratch buffers for repeated GMRES solves with fixed dimension/restart.
 pub struct GmresWorkspace<T: Scalar> {
@@ -91,7 +91,7 @@ impl<T: Scalar> Gmres<T> {
     /// Solve `A x = b` using caller-owned scratch buffers to amortize allocations.
     pub fn solve_with_workspace(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
@@ -307,11 +307,10 @@ impl<T: Scalar> Default for Gmres<T> {
 
 impl<T: Scalar> KrylovSolver for Gmres<T> {
     type Vector = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,

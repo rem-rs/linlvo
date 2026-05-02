@@ -5,8 +5,8 @@
 //! - S12: QuadraticEigen (QEP), NepNewton
 
 use linger::{
-    Complex, ComplexScalar, Scalar,
-    LanczosSvd, SvdResult,
+    Complex,
+    LanczosSvd,
     QuadraticEigen,
     NonlinearOperator, NepNewton,
     EigenParams, EigenWhich,
@@ -33,8 +33,6 @@ fn laplacian_1d(n: usize) -> CsrMatrix<f64> {
     }
     CsrMatrix::from_coo(&coo)
 }
-
-fn sort_asc(mut v: Vec<f64>) -> Vec<f64> { v.sort_by(|a,b| a.partial_cmp(b).unwrap()); v }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Sprint 11 — ComplexScalar

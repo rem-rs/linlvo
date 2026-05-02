@@ -24,7 +24,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// MINRES solver for symmetric (possibly indefinite) systems.
 pub struct Minres<T> {
@@ -41,11 +40,10 @@ impl<T: Scalar> Default for Minres<T> {
 
 impl<T: Scalar> KrylovSolver for Minres<T> {
     type Vector = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,

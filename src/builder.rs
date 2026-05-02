@@ -39,7 +39,7 @@
 use crate::{
     core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}},
     sparse::CsrMatrix,
-    iterative::{ConjugateGradient, Gmres, BiCgStab},
+    iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr, PipeCg},
     KrylovSolver, SolverParams, SolverResult, VerboseLevel,
     direct::{DirectOptions, DirectSolver, DirectSolverPrecond, ordering::OrderingMethod},
     core::preconditioner::Preconditioner,
@@ -90,6 +90,9 @@ pub enum ExternalBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendCapabilities {
     pub hypre_rs: bool,
+    /// Pure-Rust PETSc-equivalent track (`petsc-rs` feature).
+    pub petsc_rs: bool,
+    /// Legacy placeholder for C-lib PETSc binding (`petsc-ffi` feature).
     pub petsc_ffi: bool,
     /// Whether the MUMPS-compatibility profile is advertised by this build.
     pub mumps: bool,
@@ -102,6 +105,7 @@ impl BackendCapabilities {
     pub fn detect() -> Self {
         Self {
             hypre_rs: cfg!(feature = "hypre-rs"),
+            petsc_rs: cfg!(feature = "petsc-rs"),
             petsc_ffi: cfg!(feature = "petsc-ffi"),
             mumps: cfg!(feature = "mumps"),
             mkl: cfg!(feature = "mkl"),
@@ -109,9 +113,9 @@ impl BackendCapabilities {
         }
     }
 
-    /// Canonical petsc-rs capability alias for roadmap-aligned naming.
-    pub fn petsc_rs(&self) -> bool {
-        self.petsc_ffi
+    /// Returns `true` if either the pure-Rust or FFI PETSc track is enabled.
+    pub fn has_any_petsc(&self) -> bool {
+        self.petsc_rs || self.petsc_ffi
     }
 }
 
@@ -145,12 +149,39 @@ pub enum SolveMethod {
     },
     /// BiCGSTAB — general non-symmetric, less memory than GMRES.
     BiCgStab,
+    /// MINRES — symmetric (possibly indefinite) systems.
+    Minres,
+    /// FGMRES — flexible GMRES; allows varying preconditioner per iteration.
+    Fgmres {
+        /// Krylov subspace restart dimension.  Typical values: 20–50.
+        restart: usize,
+    },
+    /// LGMRES — GMRES with Krylov subspace recycling across restarts.
+    Lgmres {
+        /// Inner Krylov dimension per restart.
+        restart: usize,
+        /// Number of augmentation vectors retained from previous restarts.
+        aug_dim: usize,
+    },
+    /// IDR(s) — Induced Dimension Reduction; robust for non-symmetric systems.
+    Idrs {
+        /// Shadow space dimension.  `s=4` is a good default.
+        s: usize,
+    },
+    /// TFQMR — Transpose-Free QMR; smooth convergence for non-symmetric systems.
+    Tfqmr,
+    /// PIPECG — Pipelined CG; one global dot-product per iter (hides all-reduce latency).
+    ///
+    /// Drop-in for [`Cg`](SolveMethod::Cg) on SPD systems.  Particularly
+    /// beneficial in distributed/MPI environments where global reductions are
+    /// expensive.
+    PipeCg,
     /// Exact direct solve (no Krylov outer iteration).
     Direct(DirectBackend),
 }
 
 /// Preconditioner choice for Krylov methods.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum PrecondChoice {
     /// No preconditioner.
     None,
@@ -188,6 +219,41 @@ pub enum PrecondChoice {
         /// ADS configuration.
         config: crate::precond::ads::AdsConfig,
     },
+    /// Two-field FieldSplit preconditioner.
+    ///
+    /// Decomposes the DOF set at `split` and applies separate sub-preconditioners
+    /// to each block.  If `block_triangular = true`, the lower off-diagonal block
+    /// is extracted and used for a correction sweep.
+    ///
+    /// Sub-preconditioners are wrapped in `Arc` so this variant remains `Clone`.
+    FieldSplit {
+        /// Total number of DOFs.
+        n: usize,
+        /// Index of first DOF in field 1 (field 0 = 0..split).
+        split: usize,
+        /// Use lower block-triangular sweep; otherwise block-Jacobi (additive).
+        block_triangular: bool,
+        /// Sub-preconditioner for field 0 (top-left block).
+        p0: std::sync::Arc<dyn crate::core::preconditioner::Preconditioner<Vector = DenseVec<f64>> + Send + Sync>,
+        /// Sub-preconditioner for field 1 (bottom-right block).
+        p1: std::sync::Arc<dyn crate::core::preconditioner::Preconditioner<Vector = DenseVec<f64>> + Send + Sync>,
+    },
+}
+
+impl std::fmt::Debug for PrecondChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrecondChoice::None           => write!(f, "None"),
+            PrecondChoice::Jacobi         => write!(f, "Jacobi"),
+            PrecondChoice::Ilu0           => write!(f, "Ilu0"),
+            PrecondChoice::Icc0           => write!(f, "Icc0"),
+            PrecondChoice::DirectLu(b)    => write!(f, "DirectLu({b:?})"),
+            PrecondChoice::Ams { .. }     => write!(f, "Ams {{ .. }}"),
+            PrecondChoice::Ads { .. }     => write!(f, "Ads {{ .. }}"),
+            PrecondChoice::FieldSplit { n, split, block_triangular, .. } =>
+                write!(f, "FieldSplit {{ n: {n}, split: {split}, block_triangular: {block_triangular} }}"),
+        }
+    }
 }
 
 /// Fill-reducing permutation exposed at builder level.
@@ -220,6 +286,13 @@ pub enum BuilderPrecondReport {
     Ams(crate::precond::ams::AmsProfile),
     /// ADS preconditioner with setup profile.
     Ads(crate::precond::ads::AdsProfile),
+    /// FieldSplit preconditioner.
+    FieldSplit {
+        /// Boundary index between the two fields.
+        split: usize,
+        /// Whether a block-triangular sweep was used.
+        block_triangular: bool,
+    },
 }
 
 /// Structured solve diagnostics emitted by [`SolverBuilder::solve_with_report`].
@@ -408,6 +481,107 @@ impl SolverBuilder {
         self.solve_into_with_report(a, b, x).map(|_| ())
     }
 
+    /// Solve `A x = b` for multiple right-hand sides.
+    ///
+    /// For direct methods, the matrix is factored **once** and the triangular
+    /// solve is applied to every column of `bs`.  For Krylov methods each
+    /// right-hand side runs an independent iteration starting from `xs[i]` as
+    /// the initial guess.
+    ///
+    /// Returns a `Vec<DenseVec<T>>` with one solution per right-hand side.
+    ///
+    /// # Errors
+    /// Returns the first error encountered, leaving already-computed solutions
+    /// in the returned vector.
+    pub fn solve_many<T: Scalar>(
+        &self,
+        a:  &CsrMatrix<T>,
+        bs: &[DenseVec<T>],
+    ) -> Result<Vec<DenseVec<T>>, SolverError> {
+        let n = a.nrows();
+        if bs.iter().any(|b| b.len() != n) {
+            return Err(SolverError::DimensionMismatch {
+                op_rows: n, op_cols: a.ncols(), rhs_len: bs.first().map_or(0, |b| b.len()),
+            });
+        }
+        let mut xs: Vec<DenseVec<T>> = (0..bs.len()).map(|_| DenseVec::zeros(n)).collect();
+        self.solve_many_into(a, bs, &mut xs)?;
+        Ok(xs)
+    }
+
+    /// Solve `A x = b` for multiple right-hand sides, writing results into `xs`.
+    ///
+    /// For direct backends, the matrix is factored once and `solve_multi` is
+    /// called to reuse the factors.  For Krylov backends each system is solved
+    /// independently (parallel execution not assumed here — callers may call
+    /// concurrently if needed).
+    pub fn solve_many_into<T: Scalar>(
+        &self,
+        a:  &CsrMatrix<T>,
+        bs: &[DenseVec<T>],
+        xs: &mut [DenseVec<T>],
+    ) -> Result<(), SolverError> {
+        if bs.len() != xs.len() {
+            return Err(SolverError::DimensionMismatch {
+                op_rows: bs.len(), op_cols: 1, rhs_len: xs.len(),
+            });
+        }
+        match &self.method {
+            SolveMethod::Direct(backend) => self.run_direct_many(backend, a, bs, xs),
+            _ => {
+                for (b, x) in bs.iter().zip(xs.iter_mut()) {
+                    self.run_krylov_into(a, b, x)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    // ─── internal: direct many ────────────────────────────────────────────────
+
+    fn run_direct_many<T: Scalar>(
+        &self,
+        backend: &DirectBackend,
+        a:  &CsrMatrix<T>,
+        bs: &[DenseVec<T>],
+        xs: &mut [DenseVec<T>],
+    ) -> Result<(), SolverError> {
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
+                            MumpsSolver, MklSolver};
+        macro_rules! factor_and_solve_many {
+            ($solver:expr) => {{
+                let mut s = $solver;
+                s.factor(a)?;
+                s.solve_multi(bs, xs)
+            }};
+        }
+        match backend {
+            DirectBackend::Lu =>
+                factor_and_solve_many!(SparseLu::<T>::new(self.direct_opts())),
+            DirectBackend::Cholesky =>
+                factor_and_solve_many!(SparseCholesky::<T>::new(self.direct_opts())),
+            DirectBackend::Multifrontal =>
+                factor_and_solve_many!(MultifrontalLu::<T>::with_options(
+                    MultifrontalOptions { base: self.direct_opts(), ..Default::default() }
+                )),
+            DirectBackend::Mumps =>
+                factor_and_solve_many!(MumpsSolver::<T>::with_options(self.direct_opts())),
+            DirectBackend::Mkl =>
+                factor_and_solve_many!(MklSolver::<T>::with_options(self.direct_opts())),
+        }
+    }
+
+    // ─── internal: krylov single (no report) ─────────────────────────────────
+
+    fn run_krylov_into<T: Scalar>(
+        &self,
+        a:      &CsrMatrix<T>,
+        b:      &DenseVec<T>,
+        x:      &mut DenseVec<T>,
+    ) -> Result<(), SolverError> {
+        self.run_krylov_with_report(a, b, x).map(|_| ())
+    }
+
     /// Solve `A x = b` into `x` and return structured diagnostics.
     pub fn solve_into_with_report<T: Scalar>(
         &self,
@@ -576,6 +750,41 @@ impl SolverBuilder {
                     krylov: Some(result),
                 })
             }
+            PrecondChoice::FieldSplit { n, split, block_triangular, p0, p1 } => {
+                use crate::precond::fieldsplit::{FieldSplitPrecond, SplitMode};
+                // FieldSplitPrecond is fixed to f64 due to trait-object storage.
+                // Attempt f64 downcast; return error for other types.
+                let a_f64 = cast_csr_to_f64(a).ok_or_else(|| SolverError::PrecondSetupFailed {
+                    reason: "PrecondChoice::FieldSplit only supports f64 matrices".into(),
+                })?;
+                let mode = if *block_triangular { SplitMode::BlockTriangular } else { SplitMode::BlockJacobi };
+                // Wrap Arc preconditioners as Box — clone the Arc and wrap.
+                let p0_box: Box<dyn Preconditioner<Vector = DenseVec<f64>> + Send + Sync> =
+                    Box::new(ArcPrecond(std::sync::Arc::clone(p0)));
+                let p1_box: Box<dyn Preconditioner<Vector = DenseVec<f64>> + Send + Sync> =
+                    Box::new(ArcPrecond(std::sync::Arc::clone(p1)));
+                let p = if *block_triangular {
+                    FieldSplitPrecond::from_matrix(&a_f64, *split, mode, p0_box, p1_box)
+                } else {
+                    FieldSplitPrecond::new(*n, *split, mode, p0_box, p1_box)
+                };
+                // Run in f64 only.
+                let a64 = a_f64;
+                let b64 = cast_dense_to_f64(b).ok_or_else(|| SolverError::PrecondSetupFailed {
+                    reason: "PrecondChoice::FieldSplit: scalar mismatch".into(),
+                })?;
+                let mut x64 = DenseVec::<f64>::zeros(x.len());
+                let result = {
+                    let params64 = params.clone();
+                    self.dispatch_krylov_result(&a64, Some(&p as &dyn Preconditioner<Vector=DenseVec<f64>>), &b64, &mut x64, &params64)?
+                };
+                copy_f64_to_dense(x, &x64);
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::FieldSplit { split: *split, block_triangular: *block_triangular },
+                    krylov: Some(result),
+                })
+            }
         }
     }
 
@@ -596,6 +805,24 @@ impl SolverBuilder {
             }
             SolveMethod::BiCgStab => {
                 BiCgStab::<T>::default().solve(a, precond, b, x, params)
+            }
+            SolveMethod::Minres => {
+                Minres::<T>::default().solve(a, precond, b, x, params)
+            }
+            SolveMethod::Fgmres { restart } => {
+                Fgmres::<T>::new(*restart).solve(a, precond, b, x, params)
+            }
+            SolveMethod::Lgmres { restart, aug_dim } => {
+                Lgmres::<T>::new(*restart, *aug_dim).solve(a, precond, b, x, params)
+            }
+            SolveMethod::Idrs { s } => {
+                Idrs::<T>::new(*s).solve(a, precond, b, x, params)
+            }
+            SolveMethod::Tfqmr => {
+                Tfqmr::<T>::default().solve(a, precond, b, x, params)
+            }
+            SolveMethod::PipeCg => {
+                PipeCg::<T>::default().solve(a, precond, b, x, params)
             }
             SolveMethod::Direct(_) => unreachable!(),
         }
@@ -679,6 +906,45 @@ fn cast_csr_f64_to<T: Scalar>(m: &crate::sparse::CsrMatrix<f64>) -> crate::spars
     )
 }
 
+/// Try to interpret a `CsrMatrix<T>` as `CsrMatrix<f64>`.
+/// Returns `None` if `T` is not `f64`.
+fn cast_csr_to_f64<T: Scalar>(m: &crate::sparse::CsrMatrix<T>) -> Option<crate::sparse::CsrMatrix<f64>> {
+    let vals: Option<Vec<f64>> = m.values().iter()
+        .map(|v| num_traits::ToPrimitive::to_f64(v))
+        .collect();
+    vals.map(|vs| crate::sparse::CsrMatrix::from_raw(
+        m.nrows(),
+        m.ncols(),
+        m.row_ptr().to_vec(),
+        m.col_idx().to_vec(),
+        vs,
+    ))
+}
+
+fn cast_dense_to_f64<T: Scalar>(v: &DenseVec<T>) -> Option<DenseVec<f64>> {
+    let vals: Option<Vec<f64>> = v.as_slice().iter()
+        .map(|x| num_traits::ToPrimitive::to_f64(x))
+        .collect();
+    vals.map(DenseVec::from_vec)
+}
+
+fn copy_f64_to_dense<T: Scalar>(dst: &mut DenseVec<T>, src: &DenseVec<f64>) {
+    for (d, &s) in dst.as_mut_slice().iter_mut().zip(src.as_slice().iter()) {
+        *d = T::from_f64(s);
+    }
+}
+
+/// Wrapper that lets an `Arc<dyn Preconditioner>` implement `Preconditioner`
+/// (required because `Box<dyn Preconditioner>` isn't `Clone`, but `Arc` is).
+struct ArcPrecond<V: crate::core::vector::Vector>(
+    std::sync::Arc<dyn Preconditioner<Vector = V> + Send + Sync>,
+);
+
+impl<V: crate::core::vector::Vector> Preconditioner for ArcPrecond<V> {
+    type Vector = V;
+    fn apply_precond(&self, x: &V, y: &mut V) { self.0.apply_precond(x, y) }
+}
+
 fn print_ams_profile_summary(profile: &crate::precond::ams::AmsProfile) {
     println!(
         "[AMS] edges={} nodes={} nnz(A)={} nnz(G)={} nnz(G^T A G)={} aux={}",
@@ -757,7 +1023,7 @@ fn resolve_external_backend(
                     capabilities: caps,
                     note: "Requested petsc-rs on wasm32 target. External solver backends are unsupported on wasm; using native linger path.".to_string(),
                 }
-            } else if caps.petsc_rs() {
+            } else if caps.petsc_rs {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
@@ -851,7 +1117,7 @@ mod tests {
         let rep = SolverBuilder::new()
             .external_backend(ExternalBackend::PetscRs)
             .backend_selection_report();
-        if !rep.capabilities.petsc_rs() {
+        if !rep.capabilities.petsc_rs {
             assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
             assert!(rep.note.contains("petsc-rs"));
         }

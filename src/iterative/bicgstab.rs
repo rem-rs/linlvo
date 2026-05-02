@@ -34,7 +34,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 /// BiCGSTAB solver for general (non-symmetric) systems.
 pub struct BiCgStab<T> {
@@ -51,11 +50,10 @@ impl<T: Scalar> Default for BiCgStab<T> {
 
 impl<T: Scalar> KrylovSolver for BiCgStab<T> {
     type Vector = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,

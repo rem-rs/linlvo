@@ -250,13 +250,13 @@ fn inner_cg_solve<T: Scalar>(
         {
             let xs = x.as_mut_slice();
             let ps = p.as_slice();
-            for i in 0..n { xs[i] = xs[i] + alpha * ps[i]; }
+            for i in 0..n { xs[i] += alpha * ps[i]; }
         }
         // r -= alpha * v
         {
             let rs = r.as_mut_slice();
             let vs = v.as_slice();
-            for i in 0..n { rs[i] = rs[i] - alpha * vs[i]; }
+            for i in 0..n { rs[i] -= alpha * vs[i]; }
         }
 
         // z = M^{-1} r (V-cycle at this level)

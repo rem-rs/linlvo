@@ -2,13 +2,14 @@
 //!
 //! Covers SA-AMG and RS-AMG setup, V-cycle standalone convergence, and
 //! AMG-preconditioned CG on 1D/2D Poisson problems.
+#![allow(clippy::needless_range_loop)]
 
 mod common;
 
 use linger::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType},
     iterative::{ConjugateGradient, Gmres},
-    sparse::{CooMatrix, CsrMatrix},
+    sparse::CsrMatrix,
     DenseVec, KrylovSolver, SolverParams, VerboseLevel, Vector,
 };
 

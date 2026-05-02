@@ -33,7 +33,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 // ─── Public struct ────────────────────────────────────────────────────────────
 
@@ -64,11 +63,10 @@ impl<T: Scalar> Default for Idrs<T> {
 
 impl<T: Scalar> KrylovSolver for Idrs<T> {
     type Vector  = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
@@ -101,7 +99,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
         // ── Euclidean norm of a slice ─────────────────────────────────────────
         let rnorm = |r: &[T]| -> T {
             let mut s2 = T::zero();
-            for &v in r { s2 = s2 + v * v; }
+            for &v in r { s2 += v * v; }
             s2.sqrt()
         };
 
@@ -136,12 +134,12 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
             for k in 0..i {
                 let dot = dot_slice(&p_rows[k], &p_rows[i]);
                 let pk = p_rows[k].clone();
-                for j in 0..n { p_rows[i][j] = p_rows[i][j] - dot * pk[j]; }
+                for j in 0..n { p_rows[i][j] -= dot * pk[j]; }
             }
             let nrm2: T = p_rows[i].iter().map(|&v| v * v).fold(T::zero(), |a, b| a + b);
             let nrm = nrm2.sqrt();
             if nrm > T::from_f64(1e-14) {
-                for v in &mut p_rows[i] { *v = *v / nrm; }
+                for v in &mut p_rows[i] { *v /= nrm; }
             }
         }
 
@@ -187,12 +185,12 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                 for k in 0..i {
                     let dot = dot_slice(&rows[k], &rows[i]);
                     let pk = rows[k].clone();
-                    for j in 0..n { rows[i][j] = rows[i][j] - dot * pk[j]; }
+                    for j in 0..n { rows[i][j] -= dot * pk[j]; }
                 }
                 let nrm2: T = rows[i].iter().map(|&v| v * v).fold(T::zero(), |a, b| a + b);
                 let nrm = nrm2.sqrt();
                 if nrm > T::from_f64(1e-14) {
-                    for v in &mut rows[i] { *v = *v / nrm; }
+                    for v in &mut rows[i] { *v /= nrm; }
                 }
             }
             rows
@@ -209,7 +207,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                     // absolute indices: k+row, k+col
                     let mut val = f[k + row];
                     for col in 0..row {
-                        val = val - m_mat[k + row][k + col] * c[col];
+                        val -= m_mat[k + row][k + col] * c[col];
                     }
                     let diag = m_mat[k + row][k + row];
                     c[row] = if near_zero(diag) { T::zero() } else { val / diag };
@@ -221,7 +219,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                     let cj = c[j];
                     if cj == T::zero() { continue; }
                     let col = k + j;
-                    for l in 0..n { v[l] = v[l] - cj * g_cols[col][l]; }
+                    for l in 0..n { v[l] -= cj * g_cols[col][l]; }
                 }
 
                 // ── uhat = precond(v) ─────────────────────────────────────────
@@ -241,7 +239,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                     let cj = c[j];
                     if cj == T::zero() { continue; }
                     let col = k + j;
-                    for l in 0..n { u_k[l] = u_k[l] + cj * u_cols[col][l]; }
+                    for l in 0..n { u_k[l] += cj * u_cols[col][l]; }
                 }
 
                 // ── G[:,k] = A * U[:,k] ───────────────────────────────────────
@@ -256,8 +254,8 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                     if near_zero(mii) { continue; }
                     let alpha = dot_slice(&p_rows[i], &g_k) / mii;
                     for l in 0..n {
-                        g_k[l] = g_k[l] - alpha * g_cols[i][l];
-                        u_k[l] = u_k[l] - alpha * u_cols[i][l];
+                        g_k[l] -= alpha * g_cols[i][l];
+                        u_k[l] -= alpha * u_cols[i][l];
                     }
                 }
 
@@ -301,12 +299,12 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                 let beta = f[k] / m_kk;
 
                 // ── r -= beta * G[:,k],  x += beta * U[:,k] ──────────────────
-                for l in 0..n { r[l] = r[l] - beta * g_k[l]; }
-                { let xs = x.as_mut_slice(); for l in 0..n { xs[l] = xs[l] + beta * u_k[l]; } }
+                for l in 0..n { r[l] -= beta * g_k[l]; }
+                { let xs = x.as_mut_slice(); for l in 0..n { xs[l] += beta * u_k[l]; } }
 
                 // ── Update f ─────────────────────────────────────────────────
                 // f[i] -= beta * M[i,k]  for i = k+1..s  (incremental update)
-                for i in (k + 1)..s { f[i] = f[i] - beta * m_mat[i][k]; }
+                for i in (k + 1)..s { f[i] -= beta * m_mat[i][k]; }
                 // f[k] recomputed exactly from new r.
                 f[k] = dot_slice(&p_rows[k], &r);
 
@@ -352,8 +350,8 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                 tr / tt
             };
 
-            for l in 0..n { r[l] = r[l] - omega * t.as_slice()[l]; }
-            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] = xs[l] + omega * uhat2[l]; } }
+            for l in 0..n { r[l] -= omega * t.as_slice()[l]; }
+            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] += omega * uhat2[l]; } }
 
             iters += 1;
             {
@@ -396,7 +394,7 @@ fn near_zero<T: Scalar>(v: T) -> bool {
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
     let mut s = T::zero();
-    for (&ai, &bi) in a.iter().zip(b.iter()) { s = s + ai * bi; }
+    for (&ai, &bi) in a.iter().zip(b.iter()) { s += ai * bi; }
     s
 }
 

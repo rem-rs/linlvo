@@ -40,7 +40,6 @@ use crate::core::{
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
 };
-use crate::sparse::CsrMatrix;
 
 pub struct Tfqmr<T> {
     _phantom: std::marker::PhantomData<T>,
@@ -56,11 +55,10 @@ impl<T: Scalar> Default for Tfqmr<T> {
 
 impl<T: Scalar> KrylovSolver for Tfqmr<T> {
     type Vector   = DenseVec<T>;
-    type Operator = CsrMatrix<T>;
 
     fn solve(
         &self,
-        op: &CsrMatrix<T>,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
@@ -156,7 +154,7 @@ impl<T: Scalar> KrylovSolver for Tfqmr<T> {
             let ay_half = av(&z_half);
 
             // ── Half-step a (odd m = 2k+1): uses u = A*z (from prev step/init) ─
-            for l in 0..n { w[l] = w[l] - alpha * u[l]; }
+            for l in 0..n { w[l] -= alpha * u[l]; }
             let coeff_a = if alpha.abs() < T::machine_epsilon() { T::zero() }
                           else { theta * theta * eta / alpha };
             // d uses z (= M^{-1}*y) for the right-preconditioned x update
@@ -165,7 +163,7 @@ impl<T: Scalar> KrylovSolver for Tfqmr<T> {
             let ca = T::one() / (T::one() + theta * theta).sqrt();
             tau   = tau * theta * ca;
             eta   = ca * ca * alpha;
-            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] = xs[l] + eta * d[l]; } }
+            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] += eta * d[l]; } }
 
             iters += 1;
             let est_a = tau * T::from_f64(((2 * k + 1) as f64).sqrt());
@@ -178,7 +176,7 @@ impl<T: Scalar> KrylovSolver for Tfqmr<T> {
             if iters >= max_iter { break 'outer; }
 
             // ── Half-step b (even m = 2k+2): uses ay_half ─────────────────────
-            for l in 0..n { w[l] = w[l] - alpha * ay_half[l]; }
+            for l in 0..n { w[l] -= alpha * ay_half[l]; }
             let coeff_b = if alpha.abs() < T::machine_epsilon() { T::zero() }
                           else { theta * theta * eta / alpha };
             // d uses z_half (= M^{-1}*y_half)
@@ -187,7 +185,7 @@ impl<T: Scalar> KrylovSolver for Tfqmr<T> {
             let cb = T::one() / (T::one() + theta * theta).sqrt();
             tau   = tau * theta * cb;
             eta   = cb * cb * alpha;
-            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] = xs[l] + eta * d[l]; } }
+            { let xs = x.as_mut_slice(); for l in 0..n { xs[l] += eta * d[l]; } }
 
             iters += 1;
             let est_b = tau * T::from_f64(((2 * k + 2) as f64).sqrt());
@@ -220,7 +218,7 @@ impl<T: Scalar> KrylovSolver for Tfqmr<T> {
         let final_rn: T = {
             let mut s = T::zero();
             let bs = b.as_slice(); let axs = ax.as_slice();
-            for i in 0..n { let di = bs[i] - axs[i]; s = s + di * di; }
+            for i in 0..n { let di = bs[i] - axs[i]; s += di * di; }
             s.sqrt()
         };
         let final_res = to_f64(final_rn / norm_b_f);

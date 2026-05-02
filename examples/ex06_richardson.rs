@@ -45,12 +45,11 @@ struct RichardsonSolver {
 }
 
 impl KrylovSolver for RichardsonSolver {
-    type Vector   = DenseVec<f64>;
-    type Operator = CsrMatrix<f64>;
+    type Vector = DenseVec<f64>;
 
     fn solve(
         &self,
-        op:     &CsrMatrix<f64>,
+        op:     &dyn LinearOperator<Vector = DenseVec<f64>>,
         precond: Option<&dyn Preconditioner<Vector = DenseVec<f64>>>,
         b:      &DenseVec<f64>,
         x:      &mut DenseVec<f64>,
@@ -124,7 +123,7 @@ impl KrylovSolver for RichardsonSolver {
 
             // Convergence check
             if res < params.rtol || r.norm2() < params.atol {
-                let final_residual = res as f64;
+                let final_residual = res;
                 if params.verbose != VerboseLevel::Silent {
                     println!("  Converged at iter {}  ‖r‖/‖b‖ = {res:.3e}", k + 1);
                 }

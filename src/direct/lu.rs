@@ -367,7 +367,7 @@ fn get_entry<T: Scalar>(row: &[(usize, T)], col: usize) -> Option<T> {
 }
 
 /// Set the value at column `col` in a sorted sparse row (must already exist).
-fn set_entry<T: Scalar>(row: &mut Vec<(usize, T)>, col: usize, val: T) {
+fn set_entry<T: Scalar>(row: &mut [(usize, T)], col: usize, val: T) {
     if let Ok(idx) = row.binary_search_by_key(&col, |&(c, _)| c) {
         row[idx].1 = val;
     }

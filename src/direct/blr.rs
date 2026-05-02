@@ -79,6 +79,19 @@
 //! * `atol` — absolute singular-value floor; 0.0 disables it.
 //! * `max_rank` — hard rank cap; pass `0` for no limit (`min(m, n)` is used).
 //!
+//! ## Adaptive Cross Approximation (ACA+)
+//!
+//! As an alternative to the randomised SVD, [`compress_block_aca`] (and its
+//! matrix-free sibling [`compress_block_aca_fn`]) build the same `A ≈ U Vᵀ`
+//! approximation using the partially-pivoted ACA algorithm.  Only
+//! `O(r(m+n))` matrix entries are read, making ACA attractive when:
+//!
+//! * entry evaluation is expensive (e.g. kernel or quadrature matrices), or
+//! * the expected numerical rank `r` is small and known ahead of time.
+//!
+//! For matrices with slowly decaying singular values the randomised SVD
+//! (`compress_block`) is more accurate at the same rank.
+//!
 //! ## References
 //!
 //! Halko, N., Martinsson, P.-G., & Tropp, J.A. (2011). Finding structure with
@@ -87,6 +100,9 @@
 //!
 //! Amestoy, P. et al. (2015). Improving multifrontal methods by means of block
 //! low-rank representations. *SIAM J. Sci. Comput.*, 37(3), A1452–A1474.
+//!
+//! Bebendorf, M. (2000). Approximation of boundary element matrices.
+//! *Numerische Mathematik*, 86(4), 565–589.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -276,82 +292,11 @@ impl<T: Scalar> BlrBlock<T> {
     ///    `V_new = V W_r` (n×rank_new).
     ///
     /// Columns are dropped where `σ_k < new_tol * σ_1`.
+    /// Re-compress this block with a looser (or equal) tolerance `new_tol`.
+    ///
+    /// Delegates to `recompress_capped(new_tol, 0)` (no hard rank cap).
     pub fn recompress(&self, new_tol: f64) -> Self {
-        if self.rank == 0 {
-            return self.clone();
-        }
-        let r = self.rank;
-        let m = self.m;
-        let n = self.n;
-
-        // ── QR of U (m × r) via MGS → Q (m×r), R (r×r upper triangular) ────
-        // Store Q in-place in q_buf, R as a dense r×r matrix.
-        let mut q_buf = vec![0.0f64; m * r];
-        let mut r_mat = vec![0.0f64; r * r]; // row-major
-        let mut u_f: Vec<f64> = self.u.iter().map(|&v| {
-            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
-        }).collect();
-
-        for k in 0..r {
-            // Orthogonalise column k against already-accepted Q columns.
-            for qc in 0..k {
-                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
-                r_mat[qc * r + k] = dot;
-                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
-            }
-            // Second pass.
-            for qc in 0..k {
-                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
-                r_mat[qc * r + k] += dot;
-                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
-            }
-            let nrm: f64 = (0..m).map(|i| u_f[i + k*m].powi(2)).sum::<f64>().sqrt();
-            if nrm < 1e-14 {
-                // Linearly dependent column: zero R diagonal, leave Q column as zero.
-                continue;
-            }
-            r_mat[k * r + k] = nrm;
-            let inv = 1.0 / nrm;
-            for i in 0..m { q_buf[i + k*m] = u_f[i + k*m] * inv; }
-        }
-
-        // ── SVD of R (r×r) ────────────────────────────────────────────────────
-        let (sigma_r, u_hat_r, w_r) = power_iter_svd_f64(&r_mat, r, r, r);
-        if sigma_r.is_empty() || sigma_r[0] == 0.0 {
-            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
-        }
-        let threshold = new_tol * sigma_r[0];
-        let new_rank = sigma_r.iter().take_while(|&&s| s >= threshold).count().min(r);
-        if new_rank == 0 {
-            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
-        }
-
-        // ── Build U_new = Q Û_r Σ_r  (m × new_rank, col-major, T) ────────────
-        let mut u_new = vec![T::zero(); m * new_rank];
-        for k in 0..new_rank {
-            let sig = T::from_f64(sigma_r[k]);
-            for i in 0..m {
-                let mut s = 0.0f64;
-                for qi in 0..r { s += q_buf[i + qi*m] * u_hat_r[qi + k*r]; }
-                u_new[i + k*m] = T::from_f64(s) * sig;
-            }
-        }
-
-        // ── Build V_new = V W_r  (n × new_rank, col-major, T) ────────────────
-        // V_svd (W_r) is col-major r×r: w_r[j + k*r].
-        let v_f: Vec<f64> = self.v.iter().map(|&v| {
-            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
-        }).collect();
-        let mut v_new = vec![T::zero(); n * new_rank];
-        for k in 0..new_rank {
-            for j in 0..n {
-                let mut s = 0.0f64;
-                for qi in 0..r { s += v_f[j + qi*n] * w_r[qi + k*r]; }
-                v_new[j + k*n] = T::from_f64(s);
-            }
-        }
-
-        BlrBlock { m, n, rank: new_rank, u: u_new, v: v_new }
+        self.recompress_capped(new_tol, 0)
     }
 
     /// Re-compress with both a tolerance and a hard rank cap, applying both
@@ -364,70 +309,16 @@ impl<T: Scalar> BlrBlock<T> {
     /// `max_rank = 0` is equivalent to calling `recompress(new_tol)` (no cap).
     pub fn recompress_capped(&self, new_tol: f64, max_rank: usize) -> Self {
         if self.rank == 0 { return self.clone(); }
-        let r = self.rank;
-        let m = self.m;
-        let n = self.n;
-        let svd_cap = if max_rank == 0 { r } else { max_rank.min(r) };
-
-        // ── QR of U (m × r) via MGS×2 ────────────────────────────────────────
-        let mut q_buf = vec![0.0f64; m * r];
-        let mut r_mat = vec![0.0f64; r * r];
-        let mut u_f: Vec<f64> = self.u.iter().map(|&v| {
-            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
-        }).collect();
-
-        for k in 0..r {
-            for qc in 0..k {
-                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
-                r_mat[qc * r + k] = dot;
-                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
-            }
-            for qc in 0..k {
-                let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * u_f[i + k*m]).sum();
-                r_mat[qc * r + k] += dot;
-                for i in 0..m { u_f[i + k*m] -= dot * q_buf[i + qc*m]; }
-            }
-            let nrm: f64 = (0..m).map(|i| u_f[i + k*m].powi(2)).sum::<f64>().sqrt();
-            if nrm < 1e-14 { continue; }
-            r_mat[k * r + k] = nrm;
-            let inv = 1.0 / nrm;
-            for i in 0..m { q_buf[i + k*m] = u_f[i + k*m] * inv; }
-        }
-
-        // ── SVD of R capped at svd_cap ────────────────────────────────────────
-        let (sigma_r, u_hat_r, w_r) = power_iter_svd_f64(&r_mat, r, r, svd_cap);
-        if sigma_r.is_empty() || sigma_r[0] == 0.0 {
-            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
-        }
-        let threshold = new_tol * sigma_r[0];
-        let new_rank = sigma_r.iter().take_while(|&&s| s >= threshold).count().min(svd_cap);
-        if new_rank == 0 {
-            return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
-        }
-
-        let mut u_new = vec![T::zero(); m * new_rank];
-        for k in 0..new_rank {
-            let sig = T::from_f64(sigma_r[k]);
-            for i in 0..m {
-                let mut s = 0.0f64;
-                for qi in 0..r { s += q_buf[i + qi*m] * u_hat_r[qi + k*r]; }
-                u_new[i + k*m] = T::from_f64(s) * sig;
-            }
-        }
-
-        let v_f: Vec<f64> = self.v.iter().map(|&v| {
-            <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
-        }).collect();
-        let mut v_new = vec![T::zero(); n * new_rank];
-        for k in 0..new_rank {
-            for j in 0..n {
-                let mut s = 0.0f64;
-                for qi in 0..r { s += v_f[j + qi*n] * w_r[qi + k*r]; }
-                v_new[j + k*n] = T::from_f64(s);
-            }
-        }
-
-        BlrBlock { m, n, rank: new_rank, u: u_new, v: v_new }
+        let u_f: Vec<f64> = self.u.iter()
+            .map(|&v| <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0))
+            .collect();
+        let v_f: Vec<f64> = self.v.iter()
+            .map(|&v| <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0))
+            .collect();
+        let (new_rank, u_new, v_new) = qr_svd_recompress_f64::<T>(
+            u_f, v_f, self.m, self.n, self.rank, new_tol, max_rank,
+        );
+        BlrBlock { m: self.m, n: self.n, rank: new_rank, u: u_new, v: v_new }
     }
 
     /// Compute the Frobenius norm of the represented matrix without expanding to dense.
@@ -464,7 +355,7 @@ impl<T: Scalar> BlrBlock<T> {
     /// Implemented by scaling only the `U` columns: `(αU) Vᵀ = α (UVᵀ)`.
     /// Cost: `O(m · rank)`.
     pub fn scale(&mut self, alpha: T) {
-        for v in self.u.iter_mut() { *v = *v * alpha; }
+        for v in self.u.iter_mut() { *v *= alpha; }
     }
 
     /// Returns `(dense_bytes, blr_bytes)` as a pair for memory comparison.
@@ -582,6 +473,87 @@ impl<T: Scalar> std::fmt::Display for BlrBlock<T> {
     }
 }
 
+// ─── Internal QR + SVD recompression helper ───────────────────────────────────
+
+/// Shared kernel for `recompress` / `recompress_capped` / `add_compressed`.
+///
+/// Given U factor columns `u_f` (m×r, col-major f64) and V factor columns
+/// `v_f` (n×r, col-major f64):
+///
+/// 1. Double-pass Modified Gram-Schmidt QR of U → Q (m×r), R (r×r).
+/// 2. Truncated SVD of R with hard rank cap `max_rank` (0 = r).
+/// 3. Threshold singular values: keep `k` where `σ_k ≥ tol * σ₁`.
+/// 4. Build U_new = Q Û Σ  (m×k, col-major, type T).
+/// 5. Build V_new = V W   (n×k, col-major, type T).
+///
+/// Returns `(new_rank, u_new, v_new)`.
+fn qr_svd_recompress_f64<T: Scalar>(
+    u_f:      Vec<f64>,
+    v_f:      Vec<f64>,
+    m:        usize,
+    n:        usize,
+    r:        usize,
+    tol:      f64,
+    max_rank: usize,  // 0 = no cap
+) -> (usize, Vec<T>, Vec<T>) {
+    let svd_cap = if max_rank == 0 { r } else { max_rank.min(r) };
+
+    // ── QR of U (m×r) via double-pass MGS ────────────────────────────────────
+    let mut u_f = u_f;   // mutable copy for in-place orthogonalisation
+    let mut q_buf = vec![0.0f64; m * r];
+    let mut r_mat = vec![0.0f64; r * r];
+
+    for k in 0..r {
+        // Pass 1 and pass 2 (double-reorthogonalisation for numerical stability).
+        for _pass in 0..2 {
+            for qc in 0..k {
+                let dot: f64 = (0..m).map(|i| q_buf[i + qc * m] * u_f[i + k * m]).sum();
+                r_mat[qc * r + k] += dot;
+                for i in 0..m { u_f[i + k * m] -= dot * q_buf[i + qc * m]; }
+            }
+        }
+        let nrm: f64 = (0..m).map(|i| u_f[i + k * m].powi(2)).sum::<f64>().sqrt();
+        if nrm < 1e-14 { continue; }  // linearly dependent — leave Q column zero
+        r_mat[k * r + k] = nrm;
+        let inv = 1.0 / nrm;
+        for i in 0..m { q_buf[i + k * m] = u_f[i + k * m] * inv; }
+    }
+
+    // ── Truncated SVD of R (r×r) ──────────────────────────────────────────────
+    let (sigma_r, u_hat_r, w_r) = power_iter_svd_f64(&r_mat, r, r, svd_cap);
+    if sigma_r.is_empty() || sigma_r[0] == 0.0 {
+        return (0, vec![], vec![]);
+    }
+    let threshold = tol * sigma_r[0];
+    let new_rank = sigma_r.iter().take_while(|&&s| s >= threshold).count().min(svd_cap);
+    if new_rank == 0 {
+        return (0, vec![], vec![]);
+    }
+
+    // ── Build U_new = Q Û_r Σ_r  (m×new_rank, col-major, T) ─────────────────
+    let mut u_new = vec![T::zero(); m * new_rank];
+    for k in 0..new_rank {
+        let sig = T::from_f64(sigma_r[k]);
+        for i in 0..m {
+            let mut s = 0.0f64;
+            for qi in 0..r { s += q_buf[i + qi * m] * u_hat_r[qi + k * r]; }
+            u_new[i + k * m] = T::from_f64(s) * sig;
+        }
+    }
+
+    // ── Build V_new = V W_r  (n×new_rank, col-major, T) ──────────────────────
+    let mut v_new = vec![T::zero(); n * new_rank];
+    for k in 0..new_rank {
+        for j in 0..n {
+            let mut s = 0.0f64;
+            for qi in 0..r { s += v_f[j + qi * n] * w_r[qi + k * r]; }
+            v_new[j + k * n] = T::from_f64(s);
+        }
+    }
+
+    (new_rank, u_new, v_new)
+}
+
 // ─── Truncated SVD via randomised algorithm ───────────────────────────────────
 
 /// Compress the `m×n` row-major dense block `a` with tolerance `tol` (relative).
@@ -621,10 +593,6 @@ pub fn compress_block<T: Scalar>(
     // recommend p = 5..10 for most problems).  We use p = min(10, max_rank) so
     // the total sketch width scales with the requested rank rather than being
     // capped at the old hard-coded value of 20.
-    //
-    // TODO(rayon): the three blocked matmuls below (y0, tmp, y) can each be
-    // parallelised over `col` with Rayon when the `rayon` feature is enabled
-    // and the block is large enough to amortise the threading overhead.
     let p_os = 10_usize.min(max_rank);
     let k_sketch = (max_rank + p_os).min(natural_max);
 
@@ -870,6 +838,212 @@ pub fn compress_block_adaptive<T: Scalar>(
     blk.u.truncate(keep * blk.m);
     blk.v.truncate(keep * blk.n);
     blk
+}
+
+// ─── Adaptive Cross Approximation (ACA+) ─────────────────────────────────────
+
+/// Compress the `m×n` row-major dense block `a` using **Adaptive Cross
+/// Approximation** (partially-pivoted ACA, also known as ACA+).
+///
+/// ACA builds the low-rank approximation `A ≈ U Vᵀ` by greedily selecting
+/// cross rows and columns from the matrix, reading only `O(r(m+n))` entries
+/// in total instead of the full `m·n` required by the randomised SVD path.
+/// This makes it attractive when matrix entries are expensive to evaluate
+/// or a small numerical rank is expected a priori.
+///
+/// ## Algorithm (partially-pivoted ACA)
+///
+/// 1. Pick starting pivot row `i₀ = 0`.
+/// 2. At step `k`:
+///    a. Compute residual row `R[i_k, :] = A[i_k, :] − Σ_{l<k} u_l[i_k] v_lᵀ`.
+///    b. Find column pivot `j_k = argmax_j |R[i_k, j]|`.
+///    c. Set `v_k = R[i_k, :] / R[i_k, j_k]`.
+///    d. Compute residual column `C[:, j_k] = A[:, j_k] − Σ_{l<k} v_l[j_k] u_l`.
+///    e. Set `u_k = C[:, j_k]`.
+///    f. Find next pivot row `i_{k+1} = argmax_i |u_k[i]|`.
+/// 3. Stop when `‖u_k‖ · ‖v_k‖ < tol · ‖A‖_F^{approx}`.
+///
+/// ## Notes
+///
+/// * All arithmetic is performed in **f64** regardless of `T`, matching the
+///   behaviour of [`compress_block`].
+/// * The output `U` and `V` factors are **not** orthonormalised.  All
+///   [`BlrBlock`] operations (`apply_add`, `to_dense`, etc.) remain correct.
+/// * For matrices with slowly decaying singular values the randomised SVD
+///   path (`compress_block`) is more accurate at the same rank.  Prefer ACA
+///   when the matrix rank is expected to be small.
+/// * For a matrix-free variant see [`compress_block_aca_fn`].
+///
+/// ## References
+///
+/// Bebendorf, M. (2000). Approximation of boundary element matrices.
+/// *Numerische Mathematik*, 86(4), 565–589.
+pub fn compress_block_aca<T: Scalar>(
+    a: &[T],
+    m: usize,
+    n: usize,
+    tol: f64,
+    max_rank: usize,
+) -> BlrBlock<T> {
+    compress_block_aca_fn(|i, j| a[i * n + j], m, n, tol, max_rank)
+}
+
+/// Matrix-free variant of [`compress_block_aca`].
+///
+/// Instead of a dense slice, accepts a closure `entry(i, j) -> T` that
+/// returns the `(i, j)` matrix entry on demand.  Only `O(r(m+n))` entries
+/// are evaluated, making this suitable for kernel matrices or other
+/// matrix-free operators where forming the full `m×n` block would be costly.
+///
+/// Parameters and behaviour are identical to [`compress_block_aca`].
+pub fn compress_block_aca_fn<T, F>(
+    entry: F,
+    m: usize,
+    n: usize,
+    tol: f64,
+    max_rank: usize,
+) -> BlrBlock<T>
+where
+    T: Scalar,
+    F: Fn(usize, usize) -> T,
+{
+    if m == 0 || n == 0 {
+        return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
+    }
+    let natural_max = m.min(n);
+    let max_rank = if max_rank == 0 { natural_max } else { max_rank.min(natural_max) };
+    let tol_sq = tol * tol;
+
+    // All arithmetic in f64; convert back to T when packing the output block.
+    // u_cols[k] is the (un-normalised) column vector of length m.
+    // v_cols[k] is the (normalised) row vector of length n.
+    let mut u_cols: Vec<Vec<f64>> = Vec::with_capacity(max_rank);
+    let mut v_cols: Vec<Vec<f64>> = Vec::with_capacity(max_rank);
+
+    // Tracks which rows / columns have already been used as pivots so that
+    // the algorithm does not revisit them.
+    let mut used_rows = vec![false; m];
+    let mut used_cols = vec![false; n];
+
+    // Running lower-bound estimate of ‖A‖_F²: accumulated as
+    // Σ_k ‖u_k‖² ‖v_k‖².  This is a lower bound (cross terms are omitted)
+    // and is exact for orthogonal u/v, which is approximately true in
+    // practice once the rank is sufficient.
+    let mut frob_sq_approx = 0.0f64;
+
+    // Starting pivot row.
+    let mut pivot_row = 0usize;
+
+    for _k in 0..max_rank {
+        // ── Step (a): residual row at `pivot_row` ─────────────────────────────
+        let mut r_row = vec![0.0f64; n];
+        for j in 0..n {
+            r_row[j] = num_traits::NumCast::from(entry(pivot_row, j)).unwrap_or(0.0);
+        }
+        for l in 0..u_cols.len() {
+            let c = u_cols[l][pivot_row];
+            if c != 0.0 {
+                for j in 0..n {
+                    r_row[j] -= c * v_cols[l][j];
+                }
+            }
+        }
+
+        // ── Step (b): column pivot ────────────────────────────────────────────
+        let mut max_abs = 0.0f64;
+        let mut pivot_col = n; // sentinel
+        for j in 0..n {
+            if !used_cols[j] {
+                let v = r_row[j].abs();
+                if v > max_abs {
+                    max_abs = v;
+                    pivot_col = j;
+                }
+            }
+        }
+        if pivot_col == n || max_abs < 1e-300 {
+            break; // remaining block is numerically zero
+        }
+
+        // ── Step (c): v_k = r_row / r_row[pivot_col] ─────────────────────────
+        let inv_pivot = 1.0 / r_row[pivot_col];
+        let v_k: Vec<f64> = r_row.iter().map(|&x| x * inv_pivot).collect();
+
+        // ── Step (d): residual column at `pivot_col` ──────────────────────────
+        let mut u_k = vec![0.0f64; m];
+        for i in 0..m {
+            u_k[i] = num_traits::NumCast::from(entry(i, pivot_col)).unwrap_or(0.0);
+        }
+        for l in 0..v_cols.len() {
+            let c = v_cols[l][pivot_col];
+            if c != 0.0 {
+                for i in 0..m {
+                    u_k[i] -= c * u_cols[l][i];
+                }
+            }
+        }
+
+        // ── Update Frobenius-norm estimate ────────────────────────────────────
+        let norm_u_sq: f64 = u_k.iter().map(|x| x * x).sum();
+        let norm_v_sq: f64 = v_k.iter().map(|x| x * x).sum();
+        frob_sq_approx += norm_u_sq * norm_v_sq;
+
+        // ── Mark pivots used ──────────────────────────────────────────────────
+        used_rows[pivot_row] = true;
+        used_cols[pivot_col] = true;
+
+        // ── Stopping criterion ────────────────────────────────────────────────
+        let converged = frob_sq_approx > 0.0
+            && norm_u_sq * norm_v_sq <= tol_sq * frob_sq_approx;
+
+        u_cols.push(u_k);
+        v_cols.push(v_k);
+
+        if converged {
+            break;
+        }
+
+        // ── Step (f): next pivot row ──────────────────────────────────────────
+        let mut max_abs_u = 0.0f64;
+        let mut next_row = m; // sentinel
+        for i in 0..m {
+            if !used_rows[i] {
+                let v = u_cols.last().unwrap()[i].abs();
+                if v > max_abs_u {
+                    max_abs_u = v;
+                    next_row = i;
+                }
+            }
+        }
+        if next_row == m {
+            break; // all rows exhausted
+        }
+        pivot_row = next_row;
+    }
+
+    // ── Pack into BlrBlock (column-major U and V) ─────────────────────────────
+    let rank = u_cols.len();
+    if rank == 0 {
+        return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
+    }
+
+    // U: m × rank, column-major — column k spans u_out[k*m .. (k+1)*m].
+    let mut u_out = vec![T::zero(); m * rank];
+    for (k, col) in u_cols.iter().enumerate() {
+        for i in 0..m {
+            u_out[i + k * m] = num_traits::NumCast::from(col[i]).unwrap_or(T::zero());
+        }
+    }
+
+    // V: n × rank, column-major — column k spans v_out[k*n .. (k+1)*n].
+    let mut v_out = vec![T::zero(); n * rank];
+    for (k, col) in v_cols.iter().enumerate() {
+        for j in 0..n {
+            v_out[j + k * n] = num_traits::NumCast::from(col[j]).unwrap_or(T::zero());
+        }
+    }
+
+    BlrBlock { m, n, rank, u: u_out, v: v_out }
 }
 
 // ─── Truncated SVD via deflating power iteration (f64 internal) ──────────────
@@ -1237,8 +1411,8 @@ mod tests {
     #[test]
     fn blr_rank1_exact() {
         // A = u * vᵀ (rank-1) should be captured exactly.
-        let u = vec![1.0f64, 2.0, 3.0, 4.0];
-        let v = vec![1.0f64, -1.0, 2.0];
+        let u = [1.0f64, 2.0, 3.0, 4.0];
+        let v = [1.0f64, -1.0, 2.0];
         let m = 4; let n = 3;
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n { a[i*n+j] = u[i]*v[j]; } }
@@ -1254,10 +1428,10 @@ mod tests {
     fn blr_rank2_compression() {
         let m = 6; let n = 5;
         // Build rank-2 matrix.
-        let u1 = vec![1.0f64, 2.0, 0.0, -1.0, 0.5, 3.0];
-        let v1 = vec![1.0f64, 0.0, -1.0, 2.0, 0.5];
-        let u2 = vec![0.0f64, 1.0, -1.0, 0.0, 2.0, -0.5];
-        let v2 = vec![0.5f64, -1.0, 1.0, 0.0, -2.0];
+        let u1 = [1.0f64, 2.0, 0.0, -1.0, 0.5, 3.0];
+        let v1 = [1.0f64, 0.0, -1.0, 2.0, 0.5];
+        let u2 = [0.0f64, 1.0, -1.0, 0.0, 2.0, -0.5];
+        let v2 = [0.5f64, -1.0, 1.0, 0.0, -2.0];
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n {
             a[i*n+j] = 3.0 * u1[i]*v1[j] + 0.5 * u2[i]*v2[j];
@@ -1445,10 +1619,10 @@ mod tests {
     fn blr_add_compressed_roundtrip() {
         // A = B + C where B is rank-1 and C is rank-1 → sum is rank ≤ 2.
         let m = 5; let n = 4;
-        let ub = vec![1.0f64, 2.0, -1.0, 0.5, 3.0];
-        let vb = vec![1.0f64, -1.0, 2.0, 0.5];
-        let uc = vec![0.0f64, 1.0, 1.0, -2.0, 0.5];
-        let vc = vec![-1.0f64, 0.0, 1.0, -0.5];
+        let ub = [1.0f64, 2.0, -1.0, 0.5, 3.0];
+        let vb = [1.0f64, -1.0, 2.0, 0.5];
+        let uc = [0.0f64, 1.0, 1.0, -2.0, 0.5];
+        let vc = [-1.0f64, 0.0, 1.0, -0.5];
         let mut b_dense = vec![0.0f64; m * n];
         let mut c_dense = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n {
@@ -1675,8 +1849,8 @@ mod tests {
     fn blr_subtract_compressed_self_is_zero() {
         // A - A should give a zero (or near-zero rank) block.
         let m = 5; let n = 4;
-        let u = vec![1.0f64, 2.0, -1.0, 0.5, 3.0];
-        let v = vec![1.0f64, -1.0, 2.0, 0.5];
+        let u = [1.0f64, 2.0, -1.0, 0.5, 3.0];
+        let v = [1.0f64, -1.0, 2.0, 0.5];
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n { a[i*n+j] = u[i] * v[j]; } }
         let blk = compress_block::<f64>(&a, m, n, 1e-12, 0);
@@ -1692,10 +1866,10 @@ mod tests {
     fn blr_subtract_compressed_roundtrip() {
         // (A + B) - B should recover A.
         let m = 5; let n = 4;
-        let ua = vec![1.0f64, 0.0, -1.0, 0.5, 2.0];
-        let va = vec![1.0f64, -1.0, 0.0, 0.5];
-        let ub = vec![0.0f64, 1.0,  1.0, -2.0, 0.5];
-        let vb = vec![-1.0f64, 0.0, 1.0, -0.5];
+        let ua = [1.0f64, 0.0, -1.0, 0.5, 2.0];
+        let va = [1.0f64, -1.0, 0.0, 0.5];
+        let ub = [0.0f64, 1.0,  1.0, -2.0, 0.5];
+        let vb = [-1.0f64, 0.0, 1.0, -0.5];
         let mut a_dense = vec![0.0f64; m * n];
         let mut b_dense = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n {
@@ -1776,8 +1950,8 @@ mod tests {
     fn blr_adaptive_atol_zero_same_as_compress_block() {
         // atol=0 should behave identically to compress_block.
         let m = 6; let n = 5;
-        let u1 = vec![1.0f64, 2.0, 0.0, -1.0, 0.5, 3.0];
-        let v1 = vec![1.0f64, 0.0, -1.0, 2.0, 0.5];
+        let u1 = [1.0f64, 2.0, 0.0, -1.0, 0.5, 3.0];
+        let v1 = [1.0f64, 0.0, -1.0, 2.0, 0.5];
         let mut a = vec![0.0f64; m * n];
         for i in 0..m { for j in 0..n { a[i*n+j] = u1[i] * v1[j]; } }
         let blk1 = compress_block::<f64>(&a, m, n, 1e-8, 0);
@@ -1854,14 +2028,14 @@ mod tests {
         // bottom-left 2×2 = rank-1, bottom-right 2×2 = identity
         let mut a = vec![0.0f64; 16];
         // diagonal blocks (identity)
-        a[0*4+0] = 1.0; a[1*4+1] = 1.0;
+        a[0] = 1.0; a[4+1] = 1.0;
         a[2*4+2] = 1.0; a[3*4+3] = 1.0;
         // top-right off-diagonal: rows 0-1, cols 2-3
-        a[0*4+2] = 2.0; a[0*4+3] = 1.0;
-        a[1*4+2] = 4.0; a[1*4+3] = 2.0;
+        a[2] = 2.0; a[3] = 1.0;
+        a[4+2] = 4.0; a[4+3] = 2.0;
         // bottom-left off-diagonal: rows 2-3, cols 0-1
-        a[2*4+0] = 1.0; a[2*4+1] = 3.0;
-        a[3*4+0] = 2.0; a[3*4+1] = 6.0;
+        a[2*4] = 1.0; a[2*4+1] = 3.0;
+        a[3*4] = 2.0; a[3*4+1] = 6.0;
         a
     }
 
@@ -1874,7 +2048,7 @@ mod tests {
         let bm = BlrMatrix::compress_from_dense(
             &a, nrows, ncols, &row_sizes, &col_sizes, 1e-10, 0);
         let x = vec![1.0f64, -1.0, 2.0, 0.5];
-        let mut y_ref = vec![0.0f64; 4];
+        let mut y_ref = [0.0f64; 4];
         for i in 0..4 { for j in 0..4 { y_ref[i] += a[i*4+j] * x[j]; } }
         let mut y_blr = vec![0.0f64; 4];
         bm.apply_add(&x, &mut y_blr, 1.0f64);
@@ -1890,7 +2064,7 @@ mod tests {
         let bm: BlrMatrix<f64> = BlrMatrix::compress_from_dense(
             &a, 4, 4, &[2usize, 2], &[2usize, 2], 1e-10, 0);
         let x = vec![1.0f64, 0.5, -1.0, 2.0];
-        let mut y_ref = vec![0.0f64; 4];
+        let mut y_ref = [0.0f64; 4];
         for i in 0..4 { for j in 0..4 { y_ref[j] += a[i*4+j] * x[i]; } }
         let mut y_blr = vec![0.0f64; 4];
         bm.apply_add_t(&x, &mut y_blr, 1.0f64);
@@ -1942,5 +2116,103 @@ mod tests {
         let blr_bytes = bm.memory_bytes();
         assert!(blr_bytes < dense_bytes,
             "BLR memory ({blr_bytes}B) should be < dense ({dense_bytes}B)");
+    }
+
+    // ── ACA tests ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn aca_rank1_exact() {
+        // A true rank-1 matrix should be compressed to rank ≤ 2 with tiny error.
+        // ACA may accept a second step before the floating-point residual drops
+        // below the zero-pivot threshold, so we check reconstruction quality
+        // rather than enforcing rank == 1.
+        let m = 6; let n = 5;
+        let u_vec: Vec<f64> = (0..m).map(|i| i as f64 + 1.0).collect();
+        let v_vec: Vec<f64> = (0..n).map(|j| j as f64 * 0.5 + 0.1).collect();
+        let mut a = vec![0.0f64; m * n];
+        for i in 0..m { for j in 0..n { a[i*n+j] = u_vec[i] * v_vec[j]; } }
+        let blk = compress_block_aca::<f64>(&a, m, n, 1e-10, 0);
+        assert!(blk.rank <= 2, "rank-1 matrix should compress to rank ≤ 2, got {}", blk.rank);
+        let recon = blk.to_dense();
+        let err: f64 = a.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
+        assert!(err < 1e-10, "rank-1 ACA error = {err:.2e}");
+    }
+
+    #[test]
+    fn aca_zero_block() {
+        // A zero matrix should give rank 0.
+        let m = 4; let n = 3;
+        let a = vec![0.0f64; m * n];
+        let blk = compress_block_aca::<f64>(&a, m, n, 1e-10, 0);
+        assert_eq!(blk.rank, 0);
+    }
+
+    #[test]
+    fn aca_apply_add_matches_dense() {
+        // ACA matvec should agree with the dense reference.
+        let m = 5; let n = 4;
+        // Low-rank-2 matrix.
+        let u1 = [1.0f64, -1.0, 2.0, 0.5, -0.5];
+        let v1 = [1.0f64, 2.0, -1.0, 0.5];
+        let u2 = [0.5f64, 1.0, -0.5, 1.5, -1.0];
+        let v2 = [-1.0f64, 0.5, 2.0, -0.5];
+        let mut a = vec![0.0f64; m * n];
+        for i in 0..m { for j in 0..n { a[i*n+j] = u1[i]*v1[j] + u2[i]*v2[j]; } }
+        let blk = compress_block_aca::<f64>(&a, m, n, 1e-10, 0);
+        let x = vec![1.0f64, -0.5, 2.0, 1.0];
+        let mut y_ref = vec![0.0f64; m];
+        for i in 0..m { for j in 0..n { y_ref[i] += a[i*n+j] * x[j]; } }
+        let mut y_aca = vec![0.0f64; m];
+        blk.apply_add(&x, &mut y_aca, 1.0f64);
+        for i in 0..m {
+            assert!((y_ref[i] - y_aca[i]).abs() < 1e-9,
+                "ACA matvec mismatch at i={i}: ref={:.8} aca={:.8}", y_ref[i], y_aca[i]);
+        }
+    }
+
+    #[test]
+    fn aca_fn_matches_dense_block() {
+        // compress_block_aca_fn with an entry closure should agree with
+        // compress_block_aca applied to the explicit slice.
+        let m = 6; let n = 5;
+        let a: Vec<f64> = (0..m*n).map(|k| (k as f64 * 0.7 + 1.0).sin()).collect();
+        let blk_slice = compress_block_aca::<f64>(&a, m, n, 1e-6, 0);
+        let blk_fn    = compress_block_aca_fn(|i, j| a[i*n+j], m, n, 1e-6, 0);
+        // Both should produce the same rank and identical dense reconstructions.
+        assert_eq!(blk_slice.rank, blk_fn.rank,
+            "rank mismatch: slice={} fn={}", blk_slice.rank, blk_fn.rank);
+        let dense_s = blk_slice.to_dense();
+        let dense_f = blk_fn.to_dense();
+        for (s, f) in dense_s.iter().zip(&dense_f) {
+            assert!((s - f).abs() < 1e-14, "dense mismatch: {s:.10} vs {f:.10}");
+        }
+    }
+
+    #[test]
+    fn aca_low_rank_approximation_quality() {
+        // Build an exact rank-3 matrix and verify ACA recovers it up to tol.
+        let m = 10; let n = 8;
+        let tol = 1e-8;
+        let mut a = vec![0.0f64; m * n];
+        let sigma = [3.0f64, 1.5, 0.5];
+        let rows: [[f64; 10]; 3] = [
+            [1.0, 0.5, -1.0, 0.2, 0.8, -0.3, 0.6, -0.7, 0.4, -0.1],
+            [0.3, -0.6, 0.9, -0.2, 0.5, 0.8, -0.4, 0.1, -0.7, 0.6],
+            [0.7, 0.2, -0.5, 0.9, -0.3, 0.4, 0.1, -0.8, 0.5, 0.3],
+        ];
+        let cols: [[f64; 8]; 3] = [
+            [1.0, -0.5, 0.3, 0.8, -0.2, 0.6, -0.4, 0.7],
+            [-0.3, 0.7, -0.9, 0.1, 0.5, -0.8, 0.4, -0.2],
+            [0.6, 0.1, -0.4, 0.7, 0.3, -0.5, 0.9, -0.6],
+        ];
+        for k in 0..3 {
+            for i in 0..m { for j in 0..n { a[i*n+j] += sigma[k] * rows[k][i] * cols[k][j]; } }
+        }
+        let nrm: f64 = a.iter().map(|x| x*x).sum::<f64>().sqrt();
+        let blk = compress_block_aca::<f64>(&a, m, n, tol, 0);
+        let recon = blk.to_dense();
+        let err: f64 = a.iter().zip(&recon).map(|(x,y)| (x-y).powi(2)).sum::<f64>().sqrt();
+        assert!(err / nrm < tol * 100.0,
+            "ACA err/nrm={:.2e}, rank={}", err/nrm, blk.rank);
     }
 }

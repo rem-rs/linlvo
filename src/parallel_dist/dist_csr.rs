@@ -101,6 +101,13 @@ impl<T: Scalar> DistCsrMatrix<T> {
     }
 
     /// SpMV with halo requests through an exchange backend.
+    ///
+    /// Calls [`HaloExchange::exchange_with_owned`], passing the owned values
+    /// so that MPI backends can send them to neighbours.  Single-process
+    /// backends (e.g. [`LocalHaloExchange`]) ignore the owned values and look
+    /// up ghost values from their local copy of the global vector.
+    ///
+    /// [`LocalHaloExchange`]: crate::parallel_dist::halo::LocalHaloExchange
     pub fn spmv_with_halo<E: HaloExchange<T>>(
         &self,
         x_owned: &[T],
@@ -108,7 +115,12 @@ impl<T: Scalar> DistCsrMatrix<T> {
         y_owned: &mut [T],
     ) -> Result<(), crate::parallel_dist::halo::HaloError> {
         let mut x_ghost = vec![T::zero(); self.layout.ghost_size()];
-        halo.exchange(&self.layout.ghost_globals, &mut x_ghost)?;
+        halo.exchange_with_owned(
+            self.layout.owned_global_range.start,
+            x_owned,
+            &self.layout.ghost_globals,
+            &mut x_ghost,
+        )?;
         self.spmv_local(x_owned, &x_ghost, y_owned);
         Ok(())
     }

@@ -61,12 +61,15 @@ fn bench_solvers(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("GMRES30", n), &n, |bench, _| {
+        // Full (unrestarted) GMRES — restart = n so Krylov space covers the
+        // whole dimension.  Without preconditioning, restarted GMRES(30) can
+        // stagnate for condition number O(n²).
+        group.bench_with_input(BenchmarkId::new("GMRES_n", n), &n, |bench, _| {
             let mut x = DenseVec::zeros(n);
-            let mut workspace = GmresWorkspace::new(n, 30);
+            let mut workspace = GmresWorkspace::new(n, n);
             bench.iter(|| {
                 x.as_mut_slice().fill(0.0);
-                Gmres::<f64>::new(30)
+                Gmres::<f64>::new(n)
                     .solve_with_workspace(black_box(&a), None, black_box(&b), black_box(&mut x), &params, &mut workspace)
                     .unwrap();
             });

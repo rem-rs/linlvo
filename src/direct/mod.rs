@@ -57,7 +57,8 @@ pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
 pub use mumps::MumpsSolver;
 pub use mkl::MklSolver;
-pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive};
+pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive,
+              compress_block_aca, compress_block_aca_fn};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
 

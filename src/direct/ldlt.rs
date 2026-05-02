@@ -338,7 +338,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLdlt<T> {
 
         // Step 3: diagonal solve D w = z.
         for i in 0..n {
-            z[i] = z[i] / self.d_vals[i];
+            z[i] /= self.d_vals[i];
         }
 
         // Step 4: backward solve Lᵀ v = w  (Lᵀ is unit upper-triangular).

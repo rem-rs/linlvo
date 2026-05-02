@@ -545,16 +545,21 @@ fn bench_multifrontal_blr(c: &mut Criterion) {
 fn bench_direct_precond(c: &mut Criterion) {
     let mut group = c.benchmark_group("direct_precond_gmres");
     let p = SolverParams { rtol: 1e-8, max_iter: 300, verbose: VerboseLevel::Silent, ..Default::default() };
+    // No-preconditioner variant: larger budget because GMRES(30) on ill-conditioned
+    // Laplacians needs more restarts without preconditioning.
+    let p_bare = SolverParams { rtol: 1e-8, max_iter: 2000, verbose: VerboseLevel::Silent, ..Default::default() };
 
     for &n in &[50usize, 100, 200] {
         let a = laplacian_1d(n);
         let b = ones_rhs(n);
 
-        // No preconditioner.
+        // No preconditioner — use full (unrestarted) GMRES so Krylov dimension
+        // matches the system size.  Without preconditioning the Laplacian has
+        // condition number O(n²), so a restart-30 Krylov is not enough.
         group.bench_with_input(BenchmarkId::new("none/n", n), &n, |bench, _| {
             bench.iter(|| {
                 let mut x = DenseVec::zeros(n);
-                Gmres::<f64>::new(30).solve(black_box(&a), None, black_box(&b), black_box(&mut x), &p).unwrap();
+                Gmres::<f64>::new(n).solve(black_box(&a), None, black_box(&b), black_box(&mut x), &p_bare).unwrap();
                 black_box(x)
             });
         });

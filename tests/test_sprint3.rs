@@ -3,13 +3,13 @@
 mod common;
 
 use linger::{
-    iterative::{BiCgStab, ConjugateGradient, Fgmres, Gmres, Lgmres},
+    iterative::{ConjugateGradient, Fgmres, Gmres, Lgmres},
     precond::{
         AdditivePrecond, Icc0Precond, IlukPrecond, IlutPrecond, JacobiPrecond,
         MultiplicativePrecond, SpaiPrecond,
     },
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, KrylovSolver, Preconditioner, SolverParams, VerboseLevel, Vector,
+    DenseVec, KrylovSolver, Preconditioner, SolverParams, VerboseLevel,
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

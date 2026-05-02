@@ -7,10 +7,9 @@ use linger::{
         ordering::OrderingMethod,
         compress_block,
     },
-    iterative::ConjugateGradient,
     sparse::{CooMatrix, CsrMatrix},
     DenseVec,
-    core::{vector::Vector, operator::LinearOperator},
+    core::operator::LinearOperator,
     KrylovSolver, SolverParams, VerboseLevel,
     Gmres,
 };
@@ -63,8 +62,8 @@ fn multifrontal_exact_solve_small() {
         "exact solve residual = {}", residual(&a, x.as_slice(), b.as_slice()));
 }
 
-/// 2. BLR-compressed solve used as GMRES preconditioner converges.
-/// (GMRES is used instead of CG since the BLR preconditioner may not be SPD.)
+/// BLR-compressed solve (test 2): used as GMRES preconditioner converges.
+/// GMRES is used instead of CG since the BLR preconditioner may not be SPD.
 #[test]
 fn multifrontal_blr_as_precond_gmres_converges() {
     let n = 20;
@@ -107,14 +106,14 @@ fn multifrontal_blr_diagnostics() {
     assert!(solver.blr_compressed_count() <= solver.blr_factor_count());
 }
 
-/// 4. compress_block produces a proper low-rank approximation.
+/// compress_block: proper low-rank approximation.
 /// Uses a clearly rank-1 matrix (dominant singular value ≫ others).
 #[test]
 fn compress_block_rank_and_accuracy() {
     // Build a rank-1 matrix: A = u v^T.
     let m = 8; let n = 6;
-    let u: Vec<f64> = (0..m).map(|i| (i as f64 + 1.0)).collect();
-    let v: Vec<f64> = (0..n).map(|j| (j as f64 * 0.5 + 1.0)).collect();
+    let u: Vec<f64> = (0..m).map(|i| i as f64 + 1.0).collect();
+    let v: Vec<f64> = (0..n).map(|j| j as f64 * 0.5 + 1.0).collect();
     let mut a_mat = vec![0.0f64; m * n];
     for i in 0..m { for j in 0..n { a_mat[i*n+j] = u[i] * v[j]; } }
     let blk = compress_block::<f64>(&a_mat, m, n, 1e-8, 0);

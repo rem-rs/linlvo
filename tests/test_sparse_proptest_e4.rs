@@ -15,6 +15,7 @@ fn to_dense(entries: &[(usize, usize, f64)], n: usize) -> Vec<f64> {
 }
 
 /// Dense matrix-vector product.
+#[allow(dead_code)]
 fn dense_matvec(dense: &[f64], n: usize, x: &[f64]) -> Vec<f64> {
     (0..n).map(|r| (0..n).map(|c| dense[r * n + c] * x[c]).sum()).collect()
 }
@@ -23,6 +24,7 @@ fn dense_matvec(dense: &[f64], n: usize, x: &[f64]) -> Vec<f64> {
 fn norm2(v: &[f64]) -> f64 { v.iter().map(|x| x * x).sum::<f64>().sqrt() }
 
 /// Generate a random n×n CSR matrix with `nnz` nonzeros in [1, n²].
+#[allow(dead_code)]
 fn arb_csr_matrix(n: usize, nnz: usize) -> impl Strategy<Value = (CsrMatrix<f64>, Vec<(usize, usize, f64)>)> {
     proptest::collection::vec(
         (0..n, 0..n, -10.0f64..=10.0f64),

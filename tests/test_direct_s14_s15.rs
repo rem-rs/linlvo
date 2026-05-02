@@ -2,12 +2,13 @@
 //!
 //! Sprint 14: Elimination tree + sparse Cholesky left-looking structural tests.
 //! Sprint 15: MultifrontalLu correctness + BLR-mode preconditioner tests.
+#![allow(clippy::needless_range_loop)]
 
 use linger::{
     direct::{
         DirectSolver, DirectOptions, DirectSolverPrecond,
-        SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
-        ordering::{OrderingMethod, rcm},
+        SparseCholesky, MultifrontalLu, MultifrontalOptions,
+        ordering::OrderingMethod,
     },
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,

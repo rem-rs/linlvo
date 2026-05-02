@@ -17,8 +17,7 @@
 //!    For supernode `(col, s)`:
 //!    a. Dense partial-pivot LU of the s×s pivot block.
 //!    b. Compute L multipliers for the "sub-block" (rows below the supernode).
-//!    c. Schur-complement update of the trailing sub-matrix as a single GEMM:
-//!       `A[col+s:, col+s:] -= sub * U_right`   (sub is nr×s, U_right is s×trail).
+//!    c. Schur-complement update: `A[col+s:,col+s:] -= sub * U_right`; sub is nr×s, U_right is s×trail.
 //! 3. **Solve**: extract sparse L and U; use the existing triangular solvers.
 //!
 //! ## Supernodes

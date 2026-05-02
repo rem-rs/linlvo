@@ -20,6 +20,12 @@ pub mod builder;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+#[cfg(feature = "hypre-rs")]
+pub mod hypre_rs;
+
+#[cfg(feature = "petsc-rs")]
+pub mod petsc_rs;
+
 // ─── Re-exports ──────────────────────────────────────────────────────────────
 
 pub use crate::core::{
@@ -40,7 +46,7 @@ pub use crate::precond::{
     AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile,
     AdsPrecond, AdsConfig, AdsProfile,
 };
-pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr};
+pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr, PipeCg};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType, LevelInfo};
 pub use crate::sparse::{
     BsrMatrix, BsrBuilder,
@@ -60,7 +66,12 @@ pub use crate::parallel_dist::{
     HaloExchange, HaloError, LocalHaloExchange,
     HaloPlan, NeighborHaloPlan,
     DistCsrMatrix,
+    dist_cg, DistCgParams, DistCgResult,
+    GlobalReduce, LocalReduce,
 };
+
+#[cfg(feature = "mpi")]
+pub use crate::parallel_dist::{MpiHaloExchange, MpiReduce};
 
 pub use crate::eigen::{
     EigenParams, EigenResult, EigenSolver, EigenWhich,

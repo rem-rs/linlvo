@@ -85,30 +85,20 @@ impl<T: Scalar> ComplexScalar for T {
     #[inline] fn machine_epsilon() -> T { T::machine_epsilon() }
 }
 
-impl ComplexScalar for num_complex::Complex<f64> {
-    type Real = f64;
+/// Blanket `ComplexScalar` implementation for `Complex<T>` where `T: Scalar`.
+///
+/// This allows algorithms parameterised on `T: ComplexScalar` to accept
+/// complex inputs without enumerating concrete element types.
+impl<T: Scalar> ComplexScalar for num_complex::Complex<T> {
+    type Real = T;
 
-    #[inline] fn from_f64(v: f64) -> Self { num_complex::Complex::new(v, 0.0) }
-    #[inline] fn from_real(r: f64) -> Self { num_complex::Complex::new(r, 0.0) }
-    #[inline] fn real(self) -> f64 { self.re }
-    #[inline] fn imag(self) -> f64 { self.im }
-    #[inline] fn abs(self) -> f64 { num_complex::Complex::norm(self) }
+    #[inline] fn from_f64(v: f64) -> Self { num_complex::Complex::new(T::from_f64(v), T::zero()) }
+    #[inline] fn from_real(r: T)  -> Self { num_complex::Complex::new(r, T::zero()) }
+    #[inline] fn real(self) -> T { self.re }
+    #[inline] fn imag(self) -> T { self.im }
+    #[inline] fn abs(self)  -> T { num_complex::Complex::norm(self) }
     #[inline] fn conj(self) -> Self { num_complex::Complex::conj(&self) }
     #[inline] fn sqrt(self) -> Self { num_complex::Complex::sqrt(self) }
     #[inline] fn is_finite(self) -> bool { self.re.is_finite() && self.im.is_finite() }
-    #[inline] fn machine_epsilon() -> f64 { f64::EPSILON }
-}
-
-impl ComplexScalar for num_complex::Complex<f32> {
-    type Real = f32;
-
-    #[inline] fn from_f64(v: f64) -> Self { num_complex::Complex::new(v as f32, 0.0) }
-    #[inline] fn from_real(r: f32) -> Self { num_complex::Complex::new(r, 0.0) }
-    #[inline] fn real(self) -> f32 { self.re }
-    #[inline] fn imag(self) -> f32 { self.im }
-    #[inline] fn abs(self) -> f32 { num_complex::Complex::norm(self) }
-    #[inline] fn conj(self) -> Self { num_complex::Complex::conj(&self) }
-    #[inline] fn sqrt(self) -> Self { num_complex::Complex::sqrt(self) }
-    #[inline] fn is_finite(self) -> bool { self.re.is_finite() && self.im.is_finite() }
-    #[inline] fn machine_epsilon() -> f32 { f32::EPSILON }
+    #[inline] fn machine_epsilon() -> T { T::machine_epsilon() }
 }

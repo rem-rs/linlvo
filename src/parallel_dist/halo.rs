@@ -16,9 +16,35 @@ pub enum HaloError {
 ///
 /// A production implementation can route requests to MPI neighborhood
 /// communication while keeping solver-side code unchanged.
+///
+/// Implement [`exchange_with_owned`] to support distributed-memory backends
+/// that need both the values-to-send (owned) and the ghost indices (to
+/// receive).  The default implementation delegates to [`exchange`], which is
+/// sufficient for single-process adapters such as [`LocalHaloExchange`].
 pub trait HaloExchange<T: Scalar>: Send + Sync {
     /// Fill `out` with values corresponding to `global_indices`.
+    ///
+    /// This single-sided form is sufficient for [`LocalHaloExchange`], which
+    /// has all global values available locally.
     fn exchange(&self, global_indices: &[usize], out: &mut [T]) -> Result<(), HaloError>;
+
+    /// Bidirectional exchange: send `owned_values` (for owned range
+    /// `[owned_range_start, owned_range_start + owned_values.len())`) to
+    /// neighbors that need them, and fill `ghost_out` with values from remote
+    /// ranks for `ghost_globals`.
+    ///
+    /// The default delegates to [`exchange`] — correct for single-process
+    /// backends that carry all global data locally.  Multi-process (MPI)
+    /// backends **must** override this method.
+    fn exchange_with_owned(
+        &self,
+        _owned_range_start: usize,
+        _owned_values: &[T],
+        ghost_globals: &[usize],
+        ghost_out: &mut [T],
+    ) -> Result<(), HaloError> {
+        self.exchange(ghost_globals, ghost_out)
+    }
 }
 
 /// Halo request/response plan for one neighboring rank.

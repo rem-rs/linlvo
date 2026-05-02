@@ -7,7 +7,7 @@
 //! ```js
 //! import init, {
 //!   WasmCsrMatrix, WasmCgSolver, WasmGmresSolver,
-//!   WasmLuSolver, WasmCholeskySolver, WasmMultifrontalSolver,
+//!   WasmLuSolver, WasmCholeskySolver, WasmLdltSolver, WasmMultifrontalSolver,
 //! } from './linger_wasm.js';
 //! await init();
 //!
@@ -15,13 +15,19 @@
 //! const A = WasmCsrMatrix.from_coo(n, n, rows, cols, vals);
 //! const x = new WasmCgSolver(1e-8, 500).solve(A, b);
 //!
-//! // Direct solver (LU for non-symmetric; Cholesky for SPD; Multifrontal for large)
+//! // Direct solver (LU for non-symmetric; Cholesky for SPD; LDLT for symmetric indefinite)
 //! const x2 = new WasmLuSolver("rcm").solve(A, b);
 //! const x3 = new WasmCholeskySolver("rcm").solve(A, b);
-//! const x4 = new WasmMultifrontalSolver("rcm").solve(A, b);
+//! const x4 = new WasmLdltSolver("nd").solve(A, b);
 //!
-//! // Preconditioned GMRES with MultifrontalLu preconditioner
-//! const x5 = new WasmMultifrontalSolver("rcm").solve_precond_gmres(A, b, 1e-10, 100, 30);
+//! // Multifrontal LU (large systems, or with BLR compression as preconditioner)
+//! const x5 = new WasmMultifrontalSolver("rcm").solve(A, b);
+//! const x6 = new WasmMultifrontalSolver("rcm").solve_precond_gmres(A, b, 1e-10, 100, 30);
+//!
+//! // Multiple right-hand sides — matrix factored once
+//! const x_flat = new WasmLdltSolver("rcm").solve_many(A, b_flat, num_rhs);
+//! const x_lu   = new WasmLuSolver("rcm").solve_many(A, b_flat, num_rhs);
+//! const x_chol = new WasmCholeskySolver("rcm").solve_many(A, b_flat, num_rhs);
 //! ```
 //!
 //! **Analogs**
@@ -154,7 +160,83 @@ mod wasm_impl {
         match s.to_lowercase().as_str() {
             "natural" => crate::direct::ordering::OrderingMethod::Natural,
             "colamd"  => crate::direct::ordering::OrderingMethod::Colamd,
+            "nd" | "nodend" | "node_nd" => crate::direct::ordering::OrderingMethod::NodeNd,
             _         => crate::direct::ordering::OrderingMethod::Rcm,
+        }
+    }
+
+    /// WASM-exported sparse LDLᵀ solver for symmetric (possibly indefinite) matrices.
+    ///
+    /// Unlike Cholesky, this handles symmetric matrices with negative eigenvalues
+    /// (saddle-point problems, symmetric indefinite systems).
+    #[wasm_bindgen]
+    pub struct WasmLdltSolver {
+        ordering: String,
+    }
+
+    #[wasm_bindgen]
+    impl WasmLdltSolver {
+        /// Create a new LDLᵀ solver.
+        ///
+        /// `ordering`: fill-reducing permutation — `"rcm"` (default), `"colamd"`,
+        /// `"nd"` (nested dissection), or `"natural"`.
+        /// Use for **symmetric** (not necessarily positive definite) matrices.
+        #[wasm_bindgen(constructor)]
+        pub fn new(ordering: &str) -> WasmLdltSolver {
+            WasmLdltSolver { ordering: ordering.to_string() }
+        }
+
+        /// Solve `A x = b` using sparse LDLᵀ factorization.
+        pub fn solve(&self, a: &WasmCsrMatrix, b: &[f64]) -> Result<Vec<f64>, JsValue> {
+            use crate::direct::{SparseLdlt, DirectSolver, DirectOptions};
+            let n = a.inner.nrows();
+            if b.len() != n {
+                return Err(JsValue::from_str("b.length must equal A.nrows"));
+            }
+            let b_vec = DenseVec::from_vec(b.to_vec());
+            let mut x = DenseVec::zeros(n);
+            let mut solver = SparseLdlt::<f64>::new(DirectOptions {
+                ordering: parse_ordering(&self.ordering),
+                ..Default::default()
+            });
+            solver.factor(&a.inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            solver.solve(&b_vec, &mut x).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            Ok(x.as_slice().to_vec())
+        }
+
+        /// Solve for multiple right-hand sides, returning results packed into a
+        /// flat `Float64Array` of length `n * num_rhs` (row-major: first `n`
+        /// values are `x₀`, next `n` are `x₁`, etc.).
+        ///
+        /// `b_flat` must have length `n * num_rhs`.
+        pub fn solve_many(
+            &self,
+            a:      &WasmCsrMatrix,
+            b_flat: &[f64],
+            num_rhs: usize,
+        ) -> Result<Vec<f64>, JsValue> {
+            use crate::direct::{SparseLdlt, DirectSolver, DirectOptions};
+            let n = a.inner.nrows();
+            if b_flat.len() != n * num_rhs {
+                return Err(JsValue::from_str(
+                    "b_flat.length must equal A.nrows * num_rhs",
+                ));
+            }
+            let bs: Vec<DenseVec<f64>> = (0..num_rhs)
+                .map(|i| DenseVec::from_vec(b_flat[i * n..(i + 1) * n].to_vec()))
+                .collect();
+            let mut xs: Vec<DenseVec<f64>> =
+                (0..num_rhs).map(|_| DenseVec::zeros(n)).collect();
+            let mut solver = SparseLdlt::<f64>::new(DirectOptions {
+                ordering: parse_ordering(&self.ordering),
+                ..Default::default()
+            });
+            solver.factor(&a.inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            solver.solve_multi(&bs, &mut xs)
+                  .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let mut out = Vec::with_capacity(n * num_rhs);
+            for x in &xs { out.extend_from_slice(x.as_slice()); }
+            Ok(out)
         }
     }
 
@@ -192,6 +274,41 @@ mod wasm_impl {
             solver.solve(&b_vec, &mut x).map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(x.as_slice().to_vec())
         }
+
+        /// Solve for multiple right-hand sides, returning results packed into a
+        /// flat `Float64Array` of length `n * num_rhs` (row-major: first `n`
+        /// values are `x₀`, next `n` are `x₁`, etc.).
+        ///
+        /// `b_flat` must have length `n * num_rhs`.  The matrix is factored once.
+        pub fn solve_many(
+            &self,
+            a:       &WasmCsrMatrix,
+            b_flat:  &[f64],
+            num_rhs: usize,
+        ) -> Result<Vec<f64>, JsValue> {
+            use crate::direct::{SparseLu, DirectSolver, DirectOptions};
+            let n = a.inner.nrows();
+            if b_flat.len() != n * num_rhs {
+                return Err(JsValue::from_str(
+                    "b_flat.length must equal A.nrows * num_rhs",
+                ));
+            }
+            let bs: Vec<DenseVec<f64>> = (0..num_rhs)
+                .map(|i| DenseVec::from_vec(b_flat[i * n..(i + 1) * n].to_vec()))
+                .collect();
+            let mut xs: Vec<DenseVec<f64>> =
+                (0..num_rhs).map(|_| DenseVec::zeros(n)).collect();
+            let mut solver = SparseLu::<f64>::new(DirectOptions {
+                ordering: parse_ordering(&self.ordering),
+                ..Default::default()
+            });
+            solver.factor(&a.inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            solver.solve_multi(&bs, &mut xs)
+                  .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let mut out = Vec::with_capacity(n * num_rhs);
+            for x in &xs { out.extend_from_slice(x.as_slice()); }
+            Ok(out)
+        }
     }
 
     /// WASM-exported sparse Cholesky solver (left-looking, SPD matrices only).
@@ -227,6 +344,42 @@ mod wasm_impl {
             solver.factor(&a.inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
             solver.solve(&b_vec, &mut x).map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(x.as_slice().to_vec())
+        }
+
+        /// Solve for multiple right-hand sides, returning results packed into a
+        /// flat `Float64Array` of length `n * num_rhs` (row-major: first `n`
+        /// values are `x₀`, next `n` are `x₁`, etc.).
+        ///
+        /// `b_flat` must have length `n * num_rhs`.  The matrix is factored once.
+        /// Only valid for **symmetric positive definite** matrices.
+        pub fn solve_many(
+            &self,
+            a:       &WasmCsrMatrix,
+            b_flat:  &[f64],
+            num_rhs: usize,
+        ) -> Result<Vec<f64>, JsValue> {
+            use crate::direct::{SparseCholesky, DirectSolver, DirectOptions};
+            let n = a.inner.nrows();
+            if b_flat.len() != n * num_rhs {
+                return Err(JsValue::from_str(
+                    "b_flat.length must equal A.nrows * num_rhs",
+                ));
+            }
+            let bs: Vec<DenseVec<f64>> = (0..num_rhs)
+                .map(|i| DenseVec::from_vec(b_flat[i * n..(i + 1) * n].to_vec()))
+                .collect();
+            let mut xs: Vec<DenseVec<f64>> =
+                (0..num_rhs).map(|_| DenseVec::zeros(n)).collect();
+            let mut solver = SparseCholesky::<f64>::new(DirectOptions {
+                ordering: parse_ordering(&self.ordering),
+                ..Default::default()
+            });
+            solver.factor(&a.inner).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            solver.solve_multi(&bs, &mut xs)
+                  .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let mut out = Vec::with_capacity(n * num_rhs);
+            for x in &xs { out.extend_from_slice(x.as_slice()); }
+            Ok(out)
         }
     }
 

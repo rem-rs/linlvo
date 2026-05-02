@@ -21,6 +21,7 @@ wasm_bindgen_test_configure!(run_in_node_experimental);
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 /// Build the 1D Laplacian of size n as (row_ptr, col_idx, vals) flat arrays.
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 fn laplacian_1d_coo(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
     let mut rows = Vec::new();
     let mut cols = Vec::new();

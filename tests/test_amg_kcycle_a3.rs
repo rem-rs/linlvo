@@ -1,9 +1,10 @@
 //! Integration tests for A3: AMG K-cycle.
+#![allow(clippy::needless_range_loop)]
 
 mod common;
 
 use linger::{
-    amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType},
+    amg::{AmgConfig, AmgHierarchy, AmgPrecond, CycleType},
     iterative::ConjugateGradient,
     sparse::CsrMatrix,
     DenseVec, KrylovSolver, SolverParams, VerboseLevel, Vector,
