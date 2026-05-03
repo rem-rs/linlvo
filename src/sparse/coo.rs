@@ -75,3 +75,32 @@ impl<T: Scalar> CooMatrix<T> {
     /// Values of all stored entries.
     pub fn values(&self) -> &[T] { &self.values }
 }
+
+// ─── CooMatrix<Complex<T>> ────────────────────────────────────────────────────
+//
+// These methods mirror the Scalar impl but are bounded on `Complex<T>` so that
+// callers working with complex sparse matrices don't need to route through the
+// real Scalar path.
+
+impl<T: Scalar> CooMatrix<num_complex::Complex<T>> {
+    /// Create an empty `nrows × ncols` COO matrix for complex entries.
+    pub fn new_complex(nrows: usize, ncols: usize) -> Self {
+        CooMatrix { nrows, ncols, rows: Vec::new(), cols: Vec::new(), values: Vec::new() }
+    }
+
+    /// Append the entry `(row, col, value)`.
+    pub fn push_complex(&mut self, row: usize, col: usize, value: num_complex::Complex<T>) {
+        debug_assert!(row < self.nrows, "row {row} out of bounds (nrows={})", self.nrows);
+        debug_assert!(col < self.ncols, "col {col} out of bounds (ncols={})", self.ncols);
+        self.rows.push(row);
+        self.cols.push(col);
+        self.values.push(value);
+    }
+
+    /// Number of rows.
+    pub fn nrows_c(&self) -> usize { self.nrows }
+    /// Number of columns.
+    pub fn ncols_c(&self) -> usize { self.ncols }
+    /// Number of stored entries.
+    pub fn nnz_c(&self) -> usize { self.rows.len() }
+}

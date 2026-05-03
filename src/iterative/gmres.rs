@@ -118,12 +118,7 @@ impl<T: Scalar> Gmres<T> {
 
         loop {
             op.apply(x, &mut workspace.ax_scratch);
-            {
-                let rs = workspace.r.as_mut_slice();
-                let bs = b.as_slice();
-                let axs = workspace.ax_scratch.as_slice();
-                for i in 0..n { rs[i] = bs[i] - axs[i]; }
-            }
+            crate::simd::dense_ops::simd_sub(b.as_slice(), workspace.ax_scratch.as_slice(), workspace.r.as_mut_slice());
             let beta = workspace.r.norm2();
             if !beta.is_finite() {
                 return Err(SolverError::NumericalBreakdown {
@@ -178,9 +173,7 @@ impl<T: Scalar> Gmres<T> {
                 for vi in &workspace.v[..=j] {
                     let hij = dot_slice(vi.as_slice(), workspace.w_scratch.as_slice());
                     hj.push(hij);
-                    let ws = workspace.w_scratch.as_mut_slice();
-                    let vis = vi.as_slice();
-                    for i in 0..n { ws[i] -= hij * vis[i]; }
+                    crate::simd::dense_ops::simd_axpy(-hij, vi.as_slice(), workspace.w_scratch.as_mut_slice());
                 }
                 let h_next = workspace.w_scratch.norm2();
                 if !h_next.is_finite() {
@@ -341,7 +334,7 @@ fn givens<T: Scalar>(a: T, b: T) -> (T, T) {
 }
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(

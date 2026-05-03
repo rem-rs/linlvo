@@ -7,6 +7,8 @@ pub mod lgmres;
 pub mod idrs;
 pub mod tfqmr;
 pub mod pipecg;
+pub mod multi_rhs;
+pub mod complex_gmres;
 
 pub use cg::{CgWorkspace, ConjugateGradient};
 pub use gmres::{Gmres, GmresWorkspace};

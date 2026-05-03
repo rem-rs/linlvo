@@ -108,8 +108,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
         {
             let mut ax = DenseVec::zeros(n);
             op.apply(x, &mut ax);
-            let bs = b.as_slice(); let axs = ax.as_slice();
-            for i in 0..n { r[i] = bs[i] - axs[i]; }
+            crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), &mut r);
         }
 
         if rnorm(&r) <= atol || rnorm(&r) <= tol * norm_b_f {
@@ -280,8 +279,7 @@ impl<T: Scalar> KrylovSolver for Idrs<T> {
                         {
                             let mut ax = DenseVec::zeros(n);
                             op.apply(x, &mut ax);
-                            let bs = b.as_slice(); let axs = ax.as_slice();
-                            for i in 0..n { r[i] = bs[i] - axs[i]; }
+                            crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), &mut r);
                         }
                         // Rebuild shadow space with new seed.
                         p_rows = build_shadow(restarts as u64 * 1337);
@@ -393,9 +391,7 @@ fn near_zero<T: Scalar>(v: T) -> bool {
 }
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    let mut s = T::zero();
-    for (&ai, &bi) in a.iter().zip(b.iter()) { s += ai * bi; }
-    s
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn to_f64<T: Scalar>(v: T) -> f64 {

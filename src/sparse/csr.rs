@@ -424,13 +424,8 @@ unsafe fn csr_row_dot_unchecked<T: Scalar>(
                 + *values.get_unchecked(start + 3) * *x.get_unchecked(c3)
         }
         _ => {
-            let mut sum = T::zero();
-            let mut k = start;
-            while k < end {
-                sum += *values.get_unchecked(k) * *x.get_unchecked(*col_idx.get_unchecked(k));
-                k += 1;
-            }
-            sum
+            // For rows with ≥5 NNZ use SIMD-accelerated gather-dot if available.
+            unsafe { crate::simd::simd_row_dot(col_idx, values, x, start, end) }
         }
     }
 }
@@ -463,4 +458,108 @@ impl<T: Scalar> crate::core::operator::TransposeOperator for CsrMatrix<T> {
             }
         }
     }
+}
+
+// ─── LinearOperator impl for Complex CsrMatrix ───────────────────────────────
+
+impl<T: Scalar> LinearOperator for CsrMatrix<num_complex::Complex<T>> {
+    type Vector = DenseVec<num_complex::Complex<T>>;
+
+    #[inline]
+    fn apply(&self, x: &DenseVec<num_complex::Complex<T>>, y: &mut DenseVec<num_complex::Complex<T>>) {
+        use num_complex::Complex;
+        use crate::core::vector::Vector;
+        let xs = Vector::as_slice(x);
+        let ys = Vector::as_mut_slice(y);
+        assert_eq!(xs.len(), self.ncols, "CsrMatrix<Complex>::apply: x length mismatch");
+        assert_eq!(ys.len(), self.nrows, "CsrMatrix<Complex>::apply: y length mismatch");
+        for i in 0..self.nrows {
+            let mut s = Complex::new(T::zero(), T::zero());
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                s += self.values[k] * xs[self.col_idx[k]];
+            }
+            ys[i] = s;
+        }
+    }
+
+    fn nrows(&self) -> usize { self.nrows }
+    fn ncols(&self) -> usize { self.ncols }
+}
+
+impl<T: Scalar> crate::core::operator::TransposeOperator for CsrMatrix<num_complex::Complex<T>> {
+    /// `y = Aᵀ x` (plain transpose, no conjugation).
+    fn apply_transpose(
+        &self,
+        x: &DenseVec<num_complex::Complex<T>>,
+        y: &mut DenseVec<num_complex::Complex<T>>,
+    ) {
+        use num_complex::Complex;
+        use crate::core::vector::Vector;
+        let xs = Vector::as_slice(x);
+        let ys = Vector::as_mut_slice(y);
+        for v in ys.iter_mut() { *v = Complex::new(T::zero(), T::zero()); }
+        for i in 0..self.nrows {
+            let xi = xs[i];
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                ys[self.col_idx[k]] += self.values[k] * xi;
+            }
+        }
+    }
+}
+
+// ─── CsrMatrix<Complex<T>> constructors ──────────────────────────────────────
+
+impl<T: Scalar> CsrMatrix<num_complex::Complex<T>> {
+    /// Build a complex CSR matrix from a complex COO matrix.
+    ///
+    /// Named `from_complex_coo` to avoid method-resolution ambiguity with the
+    /// `CsrMatrix<T: Scalar>::from_coo` impl.
+    ///
+    /// Duplicate `(row, col)` pairs are summed.
+    pub fn from_complex_coo(coo: &crate::sparse::CooMatrix<num_complex::Complex<T>>) -> Self {
+        use num_complex::Complex;
+        let nrows = coo.nrows;
+        let ncols = coo.ncols;
+        let nnz_input = coo.rows.len();
+
+        if nnz_input == 0 {
+            return Self {
+                nrows, ncols, row_ptr: vec![0; nrows + 1], col_idx: vec![], values: vec![],
+            };
+        }
+
+        let mut order: Vec<usize> = (0..nnz_input).collect();
+        order.sort_unstable_by_key(|&i| (coo.rows[i], coo.cols[i]));
+
+        let mut merged: Vec<(usize, usize, Complex<T>)> = Vec::with_capacity(nnz_input);
+        for &i in &order {
+            let r = coo.rows[i];
+            let c = coo.cols[i];
+            let v = coo.values[i];
+            if let Some(last) = merged.last_mut() {
+                if last.0 == r && last.1 == c {
+                    last.2 += v;
+                    continue;
+                }
+            }
+            merged.push((r, c, v));
+        }
+
+        let nnz = merged.len();
+        let mut counts = vec![0usize; nrows];
+        for &(r, _, _) in &merged { counts[r] += 1; }
+        let mut row_ptr = vec![0usize; nrows + 1];
+        for r in 0..nrows { row_ptr[r + 1] = row_ptr[r] + counts[r]; }
+        let mut col_idx = Vec::with_capacity(nnz);
+        let mut values  = Vec::with_capacity(nnz);
+        for (_, c, v) in merged { col_idx.push(c); values.push(v); }
+        Self { nrows, ncols, row_ptr, col_idx, values }
+    }
+
+    /// Number of rows.
+    pub fn nrows(&self) -> usize { self.nrows }
+    /// Number of columns.
+    pub fn ncols(&self) -> usize { self.ncols }
+    /// Number of non-zero entries.
+    pub fn nnz(&self) -> usize { self.values.len() }
 }

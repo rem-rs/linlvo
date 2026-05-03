@@ -154,12 +154,7 @@ fn vcycle<T: Scalar>(
     // Residual: res = b - A x.
     let n = b.len();
     lv.a.apply(x, &mut scratch.ax);
-    {
-        let rs  = scratch.res.as_mut_slice();
-        let bs  = b.as_slice();
-        let axs = scratch.ax.as_slice();
-        for i in 0..n { rs[i] = bs[i] - axs[i]; }
-    }
+    crate::simd::dense_ops::simd_sub(b.as_slice(), scratch.ax.as_slice(), scratch.res.as_mut_slice());
 
     // Restrict: r_c = R * res.
     r.apply(&scratch.res, &mut scratch.coarse_rhs);
@@ -223,12 +218,7 @@ fn inner_cg_solve<T: Scalar>(
     let mut ax = DenseVec::zeros(n);
     lv.a.apply(x, &mut ax);
     let mut r = DenseVec::zeros(n);
-    {
-        let rs  = r.as_mut_slice();
-        let bs  = b.as_slice();
-        let axs = ax.as_slice();
-        for i in 0..n { rs[i] = bs[i] - axs[i]; }
-    }
+    crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
 
     // z = M^{-1} r  (one V-cycle applied to r, not b)
     let mut z = DenseVec::zeros(n);

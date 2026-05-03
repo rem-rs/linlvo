@@ -1,8 +1,14 @@
 //! Integration tests for the Matrix Market (.mtx) reader/writer.
 //!
-//! All tests use in-memory string parsing — no .mtx files need to exist on disk.
+//! Most tests use in-memory string parsing, with a small file-path smoke suite
+//! to cover disk IO helpers as well.
 
-use linger::sparse::{read_matrix_market_str, read_matrix_market_coo_str, write_matrix_market_str, MmioError};
+use std::{env, fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+use linger::sparse::{
+    read_matrix_market, read_matrix_market_str, read_matrix_market_coo_str,
+    write_matrix_market, write_matrix_market_str, MmioError,
+};
 
 // ─── helper ───────────────────────────────────────────────────────────────────
 
@@ -17,6 +23,14 @@ fn get_val(a: &linger::sparse::CsrMatrix<f64>, row: usize, col: usize) -> Option
         }
     }
     None
+}
+
+fn temp_mtx_path(stem: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    env::temp_dir().join(format!("linger_{stem}_{}_{}.mtx", std::process::id(), nanos))
 }
 
 // ─── basic general matrix ────────────────────────────────────────────────────
@@ -430,4 +444,34 @@ fn write_roundtrip_poisson_1d() {
     // Check a diagonal entry survived the roundtrip.
     assert!((get_val(&b, 0, 0).unwrap() - 2.0).abs() < 1e-14);
     assert!((get_val(&b, 1, 0).unwrap() + 1.0).abs() < 1e-14);
+}
+
+#[test]
+fn file_roundtrip_general_matrix() {
+    use linger::sparse::{CooMatrix, CsrMatrix};
+
+    let mut coo = CooMatrix::new(3, 3);
+    coo.push(0, 0, 2.0);
+    coo.push(0, 2, -1.5);
+    coo.push(1, 1, 4.0);
+    coo.push(2, 0, 3.25);
+    let a = CsrMatrix::from_coo(&coo);
+
+    let path = temp_mtx_path("roundtrip_general");
+    write_matrix_market(&path, &a).unwrap();
+    let b = read_matrix_market(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+
+    assert_eq!(a.nrows(), b.nrows());
+    assert_eq!(a.ncols(), b.ncols());
+    assert_eq!(a.nnz(), b.nnz());
+    assert!((get_val(&b, 0, 0).unwrap() - 2.0).abs() < 1e-14);
+    assert!((get_val(&b, 0, 2).unwrap() + 1.5).abs() < 1e-14);
+    assert!((get_val(&b, 2, 0).unwrap() - 3.25).abs() < 1e-14);
+}
+
+#[test]
+fn missing_file_returns_io_error() {
+    let path = temp_mtx_path("missing_input");
+    assert!(matches!(read_matrix_market(&path), Err(MmioError::Io(_))));
 }

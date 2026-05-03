@@ -1270,12 +1270,8 @@ impl<T: Scalar> BlrMatrix<T> {
                 if let Some(blk) = &self.blr_blocks[idx] {
                     blk.apply_add(x_slice, y_slice, alpha);
                 } else if let Some(d) = &self.dense_blocks[idx] {
-                    // Dense row-major m_i × n_j block.
-                    for r in 0..m_i {
-                        let mut s = T::zero();
-                        for c in 0..n_j { s += d[r * n_j + c] * x_slice[c]; }
-                        y_slice[r] += alpha * s;
-                    }
+                    // Dense row-major m_i × n_j block — SIMD GEMV.
+                    crate::simd::dense_ops::simd_gemv(alpha, d, m_i, n_j, x_slice, y_slice);
                 }
                 col_off += n_j;
             }
@@ -1305,10 +1301,8 @@ impl<T: Scalar> BlrMatrix<T> {
                 if let Some(blk) = &self.blr_blocks[idx] {
                     blk.apply_add_t(x_slice, y_slice, alpha);
                 } else if let Some(d) = &self.dense_blocks[idx] {
-                    for r in 0..m_i {
-                        let ax = alpha * x_slice[r];
-                        for c in 0..n_j { y_slice[c] += d[r * n_j + c] * ax; }
-                    }
+                    // Dense transpose GEMV — SIMD-accelerated via row AXPY.
+                    crate::simd::dense_ops::simd_gemv_t(alpha, d, m_i, n_j, x_slice, y_slice);
                 }
                 col_off += n_j;
             }

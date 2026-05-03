@@ -1,3 +1,4 @@
+pub mod dense;
 pub mod error;
 pub mod operator;
 pub mod preconditioner;

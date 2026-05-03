@@ -19,12 +19,26 @@ mkl     = []                         # compatibility flag for native linger mult
 wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 __native = []                        # internal: gates native-only examples (nalgebra etc.)
 
+# ── BLAS backend ────────────────────────────────────────────────────────────
+# Enable with one of:
+#   cargo build --features blas-openblas    (Linux / macOS with OpenBLAS)
+#   cargo build --features blas-accelerate  (macOS Accelerate framework)
+#   cargo build --features blas-netlib      (reference BLAS)
+blas           = ["dep:cblas-sys", "dep:blas-src"]
+blas-openblas  = ["blas", "blas-src/openblas"]
+blas-accelerate = ["blas", "blas-src/accelerate"]
+blas-netlib    = ["blas", "blas-src/netlib"]
+
 [dependencies]
 num-traits  = "0.2"
 num-complex = "0.4"
 thiserror   = "2"
 rayon       = { version = "1.10", optional = true }
 mpi         = { version = "0.8", optional = true }
+
+# BLAS optional deps (activated via blas / blas-openblas / blas-accelerate features)
+cblas-sys = { version = "0.1", optional = true }
+blas-src  = { version = "0.10", optional = true, default-features = false }
 
 # WASM optional deps
 wasm-bindgen            = { version = "0.2", optional = true }
@@ -45,6 +59,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name    = "bench_spmv"
+harness = false
+
+[[bench]]
+name    = "bench_simd_spmv"
 harness = false
 
 [[bench]]

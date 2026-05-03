@@ -109,12 +109,7 @@ impl<T: Scalar> ConjugateGradient<T> {
 
         // r = b − A x₀
         op.apply(x, &mut workspace.ax);
-        {
-            let rs = workspace.r.as_mut_slice();
-            let bs = b.as_slice();
-            let axs = workspace.ax.as_slice();
-            for i in 0..n { rs[i] = bs[i] - axs[i]; }
-        }
+        crate::simd::dense_ops::simd_sub(b.as_slice(), workspace.ax.as_slice(), workspace.r.as_mut_slice());
 
         apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
         workspace.p.copy_from(&workspace.z);
@@ -194,12 +189,7 @@ impl<T: Scalar> ConjugateGradient<T> {
 
             if (k + 1) % self.check_interval == 0 {
                 op.apply(x, &mut workspace.ax);
-                let rs = workspace.r.as_mut_slice();
-                let bs = b.as_slice();
-                let axs = workspace.ax.as_slice();
-                for i in 0..n {
-                    rs[i] = bs[i] - axs[i];
-                }
+                crate::simd::dense_ops::simd_sub(b.as_slice(), workspace.ax.as_slice(), workspace.r.as_mut_slice());
             }
 
             apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
@@ -272,7 +262,7 @@ impl<T: Scalar> KrylovSolver for ConjugateGradient<T> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(

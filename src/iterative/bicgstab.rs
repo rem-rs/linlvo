@@ -79,10 +79,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
         {
             let mut ax = b.zero_like();
             op.apply(x, &mut ax);
-            let rs = r.as_mut_slice();
-            let bs = b.as_slice();
-            let axs = ax.as_slice();
-            for i in 0..n { rs[i] = bs[i] - axs[i]; }
+            crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
         }
 
         // r̃ = r₀  (shadow residual — kept fixed)
@@ -245,7 +242,7 @@ impl<T: Scalar> KrylovSolver for BiCgStab<T> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(

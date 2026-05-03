@@ -49,6 +49,12 @@ pub trait Vector: Clone + Send + Sync {
     /// # Panics
     /// Panics if `self.len() != src.len()`.
     fn copy_from(&mut self, src: &Self);
+
+    /// Read-only slice view of the underlying storage.
+    fn as_slice(&self) -> &[Self::Scalar];
+
+    /// Mutable slice view of the underlying storage.
+    fn as_mut_slice(&mut self) -> &mut [Self::Scalar];
 }
 
 // ─── DenseVec<T> ─────────────────────────────────────────────────────────────
@@ -87,6 +93,32 @@ impl<T: Scalar> DenseVec<T> {
     pub fn into_vec(self) -> Vec<T> {
         self.0
     }
+
+    /// Element-wise difference `self − other` → new vector.
+    pub fn sub(&self, other: &Self) -> Self {
+        debug_assert_eq!(self.0.len(), other.0.len(), "DenseVec::sub: length mismatch");
+        let mut out = DenseVec(vec![T::zero(); self.0.len()]);
+        crate::simd::dense_ops::simd_sub(&self.0, &other.0, &mut out.0);
+        out
+    }
+
+    /// Element-wise product `self ⊙ other` → new vector (Hadamard product).
+    pub fn hadamard(&self, other: &Self) -> Self {
+        debug_assert_eq!(self.0.len(), other.0.len(), "DenseVec::hadamard: length mismatch");
+        let mut out = DenseVec(vec![T::zero(); self.0.len()]);
+        crate::simd::dense_ops::simd_hadamard(&self.0, &other.0, &mut out.0);
+        out
+    }
+
+    /// Infinity-norm: `max |xᵢ|`.
+    pub fn max_abs(&self) -> T {
+        self.0.iter().fold(T::zero(), |m, &v| if v.abs() > m { v.abs() } else { m })
+    }
+
+    /// L1-norm: `Σ |xᵢ|`.
+    pub fn l1_norm(&self) -> T {
+        self.0.iter().fold(T::zero(), |s, &v| s + v.abs())
+    }
 }
 
 impl<T: Scalar> Vector for DenseVec<T> {
@@ -99,31 +131,22 @@ impl<T: Scalar> Vector for DenseVec<T> {
 
     fn dot(&self, other: &Self) -> T {
         debug_assert_eq!(self.0.len(), other.0.len());
-        // For real T, conj(a) = a, so this is the standard dot product.
-        self.0
-            .iter()
-            .zip(other.0.iter())
-            .fold(T::zero(), |acc, (&a, &b)| acc + ComplexScalar::conj(a) * b)
+        crate::simd::dense_ops::simd_dot(&self.0, &other.0)
     }
 
     fn axpy(&mut self, alpha: T, x: &Self) {
         debug_assert_eq!(self.0.len(), x.0.len());
-        for (y_i, &x_i) in self.0.iter_mut().zip(x.0.iter()) {
-            *y_i += alpha * x_i;
-        }
+        crate::simd::dense_ops::simd_axpy(alpha, &x.0, &mut self.0);
     }
 
     fn scale(&mut self, alpha: T) {
-        for y_i in self.0.iter_mut() {
-            *y_i *= alpha;
-        }
+        crate::simd::dense_ops::simd_scale(alpha, &mut self.0);
     }
 
     /// Returns the Euclidean norm.  For `T: Scalar`, `T::Real = T`, so the
     /// return type is still `T` — identical to the previous API.
     fn norm2(&self) -> T {
-        let ss = self.0.iter().fold(T::zero(), |acc, &v| acc + v * v);
-        ss.sqrt()
+        crate::simd::dense_ops::simd_norm2(&self.0)
     }
 
     fn zero_like(&self) -> Self {
@@ -140,6 +163,9 @@ impl<T: Scalar> Vector for DenseVec<T> {
         assert_eq!(self.0.len(), src.0.len(), "DenseVec::copy_from: length mismatch");
         self.0.copy_from_slice(&src.0);
     }
+
+    fn as_slice(&self) -> &[T] { &self.0 }
+    fn as_mut_slice(&mut self) -> &mut [T] { &mut self.0 }
 }
 
 impl<T: Scalar> std::ops::Index<usize> for DenseVec<T> {
@@ -223,6 +249,9 @@ impl<T: Scalar> Vector for DenseVec<Complex<T>> {
         assert_eq!(self.0.len(), src.0.len(), "DenseVec::copy_from: length mismatch");
         self.0.copy_from_slice(&src.0);
     }
+
+    fn as_slice(&self) -> &[Complex<T>] { &self.0 }
+    fn as_mut_slice(&mut self) -> &mut [Complex<T>] { &mut self.0 }
 }
 
 impl<T: Scalar> std::ops::Index<usize> for DenseVec<Complex<T>> {
@@ -249,3 +278,12 @@ impl<T: Scalar> From<DenseVec<Complex<T>>> for Vec<Complex<T>> {
         d.0
     }
 }
+
+// ── Accessor methods for Complex<T> vectors ───────────────────────────────────
+//
+// NOTE: No inherent `as_slice`/`as_mut_slice`/`len` here — those exist only in
+// `impl<T: Scalar> DenseVec<T>` above.  For complex vectors, access elements
+// through the `Vector` trait methods or the `Index`/`IndexMut` impls.
+// The `len()` method is available through `Vector::len()`.
+
+impl<T: Scalar> DenseVec<Complex<T>> {}

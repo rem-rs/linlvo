@@ -188,6 +188,13 @@ assert!(result.converged);
 
 The repository ships with runnable examples that cover the main workflows:
 
+Suggested starting points:
+
+- New to the crate: start with `ex01_csr_basics`, `ex02_poisson_1d`, and `ex05_preconditioned_cg`.
+- Looking for high-level APIs: start with `ex11_builder`, then `ex15_builder_report`.
+- Working on auxiliary-space preconditioners: start with `ex12_ams_ads`, then `ex16_ams_ads_builder`.
+- Working on file interchange: start with `ex10_matrix_market`.
+
 | Example | Focus |
 |---------|-------|
 | `ex01_csr_basics` | COO assembly, CSR conversion, SpMV, transpose, diagonal queries |
@@ -204,6 +211,8 @@ The repository ships with runnable examples that cover the main workflows:
 | `ex12_ams_ads` | AMS/ADS auxiliary-space preconditioners on discrete chain/grid complexes |
 | `ex13_ordering_compare` | Natural/RCM/COLAMD/NodeNd ordering comparison via bandwidth/profile and direct solves |
 | `ex14_matrix_free_operator` | Custom matrix-free `LinearOperator` with eigen solvers |
+| `ex15_builder_report` | `SolverBuilder::solve_with_report` diagnostics for preconditioned iterative solves |
+| `ex16_ams_ads_builder` | `SolverBuilder` HPC AMS/ADS presets plus profile and Krylov diagnostics |
 
 Run an example with:
 
@@ -217,6 +226,8 @@ cargo run --example ex11_builder
 cargo run --example ex12_ams_ads
 cargo run --example ex13_ordering_compare
 cargo run --example ex14_matrix_free_operator
+cargo run --example ex15_builder_report
+cargo run --example ex16_ams_ads_builder
 ```
 
 `ex04_nalgebra` is native-only and requires:

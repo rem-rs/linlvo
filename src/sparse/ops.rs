@@ -29,24 +29,17 @@ pub fn spmv_csc<T: Scalar>(mat: &CscMatrix<T>, x: &[T], y: &mut [T]) {
 // ─── Dense-vector AXPY ───────────────────────────────────────────────────────
 
 /// `y += alpha * x`  for dense slice vectors.
-///
-/// This is a fallback scalar implementation; the parallel version
-/// (`rayon_ops::axpy`) will be added in Sprint 5.
 #[inline]
 pub fn axpy<T: Scalar>(alpha: T, x: &[T], y: &mut [T]) {
     debug_assert_eq!(x.len(), y.len(), "axpy: length mismatch");
-    for (yi, &xi) in y.iter_mut().zip(x.iter()) {
-        *yi += alpha * xi;
-    }
+    crate::simd::dense_ops::simd_axpy(alpha, x, y);
 }
 
 /// `y = alpha * x + beta * y`  for dense slice vectors.
 #[inline]
 pub fn axpby<T: Scalar>(alpha: T, x: &[T], beta: T, y: &mut [T]) {
     debug_assert_eq!(x.len(), y.len(), "axpby: length mismatch");
-    for (yi, &xi) in y.iter_mut().zip(x.iter()) {
-        *yi = alpha * xi + beta * *yi;
-    }
+    crate::simd::dense_ops::simd_axpby(alpha, x, beta, y);
 }
 
 // ─── Diagonal extraction ─────────────────────────────────────────────────────
@@ -64,11 +57,11 @@ pub fn extract_diagonal<T: Scalar>(mat: &CsrMatrix<T>) -> Vec<T> {
 #[inline]
 pub fn dot<T: Scalar>(x: &[T], y: &[T]) -> T {
     debug_assert_eq!(x.len(), y.len(), "dot: length mismatch");
-    x.iter().zip(y.iter()).fold(T::zero(), |acc, (&a, &b)| acc + a * b)
+    crate::simd::dense_ops::simd_dot(x, y)
 }
 
 /// Euclidean 2-norm  `√(Σ xᵢ²)`.
 #[inline]
 pub fn norm2<T: Scalar>(x: &[T]) -> T {
-    x.iter().fold(T::zero(), |acc, &v| acc + v * v).sqrt()
+    crate::simd::dense_ops::simd_norm2(x)
 }

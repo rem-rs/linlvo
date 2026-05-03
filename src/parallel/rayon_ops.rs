@@ -66,43 +66,8 @@ unsafe fn csr_row_dot_unchecked<T: Scalar>(
     start: usize,
     end: usize,
 ) -> T {
-    match end - start {
-        0 => T::zero(),
-        1 => *values.get_unchecked(start) * *x.get_unchecked(*col_idx.get_unchecked(start)),
-        2 => {
-            let c0 = *col_idx.get_unchecked(start);
-            let c1 = *col_idx.get_unchecked(start + 1);
-            *values.get_unchecked(start) * *x.get_unchecked(c0)
-                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
-        }
-        3 => {
-            let c0 = *col_idx.get_unchecked(start);
-            let c1 = *col_idx.get_unchecked(start + 1);
-            let c2 = *col_idx.get_unchecked(start + 2);
-            *values.get_unchecked(start) * *x.get_unchecked(c0)
-                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
-                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
-        }
-        4 => {
-            let c0 = *col_idx.get_unchecked(start);
-            let c1 = *col_idx.get_unchecked(start + 1);
-            let c2 = *col_idx.get_unchecked(start + 2);
-            let c3 = *col_idx.get_unchecked(start + 3);
-            *values.get_unchecked(start) * *x.get_unchecked(c0)
-                + *values.get_unchecked(start + 1) * *x.get_unchecked(c1)
-                + *values.get_unchecked(start + 2) * *x.get_unchecked(c2)
-                + *values.get_unchecked(start + 3) * *x.get_unchecked(c3)
-        }
-        _ => {
-            let mut sum = T::zero();
-            let mut k = start;
-            while k < end {
-                sum += *values.get_unchecked(k) * *x.get_unchecked(*col_idx.get_unchecked(k));
-                k += 1;
-            }
-            sum
-        }
-    }
+    // Use SIMD-accelerated dot product when available (SIMD module will dispatch)
+    crate::simd::simd_row_dot(col_idx, values, x, start, end)
 }
 
 // ─── SpMV ─────────────────────────────────────────────────────────────────────
@@ -219,18 +184,23 @@ pub fn parallel_axpy<T: Scalar + Send + Sync>(alpha: T, x: &[T], y: &mut [T]) {
     {
         use rayon::prelude::*;
         if x.len() < PARALLEL_VECTOR_MIN_LEN {
-            crate::sparse::ops::axpy(alpha, x, y);
+            crate::simd::dense_ops::simd_axpy(alpha, x, y);
             return;
         }
-        y.par_iter_mut().zip(x.par_iter()).for_each(|(yi, &xi)| {
-            *yi += alpha * xi;
-        });
+        // Split into equal chunks so each thread gets a contiguous slice,
+        // then apply SIMD within each chunk (Rayon × SIMD two-level parallelism).
+        let nthreads = rayon::current_num_threads().max(1);
+        let chunk_size = ((x.len() + nthreads - 1) / nthreads).max(256);
+        x.par_chunks(chunk_size)
+            .zip(y.par_chunks_mut(chunk_size))
+            .for_each(|(xc, yc)| {
+                crate::simd::dense_ops::simd_axpy(alpha, xc, yc);
+            });
+        return;
     }
 
     #[cfg(not(feature = "rayon"))]
-    {
-        crate::sparse::ops::axpy(alpha, x, y);
-    }
+    crate::simd::dense_ops::simd_axpy(alpha, x, y);
 }
 
 /// Parallel `y = alpha * x + beta * y`.
@@ -241,18 +211,21 @@ pub fn parallel_axpby<T: Scalar + Send + Sync>(alpha: T, x: &[T], beta: T, y: &m
     {
         use rayon::prelude::*;
         if x.len() < PARALLEL_VECTOR_MIN_LEN {
-            crate::sparse::ops::axpby(alpha, x, beta, y);
+            crate::simd::dense_ops::simd_axpby(alpha, x, beta, y);
             return;
         }
-        y.par_iter_mut().zip(x.par_iter()).for_each(|(yi, &xi)| {
-            *yi = alpha * xi + beta * *yi;
-        });
+        let nthreads = rayon::current_num_threads().max(1);
+        let chunk_size = ((x.len() + nthreads - 1) / nthreads).max(256);
+        x.par_chunks(chunk_size)
+            .zip(y.par_chunks_mut(chunk_size))
+            .for_each(|(xc, yc)| {
+                crate::simd::dense_ops::simd_axpby(alpha, xc, beta, yc);
+            });
+        return;
     }
 
     #[cfg(not(feature = "rayon"))]
-    {
-        crate::sparse::ops::axpby(alpha, x, beta, y);
-    }
+    crate::simd::dense_ops::simd_axpby(alpha, x, beta, y);
 }
 
 // ─── Dot product / norm ───────────────────────────────────────────────────────
@@ -265,18 +238,18 @@ pub fn parallel_dot<T: Scalar + Send + Sync>(x: &[T], y: &[T]) -> T {
     {
         use rayon::prelude::*;
         if x.len() < PARALLEL_VECTOR_MIN_LEN {
-            return crate::sparse::ops::dot(x, y);
+            return crate::simd::dense_ops::simd_dot(x, y);
         }
-        x.par_iter()
-            .zip(y.par_iter())
-            .map(|(&a, &b)| a * b)
-            .reduce(|| T::zero(), |acc, v| acc + v)
+        let nthreads = rayon::current_num_threads().max(1);
+        let chunk_size = ((x.len() + nthreads - 1) / nthreads).max(256);
+        return x.par_chunks(chunk_size)
+            .zip(y.par_chunks(chunk_size))
+            .map(|(xc, yc)| crate::simd::dense_ops::simd_dot(xc, yc))
+            .reduce(|| T::zero(), |a, b| a + b);
     }
 
     #[cfg(not(feature = "rayon"))]
-    {
-        crate::sparse::ops::dot(x, y)
-    }
+    crate::simd::dense_ops::simd_dot(x, y)
 }
 
 /// Parallel Euclidean 2-norm `√(Σ xᵢ²)`.
@@ -285,16 +258,21 @@ pub fn parallel_norm2<T: Scalar + Send + Sync>(x: &[T]) -> T {
     {
         use rayon::prelude::*;
         if x.len() < PARALLEL_VECTOR_MIN_LEN {
-            return crate::sparse::ops::norm2(x);
+            return crate::simd::dense_ops::simd_norm2(x);
         }
-        x.par_iter()
-            .map(|&v| v * v)
-            .reduce(|| T::zero(), |acc, v| acc + v)
-            .sqrt()
+        let nthreads = rayon::current_num_threads().max(1);
+        let chunk_size = ((x.len() + nthreads - 1) / nthreads).max(256);
+        // Compute sum-of-squares in parallel using SIMD per chunk, then sqrt once.
+        let ss = x.par_chunks(chunk_size)
+            .map(|xc| {
+                // norm2^2 for each chunk via dot(xc, xc)
+                let n = crate::simd::dense_ops::simd_norm2(xc);
+                n * n
+            })
+            .reduce(|| T::zero(), |a, b| a + b);
+        return ss.sqrt();
     }
 
     #[cfg(not(feature = "rayon"))]
-    {
-        crate::sparse::ops::norm2(x)
-    }
+    crate::simd::dense_ops::simd_norm2(x)
 }

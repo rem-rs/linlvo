@@ -86,10 +86,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
             {
                 let mut ax = b.zero_like();
                 op.apply(x, &mut ax);
-                let rs = r.as_mut_slice();
-                let bs = b.as_slice();
-                let axs = ax.as_slice();
-                for i in 0..n { rs[i] = bs[i] - axs[i]; }
+                crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
             }
             let beta = r.norm2();
             let rel = beta / norm_b_f;
@@ -136,9 +133,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
                 for vi in &v[..=j] {
                     let hij = dot_slice(vi.as_slice(), w.as_slice());
                     hcol.push(hij);
-                    let ws  = w.as_mut_slice();
-                    let vis = vi.as_slice();
-                    for i in 0..n { ws[i] -= hij * vis[i]; }
+                    crate::simd::dense_ops::simd_axpy(-hij, vi.as_slice(), w.as_mut_slice());
                 }
                 let h_next = w.norm2();
                 hcol.push(h_next);
@@ -201,10 +196,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
                 {
                     let mut ax = b.zero_like();
                     op.apply(x, &mut ax);
-                    let rs  = r_final.as_mut_slice();
-                    let bs  = b.as_slice();
-                    let axs = ax.as_slice();
-                    for i in 0..n { rs[i] = bs[i] - axs[i]; }
+                    crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r_final.as_mut_slice());
                 }
                 let rel = r_final.norm2() / norm_b_f;
                 if params.verbose != VerboseLevel::Silent {
@@ -220,10 +212,7 @@ impl<T: Scalar> KrylovSolver for Fgmres<T> {
         {
             let mut ax = b.zero_like();
             op.apply(x, &mut ax);
-            let rs  = r_final.as_mut_slice();
-            let bs  = b.as_slice();
-            let axs = ax.as_slice();
-            for i in 0..n { rs[i] = bs[i] - axs[i]; }
+            crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r_final.as_mut_slice());
         }
         let final_residual = to_f64(r_final.norm2() / norm_b_f);
         Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
@@ -246,7 +235,7 @@ fn givens<T: Scalar>(a: T, b: T) -> (T, T) {
 }
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(

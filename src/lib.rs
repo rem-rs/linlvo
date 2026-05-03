@@ -16,6 +16,10 @@ pub mod parallel_dist;
 pub mod eigen;
 pub mod direct;
 pub mod builder;
+pub mod simd;
+
+#[cfg(feature = "blas")]
+pub mod blas_backend;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -35,6 +39,7 @@ pub use crate::core::{
     scalar::{Scalar, ComplexScalar},
     solver::{KrylovSolver, SolverParams, SolverResult, VerboseLevel},
     vector::{DenseVec, Vector},
+    dense::DenseMatrix,
 };
 
 pub use num_complex::Complex;
@@ -47,10 +52,12 @@ pub use crate::precond::{
     AdsPrecond, AdsConfig, AdsProfile,
 };
 pub use crate::iterative::{ConjugateGradient, Gmres, BiCgStab, Minres, Fgmres, Lgmres, Idrs, Tfqmr, PipeCg};
+pub use crate::iterative::complex_gmres::{ComplexGmres, ComplexGmresWorkspace, ComplexGmresResult};
 pub use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType, LevelInfo};
 pub use crate::sparse::{
     BsrMatrix, BsrBuilder,
     DiaMatrix, EllMatrix,
+    CsrMatrix, CooMatrix,
     read_matrix_market, read_matrix_market_coo,
     read_matrix_market_str, read_matrix_market_coo_str,
     write_matrix_market, write_matrix_market_str,

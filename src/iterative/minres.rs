@@ -220,7 +220,7 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(

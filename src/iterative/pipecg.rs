@@ -207,11 +207,7 @@ impl<T: Scalar> KrylovSolver for PipeCg<T> {
                 || delta.abs() < T::machine_epsilon() * T::from_f64(1e3) * gamma.abs()
             {
                 op.apply(x, &mut ax);
-                {
-                    let rs = r.as_mut_slice();
-                    let bs = b.as_slice(); let axs = ax.as_slice();
-                    for i in 0..n { rs[i] = bs[i] - axs[i]; }
-                }
+                crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
                 let true_r_norm = r.norm2();
                 let true_res = true_r_norm / norm_b_f;
                 if true_r_norm <= T::from_f64(params.atol) || true_res < T::from_f64(params.rtol) {
@@ -284,11 +280,7 @@ impl<T: Scalar> KrylovSolver for PipeCg<T> {
             // Also resets search directions to prevent accumulated-error runaway.
             if (k + 1) % check_every == 0 {
                 op.apply(x, &mut ax);
-                {
-                    let rs = r.as_mut_slice();
-                    let bs = b.as_slice(); let axs = ax.as_slice();
-                    for i in 0..n { rs[i] = bs[i] - axs[i]; }
-                }
+                crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
                 // Check convergence on the true residual.
                 let tr_norm = r.norm2();
                 if tr_norm <= T::from_f64(params.atol) || tr_norm / norm_b_f < T::from_f64(params.rtol) {
@@ -360,5 +352,5 @@ fn dot<T: Scalar>(a: &DenseVec<T>, b: &DenseVec<T>) -> T {
 
 #[inline]
 fn dot_slices<T: Scalar>(a: &[T], b: &[T]) -> T {
-    a.iter().zip(b.iter()).fold(T::zero(), |acc, (&ai, &bi)| acc + ai * bi)
+    crate::simd::dense_ops::simd_dot(a, b)
 }
