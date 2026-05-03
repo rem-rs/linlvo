@@ -150,7 +150,7 @@ impl MultiRhsGmres {
         let sp: SolverParams = params.into();
 
         // Per-column scratch: residuals, Krylov basis, convergence flags
-        let mut r: Vec<DenseVec<T>>       = (0..k).map(|j| {
+        let r: Vec<DenseVec<T>>           = (0..k).map(|j| {
             // r_j = b_j - A x_j
             let bj = b.col(j);
             let xj = x.col(j);

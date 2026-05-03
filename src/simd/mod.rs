@@ -16,6 +16,8 @@ pub mod smoother;
 
 pub use dense_ops::{simd_axpy, simd_axpby, simd_dot, simd_norm2, simd_sub,
                     simd_scale, simd_gemv, simd_gemv_t, simd_hadamard};
+pub use smoother::{jacobi_smooth_simd, gs_smooth_simd, chebyshev_smooth_simd,
+                   estimate_spectral_radius};
 
 /// Perform a dot product of a sparse row with a dense vector using SIMD if available.
 ///

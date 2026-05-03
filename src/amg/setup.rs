@@ -13,7 +13,7 @@ use crate::amg::{
     coarsen_agg::{build_aggregates, tentative_prolongation},
     coarsen_rs::rs_coarsen,
     interpolation::{rs_interpolation, smooth_prolongation},
-    smoother::{SmootherType, estimate_spectral_radius_dinv_a},
+    smoother::{SmootherType},
     strength::strong_connections,
 };
 use crate::core::scalar::Scalar;
@@ -123,7 +123,7 @@ impl<T: Scalar> AmgHierarchy<T> {
 
             // Precompute spectral radius of D^{-1}A if needed (20 power iterations).
             let sr = if need_spectral {
-                Some(estimate_spectral_radius_dinv_a(&a_now, 20))
+                Some(crate::simd::smoother::estimate_spectral_radius(&a_now, 20))
             } else {
                 None
             };

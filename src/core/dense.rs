@@ -12,7 +12,7 @@
 //! can be passed directly into any Krylov solver.
 
 use num_complex::Complex;
-use num_traits::{Zero, One};
+use num_traits::Zero;
 use super::scalar::{Scalar, ComplexScalar};
 use super::vector::{DenseVec, Vector};
 use super::operator::{LinearOperator, TransposeOperator};

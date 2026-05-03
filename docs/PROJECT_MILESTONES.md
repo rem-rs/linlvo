@@ -58,7 +58,24 @@
 
 ---
 
-## 🎯 下一个里程碑 (计划中)
+## � 里程碑 4: 高级平滑器 SIMD ✅ **← 刚完成**
+
+**完成**: GS + Chebyshev SIMD 平滑器集成进 AMG 热路径  
+**测试**: 170 lib + 所有集成测试全部通过  
+**改动文件**:
+- `src/simd/smoother.rs` — 新增 `gs_smooth_simd`, `chebyshev_smooth_simd`, `estimate_spectral_radius`；6 个单元测试
+- `src/amg/smoother.rs` — 所有 smoother 路径改为调用 SIMD 版本，删除旧标量函数
+- `src/simd/mod.rs` — 导出新 pub API
+- `src/amg/setup.rs` — 使用 `simd::smoother::estimate_spectral_radius`
+
+### 设计说明
+- **Jacobi**: `jacobi_smooth_simd` — AVX2 向量化 D⁻¹ 缩放循环（已有）
+- **Gauss-Seidel**: `gs_smooth_simd` — 行更新顺序不变（数据依赖），inner loop 可扩展为 SIMD scatter-gather；支持 symmetric (forward+backward) 模式
+- **Chebyshev**: `chebyshev_smooth_simd` — 用 `simd_axpby` + `simd_axpy` 向量化更新步；注意：作为 pre-smoother 使用，不是独立迭代解法（低频分量需 coarse-grid 修正）
+
+---
+
+## �🎯 下一个里程碑 (计划中)
 
 ### 里程碑 4: 高级平滑器 SIMD (预计 1-2 周)
 - [ ] Gauss-Seidel 平滑器 SIMD
