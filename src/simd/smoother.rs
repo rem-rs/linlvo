@@ -96,11 +96,12 @@ fn jacobi_scale_simd<T: Scalar>(
         }
     }
 
+    // aarch64: NEON jacobi scale produces incorrect results on some inputs (zero-diagonal guard
+    // in vectorized loop is absent); fall through to the safe scalar implementation.
+
     // Scalar fallback
     jacobi_scale_scalar(x, diag, v, alpha);
 }
-
-/// Scalar fallback for Jacobi scaling.
 #[inline]
 fn jacobi_scale_scalar<T: Scalar>(
     x: &mut [T],

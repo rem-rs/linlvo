@@ -7,9 +7,15 @@
 //! - NORM2: n = ‖x‖₂
 //!
 //! SIMD acceleration provides 2-4x speedup for large vectors.
-//! Dispatches to AVX2 (f64: 4-lane, f32: 8-lane) at runtime; scalar fallback otherwise.
+//! Dispatches to:
+//! - x86_64: AVX2 (f64: 4-lane, f32: 8-lane) — runtime detection
+//! - AArch64: NEON (f64: 2-lane, f32: 4-lane) — always available on Apple Silicon
+//! - Scalar fallback otherwise.
 
 use crate::core::scalar::Scalar;
+
+#[cfg(target_arch = "aarch64")]
+use super::aarch64;
 
 /// Dispatch helper: reinterpret generic T slices as f64 slices and call `f`.
 ///
@@ -64,6 +70,23 @@ pub fn simd_axpy<T: Scalar>(alpha: T, x: &[T], y: &mut [T]) {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::mem::size_of::<T>() == 8 {
+            let a  = unsafe { *(&alpha as *const T as *const f64) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
+            unsafe { aarch64::neon_axpy_f64(a, xf, yf); }
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let a  = unsafe { *(&alpha as *const T as *const f32) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
+            unsafe { aarch64::neon_axpy_f32(a, xf, yf); }
+            return;
+        }
+    }
+
     scalar_axpy(alpha, x, y);
 }
 
@@ -97,6 +120,25 @@ pub fn simd_axpby<T: Scalar>(alpha: T, x: &[T], beta: T, y: &mut [T]) {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::mem::size_of::<T>() == 8 {
+            let a  = unsafe { *(&alpha as *const T as *const f64) };
+            let b  = unsafe { *(&beta  as *const T as *const f64) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
+            unsafe { aarch64::neon_axpby_f64(a, xf, b, yf); }
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let a  = unsafe { *(&alpha as *const T as *const f32) };
+            let b  = unsafe { *(&beta  as *const T as *const f32) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
+            unsafe { aarch64::neon_axpby_f32(a, xf, b, yf); }
+            return;
+        }
+    }
+
     scalar_axpby(alpha, x, beta, y);
 }
 
@@ -124,6 +166,21 @@ pub fn simd_dot<T: Scalar>(x: &[T], y: &[T]) -> T {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::mem::size_of::<T>() == 8 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts(y.as_ptr() as *const f64, y.len()) };
+            let r = unsafe { aarch64::neon_dot_f64(xf, yf) };
+            return unsafe { *(&r as *const f64 as *const T) };
+        } else if std::mem::size_of::<T>() == 4 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts(y.as_ptr() as *const f32, y.len()) };
+            let r = unsafe { aarch64::neon_dot_f32(xf, yf) };
+            return unsafe { *(&r as *const f32 as *const T) };
+        }
+    }
+
     scalar_dot(x, y)
 }
 
@@ -141,6 +198,22 @@ pub fn simd_norm2<T: Scalar>(x: &[T]) -> T {
         } else if std::mem::size_of::<T>() == 4 {
             let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
             let r = x86_64::avx2_norm2_f32(xf);
+            return unsafe { *(&r as *const f32 as *const T) };
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // Use NEON only for longer vectors to avoid floating-point ordering
+        // differences vs scalar that can cause numerical instability in
+        // sensitive eigensolvers (e.g. LOBPCG for tiny systems).
+        if std::mem::size_of::<T>() == 8 && x.len() >= 8 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let r = unsafe { aarch64::neon_norm2_f64(xf) };
+            return unsafe { *(&r as *const f64 as *const T) };
+        } else if std::mem::size_of::<T>() == 4 && x.len() >= 8 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let r = unsafe { aarch64::neon_norm2_f32(xf) };
             return unsafe { *(&r as *const f32 as *const T) };
         }
     }
@@ -178,6 +251,8 @@ pub fn simd_sub<T: Scalar>(a: &[T], b: &[T], out: &mut [T]) {
     scalar_sub(a, b, out);
 }
 
+// aarch64 sub not needed — scalar is fine; only add if profiling shows it's hot
+
 // ─── SCALE ───────────────────────────────────────────────────────────────────
 
 /// SIMD-accelerated in-place scale `y[i] *= alpha`.
@@ -194,6 +269,21 @@ pub fn simd_scale<T: Scalar>(alpha: T, y: &mut [T]) {
             let a = unsafe { *(&alpha as *const T as *const f32) };
             let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
             x86_64::avx2_scale_f32(a, yf);
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::mem::size_of::<T>() == 8 {
+            let a  = unsafe { *(&alpha as *const T as *const f64) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
+            unsafe { aarch64::neon_scale_f64(a, yf); }
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let a  = unsafe { *(&alpha as *const T as *const f32) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
+            unsafe { aarch64::neon_scale_f32(a, yf); }
             return;
         }
     }
@@ -672,6 +762,24 @@ mod tests {
         let x9 = vec![1.0_f64; 9];
         let n9 = simd_norm2(&x9);
         assert!((n9 - 3.0).abs() < 1e-12, "got {n9}");
+    }
+
+    #[test]
+    fn test_simd_lobpcg_sequence_n4() {
+        // Reproduce the sequence that LOBPCG does for a 4x4 diagonal matrix
+        let a_diag = [0.3_f64, 1.2, 2.5, 4.0];
+        // Deterministic "random" init (matches fill_random seed 42 + 0 * deadbeef = 42+1=43)
+        let mut x = vec![0.1_f64, -0.3, 0.7, -0.5];  // arbitrary non-zero
+        let nrm = simd_norm2(&x);
+        assert!(nrm > 1e-10, "norm is zero?! {nrm}");
+        simd_scale(1.0 / nrm, &mut x);
+        let nrm2 = simd_norm2(&x);
+        assert!((nrm2 - 1.0).abs() < 1e-12, "after normalize: nrm={nrm2}");
+        // Ax
+        let ax: Vec<f64> = x.iter().zip(a_diag.iter()).map(|(xi, ai)| ai * xi).collect();
+        let lambda = simd_dot(&x, &ax);
+        assert!(lambda > 0.0, "lambda should be positive, got {lambda}");
+        assert!(lambda >= 0.29 && lambda <= 4.01, "lambda should be in [0.3, 4.0], got {lambda}");
     }
 
     #[test]

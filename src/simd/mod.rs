@@ -46,6 +46,22 @@ pub unsafe fn simd_row_dot<T: Scalar>(
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON is always available on AArch64.
+        if std::mem::size_of::<T>() == 8 {
+            let vf = unsafe { std::slice::from_raw_parts(values.as_ptr() as *const f64, values.len()) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr()      as *const f64, x.len()) };
+            let r  = unsafe { aarch64::neon_row_dot_f64(col_idx, vf, xf, start, end) };
+            return unsafe { *(&r as *const f64 as *const T) };
+        } else if std::mem::size_of::<T>() == 4 {
+            let vf = unsafe { std::slice::from_raw_parts(values.as_ptr() as *const f32, values.len()) };
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr()      as *const f32, x.len()) };
+            let r  = unsafe { aarch64::neon_row_dot_f32(col_idx, vf, xf, start, end) };
+            return unsafe { *(&r as *const f32 as *const T) };
+        }
+    }
+
     // Fallback to scalar implementation
     scalar_row_dot(col_idx, values, x, start, end)
 }
@@ -141,3 +157,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
