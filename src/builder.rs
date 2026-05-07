@@ -94,9 +94,6 @@ pub struct BackendCapabilities {
     pub petsc_rs: bool,
     /// Legacy placeholder for C-lib PETSc binding (`petsc-ffi` feature).
     pub petsc_ffi: bool,
-    /// Whether the MUMPS-compatibility profile is advertised by this build.
-    pub mumps: bool,
-    pub mkl: bool,
     pub wasm_target: bool,
 }
 
@@ -107,8 +104,6 @@ impl BackendCapabilities {
             hypre_rs: cfg!(feature = "hypre-rs"),
             petsc_rs: cfg!(feature = "petsc-rs"),
             petsc_ffi: cfg!(feature = "petsc-ffi"),
-            mumps: cfg!(feature = "mumps"),
-            mkl: cfg!(feature = "mkl"),
             wasm_target: cfg!(target_arch = "wasm32"),
         }
     }
@@ -546,8 +541,7 @@ impl SolverBuilder {
         bs: &[DenseVec<T>],
         xs: &mut [DenseVec<T>],
     ) -> Result<(), SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions,
-                            MumpsSolver, MklSolver};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
         macro_rules! factor_and_solve_many {
             ($solver:expr) => {{
                 let mut s = $solver;
@@ -565,9 +559,13 @@ impl SolverBuilder {
                     MultifrontalOptions { base: self.direct_opts(), ..Default::default() }
                 )),
             DirectBackend::Mumps =>
-                factor_and_solve_many!(MumpsSolver::<T>::with_options(self.direct_opts())),
+                factor_and_solve_many!(MultifrontalLu::<T>::with_options(
+                    MultifrontalOptions { base: self.direct_opts(), ..Default::default() }
+                )),
             DirectBackend::Mkl =>
-                factor_and_solve_many!(MklSolver::<T>::with_options(self.direct_opts())),
+                factor_and_solve_many!(MultifrontalLu::<T>::with_options(
+                    MultifrontalOptions { base: self.direct_opts(), ..Default::default() }
+                )),
         }
     }
 
@@ -637,7 +635,7 @@ impl SolverBuilder {
         b: &DenseVec<T>,
         x: &mut DenseVec<T>,
     ) -> Result<(), SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
         match backend {
             DirectBackend::Lu => {
                 let mut s = SparseLu::<T>::new(self.direct_opts());
@@ -658,12 +656,18 @@ impl SolverBuilder {
                 s.solve(b, x)
             }
             DirectBackend::Mumps => {
-                let mut s = MumpsSolver::<T>::with_options(self.direct_opts());
+                let mut s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
+                    base: self.direct_opts(),
+                    ..Default::default()
+                });
                 s.factor(a)?;
                 s.solve(b, x)
             }
             DirectBackend::Mkl => {
-                let mut s = MklSolver::<T>::with_options(self.direct_opts());
+                let mut s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
+                    base: self.direct_opts(),
+                    ..Default::default()
+                });
                 s.factor(a)?;
                 s.solve(b, x)
             }
@@ -836,7 +840,7 @@ impl SolverBuilder {
         x:       &mut DenseVec<T>,
         params:  &SolverParams,
     ) -> Result<SolverResult, SolverError> {
-        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, MumpsSolver, MklSolver};
+        use crate::direct::{SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions};
         match backend {
             DirectBackend::Lu => {
                 let s = SparseLu::<T>::new(self.direct_opts());
@@ -857,12 +861,18 @@ impl SolverBuilder {
                 self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Mumps => {
-                let s = MumpsSolver::<T>::with_options(self.direct_opts());
+                let s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
+                    base: self.direct_opts(),
+                    ..Default::default()
+                });
                 let p = DirectSolverPrecond::new(s, a)?;
                 self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
             DirectBackend::Mkl => {
-                let s = MklSolver::<T>::with_options(self.direct_opts());
+                let s = MultifrontalLu::<T>::with_options(MultifrontalOptions {
+                    base: self.direct_opts(),
+                    ..Default::default()
+                });
                 let p = DirectSolverPrecond::new(s, a)?;
                 self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, params)
             }
@@ -1045,21 +1055,14 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
-                }
-            } else if caps.mumps {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested mumps. Feature is enabled; linger provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
+                    note: "Requested mumps on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MUMPS backend.".to_string(),
+                    note: "Requested mumps. linger provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
                 }
             }
         }
@@ -1069,21 +1072,14 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl on wasm32 target. linger exposes this as a native compatibility path, but direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
-                }
-            } else if caps.mkl {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested mkl. Feature is enabled; linger provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
+                    note: "Requested mkl on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl, but the compatibility flag is disabled. Falling back to native linger path; linger does not depend on an external MKL backend.".to_string(),
+                    note: "Requested mkl. linger provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
                 }
             }
         }

@@ -127,13 +127,13 @@ mod x86_64 {
         v: &[f64],
         alpha: f64,
     ) {
-        let alpha_vec = _mm256_set1_pd(alpha);
         let mut i = 0;
         let len = x.len();
 
         // Process 4 elements at a time
         while i + 3 < len {
             unsafe {
+                let alpha_vec = _mm256_set1_pd(alpha);
                 let diag_vec = _mm256_loadu_pd(diag.as_ptr().add(i));
                 let v_vec = _mm256_loadu_pd(v.as_ptr().add(i));
                 let x_vec = _mm256_loadu_pd(x.as_ptr().add(i));

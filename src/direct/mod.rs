@@ -53,10 +53,10 @@ pub use cholesky::SparseCholesky;
 pub use cholesky_sn::{SupernodalSparseCholesky, SNode as CholeskySNode};
 pub use ldlt::SparseLdlt;
 pub use multifrontal::{MultifrontalLu, MultifrontalOptions};
-pub mod mumps;
-pub mod mkl;
-pub use mumps::MumpsSolver;
-pub use mkl::MklSolver;
+/// MUMPS-compatible direct solver (native multifrontal fallback, no C deps).
+pub type MumpsSolver<T> = MultifrontalLu<T>;
+/// MKL-compatible direct solver (native multifrontal fallback, no C deps).
+pub type MklSolver<T> = MultifrontalLu<T>;
 pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
