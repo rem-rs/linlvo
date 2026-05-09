@@ -19,3 +19,4 @@ pub use lgmres::Lgmres;
 pub use idrs::Idrs;
 pub use tfqmr::Tfqmr;
 pub use pipecg::PipeCg;
+pub use complex_gmres::{ComplexGmres, ComplexGmresResult, ComplexGmresWorkspace};

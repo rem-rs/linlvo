@@ -27,6 +27,7 @@
 
 use crate::core::{
     operator::LinearOperator,
+    preconditioner::Preconditioner,
     scalar::Scalar,
     vector::{DenseVec, Vector},
 };
@@ -58,6 +59,8 @@ pub struct ComplexGmresWorkspace<T: Scalar> {
     restart: usize,
     r: DenseVec<Complex<T>>,
     v: Vec<DenseVec<Complex<T>>>,
+    /// Scratch for `M⁻¹ vⱼ` (right-preconditioned Arnoldi step).
+    z: DenseVec<Complex<T>>,
     w: DenseVec<Complex<T>>,
     /// Upper-Hessenberg matrix columns (h[j] has j+2 entries).
     h: Vec<Vec<Complex<T>>>,
@@ -77,6 +80,7 @@ impl<T: Scalar> ComplexGmresWorkspace<T> {
             restart: m,
             r: vec![zero_c; n].into(),
             v: (0..=m).map(|_| vec![zero_c; n].into()).collect(),
+            z: vec![zero_c; n].into(),
             w: vec![zero_c; n].into(),
             h: (0..m).map(|_| vec![zero_c; m + 1]).collect(),
             cs: vec![T::zero(); m],
@@ -112,6 +116,7 @@ impl<T: Scalar> ComplexGmres<T> {
     ///
     /// # Arguments
     /// - `op`      — linear operator (must be square)
+    /// - `precond` — optional right preconditioner `M⁻¹`
     /// - `b`       — right-hand side
     /// - `x`       — solution (in/out, used as initial guess)
     /// - `rtol`    — relative residual tolerance
@@ -120,6 +125,7 @@ impl<T: Scalar> ComplexGmres<T> {
     pub fn solve(
         &self,
         op: &dyn LinearOperator<Vector = DenseVec<Complex<T>>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<Complex<T>>>>,
         b: &DenseVec<Complex<T>>,
         x: &mut DenseVec<Complex<T>>,
         rtol: f64,
@@ -127,7 +133,7 @@ impl<T: Scalar> ComplexGmres<T> {
         max_iter: usize,
     ) -> Result<ComplexGmresResult, SolverError> {
         let mut ws = ComplexGmresWorkspace::new(b.len(), self.restart);
-        self.solve_with_workspace(op, b, x, rtol, atol, max_iter, &mut ws)
+        self.solve_with_workspace(op, precond, b, x, rtol, atol, max_iter, &mut ws)
     }
 
     /// Solve using caller-supplied scratch space (avoids re-allocation on
@@ -135,6 +141,7 @@ impl<T: Scalar> ComplexGmres<T> {
     pub fn solve_with_workspace(
         &self,
         op: &dyn LinearOperator<Vector = DenseVec<Complex<T>>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<Complex<T>>>>,
         b: &DenseVec<Complex<T>>,
         x: &mut DenseVec<Complex<T>>,
         rtol: f64,
@@ -212,9 +219,11 @@ impl<T: Scalar> ComplexGmres<T> {
                     break;
                 }
 
-                // w = A vⱼ
+                // z = M⁻¹ vⱼ  (right preconditioning; identity if no precond)
                 let vj = ws.v[j].clone();
-                op.apply(&vj, &mut ws.w);
+                apply_precond_or_copy_c(precond, &vj, &mut ws.z);
+                // w = A z
+                op.apply(&ws.z, &mut ws.w);
 
                 // Modified Gram-Schmidt
                 for &mut ref col in ws.h.iter_mut().take(j + 1).collect::<Vec<_>>().iter_mut() {
@@ -271,7 +280,7 @@ impl<T: Scalar> ComplexGmres<T> {
                     ws.v[j + 1].scale(inv_h);
                 } else {
                     // Converged or Krylov basis collapsed.
-                    update_solution(x, &ws.v, &ws.h, &ws.g, j_final, n);
+                    update_solution(x, &ws.v, &ws.h, &ws.g, j_final, n, precond, &mut ws.z);
                     let converged = r_norm <= tol.into();
                     residual_history.push(to_f64(r_norm));
                     if converged || total_iters >= max_iter {
@@ -287,7 +296,7 @@ impl<T: Scalar> ComplexGmres<T> {
             }
 
             // End of inner loop — update x and restart.
-            update_solution(x, &ws.v, &ws.h, &ws.g, j_final, n);
+            update_solution(x, &ws.v, &ws.h, &ws.g, j_final, n, precond, &mut ws.z);
         }
     }
 }
@@ -330,7 +339,7 @@ fn complex_givens<T: Scalar>(a: Complex<T>, b: Complex<T>) -> (T, Complex<T>) {
 // ─── Back-substitution / solution update ────────────────────────────────────
 
 /// Back-substitute the triangular system H y = g (upper-triangular, `k` rows)
-/// and update `x += V y`.
+/// and update `x += M⁻¹ V y` (right-preconditioned form).
 fn update_solution<T: Scalar>(
     x: &mut DenseVec<Complex<T>>,
     v: &[DenseVec<Complex<T>>],
@@ -338,6 +347,8 @@ fn update_solution<T: Scalar>(
     g: &[Complex<T>],
     k: usize,
     _n: usize,
+    precond: Option<&dyn Preconditioner<Vector = DenseVec<Complex<T>>>>,
+    z: &mut DenseVec<Complex<T>>,
 ) {
     if k == 0 { return; }
     let zero_c = Complex::new(T::zero(), T::zero());
@@ -355,10 +366,22 @@ fn update_solution<T: Scalar>(
         }
     }
 
-    // x += V · y
+    // x += M⁻¹ V · y
     for (j, &yj) in y.iter().enumerate() {
-        let vj = v[j].clone();
-        x.axpy(yj, &vj);
+        apply_precond_or_copy_c(precond, &v[j], z);
+        x.axpy(yj, z);
+    }
+}
+
+#[inline]
+fn apply_precond_or_copy_c<T: Scalar>(
+    precond: Option<&dyn Preconditioner<Vector = DenseVec<Complex<T>>>>,
+    src: &DenseVec<Complex<T>>,
+    dst: &mut DenseVec<Complex<T>>,
+) {
+    match precond {
+        Some(m) => m.apply_precond(src, dst),
+        None => dst.copy_from(src),
     }
 }
 
@@ -399,7 +422,7 @@ mod tests {
         let b: DenseVec<C64> = (0..n).map(|i| c(i as f64, -(i as f64))).collect::<Vec<_>>().into();
         let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
         let solver = ComplexGmres::<f64>::new(10);
-        let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 100).unwrap();
+        let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 100).unwrap();
         assert!(res.converged, "should converge on identity: {:?}", res);
         for (xi, bi) in x.as_slice().iter().zip(b.as_slice()) {
             assert!((xi - bi).norm() < 1e-10);
@@ -413,7 +436,7 @@ mod tests {
         let b: DenseVec<C64> = vec![c(1.0, 0.0); n].into();
         let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
         let solver = ComplexGmres::<f64>::new(20);
-        let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 500).unwrap();
+        let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 500).unwrap();
         assert!(res.converged, "tridiagonal real: {:?}", res);
         // Verify A x ≈ b
         let mut ax: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
@@ -432,7 +455,7 @@ mod tests {
         let b: DenseVec<C64> = (0..n).map(|i| c((i + 1) as f64, -(i as f64))).collect::<Vec<_>>().into();
         let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
         let solver = ComplexGmres::<f64>::new(15);
-        let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 500).unwrap();
+        let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 500).unwrap();
         assert!(res.converged, "imaginary shift: {:?}", res);
         // Verify A x ≈ b
         let mut ax: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
@@ -448,7 +471,7 @@ mod tests {
         let b: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
         let mut x: DenseVec<C64> = vec![c(1.0, 2.0); n].into();
         let solver = ComplexGmres::<f64>::new(5);
-        let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 100).unwrap();
+        let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 100).unwrap();
         assert!(res.converged, "zero RHS: {:?}", res);
         for xi in x.as_slice() {
             assert!(xi.norm() < 1e-10, "expected zero solution, got {xi:?}");
