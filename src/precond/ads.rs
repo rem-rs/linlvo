@@ -57,6 +57,14 @@ pub struct AdsConfig {
     ///
     /// Typical value: 2/3 ≈ 0.667.
     pub smoother_omega: f64,
+    /// Small diagonal shift applied to the edge and node auxiliary operators.
+    ///
+    /// The edge Laplacian `CᵀAC` is always singular on simply connected
+    /// domains (null space = discrete gradient fields).  A small shift
+    /// `ε·I` ensures the auxiliary solver (AMG or ILU) does not encounter
+    /// a zero pivot.  Default 1e-10 is large enough to regularize double-
+    /// precision linear systems without affecting accuracy.
+    pub aux_shift: f64,
     /// Approximate solver for the edge Laplacian `CᵀAC`.
     pub edge_solver: AuxSpaceSolver,
     /// Approximate solver for the node Laplacian `Gᵀ(CᵀAC)G`.
@@ -67,6 +75,7 @@ impl Default for AdsConfig {
     fn default() -> Self {
         AdsConfig {
             smoother_omega: 0.667,
+            aux_shift:      1e-10,
             edge_solver:    AuxSpaceSolver::default(),
             node_solver:    AuxSpaceSolver::default(),
         }
@@ -83,6 +92,7 @@ impl AdsConfig {
         };
         AdsConfig {
             smoother_omega: 0.667,
+            aux_shift:      1e-10,
             edge_solver: AuxSpaceSolver::Amg(amg.clone()),
             node_solver: AuxSpaceSolver::Amg(amg),
         }
@@ -215,12 +225,36 @@ impl<T: Scalar> AdsPrecond<T> {
         // ── 3. Edge coarse operator: A_edge = CᵀAC ──────────────────────────
         let c_t    = c.transpose_csr();       // n_edges × n_faces
         let ac     = a.matmat(c);             // n_faces × n_edges
-        let a_edge = c_t.matmat(&ac);         // n_edges × n_edges
+        let a_edge_raw = c_t.matmat(&ac);     // n_edges × n_edges
+
+        // Regularize A_edge: CᵀAC is always singular (gradient fields are in
+        // the null space of the discrete curl).  Adding ε·I ensures the
+        // auxiliary solver (AMG/ILU) does not encounter a zero pivot.
+        let eps = T::from_f64(config.aux_shift);
+        let mut reg_coo = crate::sparse::CooMatrix::new(n_edges, n_edges);
+        for (i, j, v) in a_edge_raw.triplets() {
+            reg_coo.push(i, j, v);
+        }
+        for i in 0..n_edges {
+            reg_coo.push(i, i, eps);
+        }
+        let a_edge = crate::sparse::CsrMatrix::from_coo(&reg_coo);
 
         // ── 4. Node coarse operator: A_node = Gᵀ A_edge G ───────────────────
         let g_t    = g.transpose_csr();       // n_nodes × n_edges
         let a_e_g  = a_edge.matmat(g);        // n_edges × n_nodes
-        let a_node = g_t.matmat(&a_e_g);      // n_nodes × n_nodes
+        let a_node_raw = g_t.matmat(&a_e_g);  // n_nodes × n_nodes
+
+        // Regularize A_node: same reasoning — Gᵀ(CᵀAC + εI)G inherits null
+        // space from the edge operator and from G itself.
+        let mut reg_coo_n = crate::sparse::CooMatrix::new(n_nodes, n_nodes);
+        for (i, j, v) in a_node_raw.triplets() {
+            reg_coo_n.push(i, j, v);
+        }
+        for i in 0..n_nodes {
+            reg_coo_n.push(i, i, eps);
+        }
+        let a_node = crate::sparse::CsrMatrix::from_coo(&reg_coo_n);
 
         // ── 5. Coarse solvers ─────────────────────────────────────────────────
         let a_edge_nnz = a_edge.nnz();

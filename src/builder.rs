@@ -214,6 +214,47 @@ pub enum PrecondChoice {
         /// ADS configuration.
         config: crate::precond::ads::AdsConfig,
     },
+    /// SOR (Successive Over-Relaxation) preconditioner.
+    Sor {
+        /// Relaxation factor ω ∈ (0, 2).  ω = 1 → Gauss-Seidel.
+        omega: f64,
+    },
+    /// SSOR (Symmetric SOR) preconditioner — SPD-compatible.
+    Ssor {
+        /// Relaxation factor ω ∈ (0, 2).
+        omega: f64,
+    },
+    /// ILU(k) — incomplete LU with fill level `k`.
+    Iluk {
+        /// Fill level. 0 = ILU(0), 1 = ILU(1), etc.
+        fill_level: usize,
+    },
+    /// ILUT — incomplete LU with dual threshold.
+    Ilut {
+        /// Drop tolerance τ: entries with |a_ij| < τ · ‖row_i‖ are dropped.
+        tau: f64,
+        /// Max fill per row (p).  Keeps at most p largest entries per row.
+        p_fill: usize,
+    },
+    /// ILDLᵀ — incomplete LDLᵀ factorization (SPD systems).
+    Ildlt,
+    /// SPAI — Sparse Approximate Inverse.
+    Spai,
+    /// Block Jacobi — diagonal block inversion.
+    BlockJacobi {
+        /// Size of each diagonal block (must divide n).
+        block_size: usize,
+    },
+    /// Additive composite: y = M₁⁻¹ x + M₂⁻¹ x.
+    Additive {
+        /// Sub-preconditioners applied in parallel.
+        sub: Vec<PrecondChoice>,
+    },
+    /// Multiplicative composite: y = Mₖ⁻¹ … M₁⁻¹ x.
+    Multiplicative {
+        /// Sub-preconditioners applied sequentially.
+        sub: Vec<PrecondChoice>,
+    },
     /// Two-field FieldSplit preconditioner.
     ///
     /// Decomposes the DOF set at `split` and applies separate sub-preconditioners
@@ -245,6 +286,15 @@ impl std::fmt::Debug for PrecondChoice {
             PrecondChoice::DirectLu(b)    => write!(f, "DirectLu({b:?})"),
             PrecondChoice::Ams { .. }     => write!(f, "Ams {{ .. }}"),
             PrecondChoice::Ads { .. }     => write!(f, "Ads {{ .. }}"),
+            PrecondChoice::Sor { omega }  => write!(f, "Sor(ω={omega})"),
+            PrecondChoice::Ssor { omega } => write!(f, "Ssor(ω={omega})"),
+            PrecondChoice::Iluk { fill_level } => write!(f, "Iluk(k={fill_level})"),
+            PrecondChoice::Ilut { tau, p_fill } => write!(f, "Ilut(τ={tau}, p={p_fill})"),
+            PrecondChoice::Ildlt        => write!(f, "Ildlt"),
+            PrecondChoice::Spai         => write!(f, "Spai"),
+            PrecondChoice::BlockJacobi { block_size } => write!(f, "BlockJacobi(bs={block_size})"),
+            PrecondChoice::Additive { sub } => write!(f, "Additive(n_sub={})", sub.len()),
+            PrecondChoice::Multiplicative { sub } => write!(f, "Multiplicative(n_sub={})", sub.len()),
             PrecondChoice::FieldSplit { n, split, block_triangular, .. } =>
                 write!(f, "FieldSplit {{ n: {n}, split: {split}, block_triangular: {block_triangular} }}"),
         }
@@ -281,6 +331,24 @@ pub enum BuilderPrecondReport {
     Ams(crate::precond::ams::AmsProfile),
     /// ADS preconditioner with setup profile.
     Ads(crate::precond::ads::AdsProfile),
+    /// SOR preconditioner.
+    Sor { omega: f64 },
+    /// SSOR preconditioner.
+    Ssor { omega: f64 },
+    /// ILU(k) preconditioner.
+    Iluk { fill_level: usize },
+    /// ILUT preconditioner.
+    Ilut { tau: f64, p_fill: usize },
+    /// ILDLᵀ preconditioner.
+    Ildlt,
+    /// SPAI preconditioner.
+    Spai,
+    /// Block Jacobi preconditioner.
+    BlockJacobi { block_size: usize },
+    /// Additive composite.
+    Additive { n_sub: usize },
+    /// Multiplicative composite.
+    Multiplicative { n_sub: usize },
     /// FieldSplit preconditioner.
     FieldSplit {
         /// Boundary index between the two fields.
@@ -789,6 +857,98 @@ impl SolverBuilder {
                     krylov: Some(result),
                 })
             }
+            // ── New preconditioner arms ─────────────────────────────────────────
+            PrecondChoice::Sor { omega } => {
+                let omega_t = T::from_f64(*omega);
+                let p = crate::precond::sor::SorPrecond::from_csr(a, omega_t)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Sor { omega: *omega },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Ssor { omega } => {
+                let omega_t = T::from_f64(*omega);
+                let p = crate::precond::sor::SsorPrecond::from_csr(a, omega_t)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ssor { omega: *omega },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Iluk { fill_level } => {
+                let p = crate::precond::iluk::IlukPrecond::from_csr(a, *fill_level)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Iluk { fill_level: *fill_level },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Ilut { tau, p_fill } => {
+                let p = crate::precond::ilut::IlutPrecond::from_csr(a, *tau, *p_fill)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ilut { tau: *tau, p_fill: *p_fill },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Ildlt => {
+                let p = crate::precond::ildlt::IldltPrecond::from_csr(a)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Ildlt,
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Spai => {
+                let p = crate::precond::spai::SpaiPrecond::from_csr(a)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Spai,
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::BlockJacobi { block_size } => {
+                let p = crate::precond::block_jacobi::BlockJacobiPrecond::from_csr(a, *block_size)?;
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::BlockJacobi { block_size: *block_size },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Additive { sub } => {
+                let mut preconds: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>> = Vec::with_capacity(sub.len());
+                for choice in sub {
+                    preconds.push(build_single_precond(a, choice)?);
+                }
+                let p = crate::precond::composite::AdditivePrecond::new(preconds);
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Additive { n_sub: sub.len() },
+                    krylov: Some(result),
+                })
+            }
+            PrecondChoice::Multiplicative { sub } => {
+                let mut preconds: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>> = Vec::with_capacity(sub.len());
+                for choice in sub {
+                    preconds.push(build_single_precond(a, choice)?);
+                }
+                let p = crate::precond::composite::MultiplicativePrecond::new(preconds);
+                let result = self.dispatch_krylov_result(a, Some(&p as &dyn Preconditioner<Vector=DenseVec<T>>), b, x, &params)?;
+                Ok(BuilderSolveReport {
+                    method: self.method.clone(),
+                    precond: BuilderPrecondReport::Multiplicative { n_sub: sub.len() },
+                    krylov: Some(result),
+                })
+            }
         }
     }
 
@@ -884,20 +1044,49 @@ impl SolverBuilder {
 
 /// Solve `A x = b` with automatic method selection.
 ///
-/// Uses Cholesky if `spd_hint` is true, otherwise MultifrontalLu.  Intended as
-/// the simplest possible entry point for users who don't want to configure a
-/// full `SolverBuilder`.
+/// A convenience wrapper for quick solves where detailed tuning is not
+/// needed.  Uses direct (Cholesky / Multifrontal) for small-to-medium
+/// systems and switches to iterative (CG / GMRES + ILU) for larger ones.
 ///
-/// For more control use [`SolverBuilder`] directly.
+/// ## Strategy
+///
+/// | Condition | Solver | Preconditioner |
+/// |---|---|---|
+/// | n ≤ 1000, SPD hint | Direct Cholesky | — |
+/// | n ≤ 1000, general | Direct Multifrontal LU | — |
+/// | n > 1000, SPD hint | CG | ICC(0) |
+/// | n > 1000, general | GMRES(30) | ILU(0) |
+///
+/// The 1000-DOF threshold is a heuristic for typical FEA matrices on
+/// modern hardware.  For production tuning, use [`SolverBuilder`] directly.
 pub fn solve_auto<T: Scalar>(
     a:        &CsrMatrix<T>,
     b:        &DenseVec<T>,
     spd_hint: bool,
 ) -> Result<DenseVec<T>, SolverError> {
-    let backend = if spd_hint { DirectBackend::Cholesky } else { DirectBackend::Multifrontal };
-    SolverBuilder::new()
-        .method(SolveMethod::Direct(backend))
-        .solve(a, b)
+    let n = a.nrows();
+    const SMALL_THRESHOLD: usize = 1000;
+
+    if n <= SMALL_THRESHOLD {
+        let backend = if spd_hint { DirectBackend::Cholesky } else { DirectBackend::Multifrontal };
+        SolverBuilder::new()
+            .method(SolveMethod::Direct(backend))
+            .solve(a, b)
+    } else if spd_hint {
+        SolverBuilder::new()
+            .method(SolveMethod::Cg)
+            .precond(PrecondChoice::Icc0)
+            .rtol(1e-8)
+            .max_iter(500)
+            .solve(a, b)
+    } else {
+        SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Ilu0)
+            .rtol(1e-8)
+            .max_iter(500)
+            .solve(a, b)
+    }
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -953,6 +1142,54 @@ struct ArcPrecond<V: crate::core::vector::Vector>(
 impl<V: crate::core::vector::Vector> Preconditioner for ArcPrecond<V> {
     type Vector = V;
     fn apply_precond(&self, x: &V, y: &mut V) { self.0.apply_precond(x, y) }
+}
+
+/// Build a single preconditioner from a `PrecondChoice` descriptor.
+///
+/// Used by the composite (Additive/Multiplicative) arms to resolve
+/// sub-preconditioners.  Only leaf-level preconditioners are supported
+/// in sub-lists — composites within composites are rejected to keep
+/// the recursion manageable.
+fn build_single_precond<T: Scalar>(
+    a:      &CsrMatrix<T>,
+    choice: &PrecondChoice,
+) -> Result<Box<dyn Preconditioner<Vector = DenseVec<T>>>, SolverError> {
+    match choice {
+        PrecondChoice::None => Err(SolverError::PrecondSetupFailed {
+            reason: "composite sub-preconditioner cannot be None".into(),
+        }),
+        PrecondChoice::Jacobi => Ok(Box::new(crate::JacobiPrecond::from_csr(a)?)),
+        PrecondChoice::Ilu0 => Ok(Box::new(crate::Ilu0Precond::from_csr(a)?)),
+        PrecondChoice::Icc0 => Ok(Box::new(crate::Icc0Precond::from_csr(a)?)),
+        PrecondChoice::Sor { omega } => Ok(Box::new(
+            crate::precond::sor::SorPrecond::from_csr(a, T::from_f64(*omega))?
+        )),
+        PrecondChoice::Ssor { omega } => Ok(Box::new(
+            crate::precond::sor::SsorPrecond::from_csr(a, T::from_f64(*omega))?
+        )),
+        PrecondChoice::Iluk { fill_level } => Ok(Box::new(
+            crate::precond::iluk::IlukPrecond::from_csr(a, *fill_level)?
+        )),
+        PrecondChoice::Ilut { tau, p_fill } => Ok(Box::new(
+            crate::precond::ilut::IlutPrecond::from_csr(a, *tau, *p_fill)?
+        )),
+        PrecondChoice::Ildlt => Ok(Box::new(crate::precond::ildlt::IldltPrecond::from_csr(a)?)),
+        PrecondChoice::Spai => Ok(Box::new(crate::precond::spai::SpaiPrecond::from_csr(a)?)),
+        PrecondChoice::BlockJacobi { block_size } => Ok(Box::new(
+            crate::precond::block_jacobi::BlockJacobiPrecond::from_csr(a, *block_size)?
+        )),
+        PrecondChoice::DirectLu(_) |
+        PrecondChoice::Ams { .. } |
+        PrecondChoice::Ads { .. } |
+        PrecondChoice::FieldSplit { .. } |
+        PrecondChoice::Additive { .. } |
+        PrecondChoice::Multiplicative { .. } => Err(SolverError::PrecondSetupFailed {
+            reason: format!(
+                "{choice:?} not supported as composite sub-preconditioner; \
+                 use leaf-level preconds (Jacobi, Ilu0, Iluk, etc.)"
+            ),
+        }),
+    }
 }
 
 fn print_ams_profile_summary(profile: &crate::precond::ams::AmsProfile) {
@@ -1185,5 +1422,148 @@ mod tests {
             .backend_selection_report();
         assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
         assert!(rep.note.contains("mkl"));
+    }
+
+    // ── New preconditioner integration tests ──────────────────────────────────
+
+    /// 3×3 SPD matrix: [[2,-1,0],[-1,2,-1],[0,-1,2]].
+    fn spd_3x3() -> (CsrMatrix<f64>, DenseVec<f64>) {
+        use crate::sparse::CooMatrix;
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 2.0); coo.push(0, 1, -1.0);
+        coo.push(1, 0, -1.0); coo.push(1, 1, 2.0); coo.push(1, 2, -1.0);
+        coo.push(2, 1, -1.0); coo.push(2, 2, 2.0);
+        let a = CsrMatrix::from_coo(&coo);
+        let b = DenseVec::from_vec(vec![1.0, 0.0, 1.0]);
+        (a, b)
+    }
+
+    #[test]
+    fn precond_sor_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Sor { omega: 1.0 })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_ssor_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Ssor { omega: 1.2 })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_iluk_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Iluk { fill_level: 1 })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_ilut_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Ilut { tau: 1e-3, p_fill: 5 })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_ildlt_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Cg)
+            .precond(PrecondChoice::Ildlt)
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_spai_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Spai)
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_block_jacobi_solves_spd() {
+        let (a, b) = spd_3x3();
+        // block_size=3 → one block = whole matrix = exact inverse
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::BlockJacobi { block_size: 3 })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_composite_additive_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Additive {
+                sub: vec![PrecondChoice::Jacobi, PrecondChoice::Jacobi],
+            })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precond_composite_multiplicative_solves_spd() {
+        let (a, b) = spd_3x3();
+        let x = SolverBuilder::new()
+            .method(SolveMethod::Gmres { restart: 30 })
+            .precond(PrecondChoice::Multiplicative {
+                sub: vec![PrecondChoice::Jacobi, PrecondChoice::Jacobi],
+            })
+            .rtol(1e-10)
+            .solve(&a, &b).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn solve_auto_small_spd_uses_direct() {
+        let (a, b) = spd_3x3();
+        let x = solve_auto(&a, &b, true).unwrap();
+        assert!((x[0] - 1.0).abs() < 1e-10);
+        assert!((x[1] - 1.0).abs() < 1e-10);
+        assert!((x[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn solve_auto_small_general_uses_direct() {
+        // Non-symmetric 3×3
+        use crate::sparse::CooMatrix;
+        let mut coo = CooMatrix::<f64>::new(3, 3);
+        coo.push(0, 0, 1.0); coo.push(0, 1, 2.0); coo.push(1, 0, 0.5); coo.push(1, 1, 3.0); coo.push(1, 2, 1.0);
+        coo.push(2, 1, 2.0); coo.push(2, 2, 4.0);
+        let a = CsrMatrix::from_coo(&coo);
+        let b = DenseVec::from_vec(vec![5.0, 6.0, 7.0]);
+        let x = solve_auto(&a, &b, false).unwrap();
+        // Verify A*x ≈ b
+        let mut ax = DenseVec::zeros(3);
+        a.spmv(x.as_slice(), ax.as_mut_slice());
+        for i in 0..3 { assert!((ax[i] - b[i]).abs() < 1e-8); }
     }
 }
