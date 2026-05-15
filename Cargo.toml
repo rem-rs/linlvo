@@ -10,10 +10,8 @@ license = "MIT OR Apache-2.0"
 default = ["rayon"]
 rayon   = ["dep:rayon"]
 mpi     = ["dep:mpi"]                # distributed memory via Open MPI (rsmpi 0.8)
-hypre-rs = []                        # pure-Rust HYPRE-equivalent capability track
-hypre-ffi = []                       # placeholder: C-lib binding
-petsc-rs  = []                       # pure-Rust PETSc KSP-compatible interface
-petsc-ffi = []                       # placeholder: C-lib binding
+mumps   = []                         # compatibility flag for native linger multifrontal MUMPS-style entrypoint
+mkl     = []                         # compatibility flag for native linger multifrontal MKL-style entrypoint
 wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 __native = []                        # internal: gates native-only examples (nalgebra etc.)
 

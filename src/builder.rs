@@ -68,12 +68,6 @@ pub enum DirectBackend {
 /// on the native linger path until per-backend wiring lands in later stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalBackend {
-    /// Pure-Rust HYPRE-equivalent track.
-    HypreRs,
-    /// Pure-Rust PETSc-equivalent track (canonical ID: petsc-rs).
-    PetscRs,
-    /// Legacy compatibility name for the PETSc-equivalent track.
-    PetscFfi,
     /// Compatibility request ID for a MUMPS-shaped direct-solver contract.
     ///
     /// linger resolves this to its native multifrontal replacement path rather
@@ -89,11 +83,9 @@ pub enum ExternalBackend {
 /// Compile-time capability snapshot for optional solver backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendCapabilities {
-    pub hypre_rs: bool,
-    /// Pure-Rust PETSc-equivalent track (`petsc-rs` feature).
-    pub petsc_rs: bool,
-    /// Legacy placeholder for C-lib PETSc binding (`petsc-ffi` feature).
-    pub petsc_ffi: bool,
+    /// Whether the MUMPS-compatibility profile is advertised by this build.
+    pub mumps: bool,
+    pub mkl: bool,
     pub wasm_target: bool,
 }
 
@@ -101,16 +93,10 @@ impl BackendCapabilities {
     /// Detect capabilities from compile-time feature flags.
     pub fn detect() -> Self {
         Self {
-            hypre_rs: cfg!(feature = "hypre-rs"),
-            petsc_rs: cfg!(feature = "petsc-rs"),
-            petsc_ffi: cfg!(feature = "petsc-ffi"),
+            mumps: cfg!(feature = "mumps"),
+            mkl: cfg!(feature = "mkl"),
             wasm_target: cfg!(target_arch = "wasm32"),
         }
-    }
-
-    /// Returns `true` if either the pure-Rust or FFI PETSc track is enabled.
-    pub fn has_any_petsc(&self) -> bool {
-        self.petsc_rs || self.petsc_ffi
     }
 }
 
@@ -1245,47 +1231,6 @@ fn resolve_external_backend(
             capabilities: caps,
             note: "No external backend requested; using native linger path.".to_string(),
         },
-        Some(ExternalBackend::HypreRs) => {
-            if caps.hypre_rs {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested hypre-rs. Feature is enabled; C1 keeps execution on native linger while parity wiring is staged in later milestones.".to_string(),
-                }
-            } else {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested hypre-rs, but feature hypre-rs is disabled. Falling back to native linger path.".to_string(),
-                }
-            }
-        }
-        Some(ExternalBackend::PetscRs) | Some(ExternalBackend::PetscFfi) => {
-            if caps.wasm_target {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested petsc-rs on wasm32 target. External solver backends are unsupported on wasm; using native linger path.".to_string(),
-                }
-            } else if caps.petsc_rs {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested petsc-rs. Capability is enabled; execution remains on native linger until external backend wiring is completed.".to_string(),
-                }
-            } else {
-                BackendSelectionReport {
-                    requested,
-                    effective: EffectiveBackend::NativeLinger,
-                    capabilities: caps,
-                    note: "Requested petsc-rs, but capability is disabled. Falling back to native linger path.".to_string(),
-                }
-            }
-        }
         Some(ExternalBackend::Mumps) => {
             if caps.wasm_target {
                 BackendSelectionReport {
@@ -1332,28 +1277,6 @@ mod tests {
         let rep = SolverBuilder::new().backend_selection_report();
         assert_eq!(rep.requested, None);
         assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
-    }
-
-    #[test]
-    fn backend_report_hypre_rs_with_feature_off_falls_back() {
-        let rep = SolverBuilder::new()
-            .external_backend(ExternalBackend::HypreRs)
-            .backend_selection_report();
-        if !rep.capabilities.hypre_rs {
-            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
-            assert!(rep.note.contains("hypre-rs"));
-        }
-    }
-
-    #[test]
-    fn backend_report_petsc_feature_off_falls_back() {
-        let rep = SolverBuilder::new()
-            .external_backend(ExternalBackend::PetscRs)
-            .backend_selection_report();
-        if !rep.capabilities.petsc_rs {
-            assert_eq!(rep.effective, EffectiveBackend::NativeLinger);
-            assert!(rep.note.contains("petsc-rs"));
-        }
     }
 
     #[test]
