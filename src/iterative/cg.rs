@@ -90,6 +90,49 @@ impl<T: Scalar> ConjugateGradient<T> {
         params: &SolverParams,
         workspace: &mut CgWorkspace<T>,
     ) -> Result<SolverResult, SolverError> {
+        self.solve_with_workspace_impl(op, precond, b, x, params, workspace, None)
+    }
+
+    /// Run exactly `iterations` CG steps using caller-owned scratch buffers.
+    ///
+    /// This is intended for deterministic cost measurement rather than normal
+    /// solve-to-tolerance usage. The method suppresses tolerance-based early
+    /// exit, but still returns breakdown errors if the iteration cannot proceed.
+    pub fn solve_fixed_iters_with_workspace(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        iterations: usize,
+        workspace: &mut CgWorkspace<T>,
+    ) -> Result<SolverResult, SolverError> {
+        self.solve_with_workspace_impl(op, precond, b, x, &SolverParams::default(), workspace, Some(iterations))
+    }
+
+    /// Run exactly `iterations` CG steps with an internal workspace.
+    pub fn solve_fixed_iters(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        iterations: usize,
+    ) -> Result<SolverResult, SolverError> {
+        let mut workspace = CgWorkspace::new(b.len());
+        self.solve_fixed_iters_with_workspace(op, precond, b, x, iterations, &mut workspace)
+    }
+
+    fn solve_with_workspace_impl(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        params: &SolverParams,
+        workspace: &mut CgWorkspace<T>,
+        fixed_iterations: Option<usize>,
+    ) -> Result<SolverResult, SolverError> {
         let n = b.len();
         if op.nrows() != n || op.ncols() != x.len() {
             return Err(SolverError::DimensionMismatch {
@@ -106,6 +149,8 @@ impl<T: Scalar> ConjugateGradient<T> {
         let mut residual_history: Vec<f64> = Vec::new();
         let verbose_history = params.verbose == VerboseLevel::Iterations;
         let mut history: Option<Vec<f64>> = if verbose_history { Some(Vec::new()) } else { None };
+    let target_iterations = fixed_iterations.unwrap_or(params.max_iter);
+    let allow_early_exit = fixed_iterations.is_none();
 
         // r = b − A x₀
         op.apply(x, &mut workspace.ax);
@@ -121,7 +166,7 @@ impl<T: Scalar> ConjugateGradient<T> {
             });
         }
 
-        for k in 0..params.max_iter {
+        for k in 0..target_iterations {
             op.apply(&workspace.p, &mut workspace.ap);
             let pap = dot_slice(workspace.p.as_slice(), workspace.ap.as_slice());
             if !pap.is_finite() || !rz.is_finite() {
@@ -137,7 +182,7 @@ impl<T: Scalar> ConjugateGradient<T> {
 
             let r_norm = workspace.r.norm2();
             let res_now = r_norm / norm_b_f;
-            if res_now < T::from_f64(params.rtol) || r_norm < T::from_f64(params.atol) {
+            if allow_early_exit && (res_now < T::from_f64(params.rtol) || r_norm < T::from_f64(params.atol)) {
                 let res_f = to_f64(res_now);
                 if params.verbose != VerboseLevel::Silent {
                     println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
@@ -153,7 +198,7 @@ impl<T: Scalar> ConjugateGradient<T> {
             }
 
             if pap.abs() < T::machine_epsilon() * T::from_f64(1e3) * rz.abs() {
-                if res_now > T::from_f64(params.rtol) && r_norm > T::from_f64(params.atol) {
+                if !allow_early_exit || (res_now > T::from_f64(params.rtol) && r_norm > T::from_f64(params.atol)) {
                     return Err(SolverError::NumericalBreakdown {
                         detail: format!(
                             "CG: pAp≈0 before reaching tolerance at iter {} (rel_res={:.3e}); matrix may be indefinite/singular, try GMRES/MINRES or stronger preconditioner",
@@ -210,7 +255,7 @@ impl<T: Scalar> ConjugateGradient<T> {
             if params.verbose == VerboseLevel::Iterations {
                 println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
             }
-            if res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol) {
+            if allow_early_exit && (res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)) {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
                 }
@@ -235,7 +280,17 @@ impl<T: Scalar> ConjugateGradient<T> {
         }
 
         let final_residual = to_f64(workspace.r.norm2() / norm_b_f);
-        Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+        if fixed_iterations.is_some() {
+            Ok(SolverResult {
+                converged: false,
+                iterations: target_iterations,
+                final_residual,
+                residual_history,
+                history,
+            })
+        } else {
+            Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+        }
     }
 }
 

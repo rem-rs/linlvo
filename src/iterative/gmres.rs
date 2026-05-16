@@ -98,6 +98,49 @@ impl<T: Scalar> Gmres<T> {
         params: &SolverParams,
         workspace: &mut GmresWorkspace<T>,
     ) -> Result<SolverResult, SolverError> {
+        self.solve_with_workspace_impl(op, precond, b, x, params, workspace, None)
+    }
+
+    /// Run exactly `iterations` GMRES steps using caller-owned scratch buffers.
+    ///
+    /// This is intended for deterministic cost measurement rather than normal
+    /// solve-to-tolerance usage. The method suppresses tolerance-based early
+    /// exit, but still returns breakdown errors if Arnoldi/backsolve fails.
+    pub fn solve_fixed_iters_with_workspace(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        iterations: usize,
+        workspace: &mut GmresWorkspace<T>,
+    ) -> Result<SolverResult, SolverError> {
+        self.solve_with_workspace_impl(op, precond, b, x, &SolverParams::default(), workspace, Some(iterations))
+    }
+
+    /// Run exactly `iterations` GMRES steps with an internal workspace.
+    pub fn solve_fixed_iters(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        iterations: usize,
+    ) -> Result<SolverResult, SolverError> {
+        let mut workspace = GmresWorkspace::new(b.len(), self.restart);
+        self.solve_fixed_iters_with_workspace(op, precond, b, x, iterations, &mut workspace)
+    }
+
+    fn solve_with_workspace_impl(
+        &self,
+        op: &dyn LinearOperator<Vector = DenseVec<T>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<T>>>,
+        b: &DenseVec<T>,
+        x: &mut DenseVec<T>,
+        params: &SolverParams,
+        workspace: &mut GmresWorkspace<T>,
+        fixed_iterations: Option<usize>,
+    ) -> Result<SolverResult, SolverError> {
         let n = b.len();
         if op.nrows() != n || op.ncols() != x.len() {
             return Err(SolverError::DimensionMismatch {
@@ -115,6 +158,8 @@ impl<T: Scalar> Gmres<T> {
         workspace.ensure_shape(n, m);
         let mut residual_history: Vec<f64> = Vec::new();
         let mut total_iters = 0usize;
+        let target_iterations = fixed_iterations.unwrap_or(params.max_iter);
+        let allow_early_exit = fixed_iterations.is_none();
 
         loop {
             op.apply(x, &mut workspace.ax_scratch);
@@ -130,7 +175,7 @@ impl<T: Scalar> Gmres<T> {
             }
 
             let rel = beta / norm_b_f;
-            if rel < tol || beta < atol {
+            if allow_early_exit && (rel < tol || beta < atol) {
                 if params.verbose != VerboseLevel::Silent {
                     println!("  GMRES converged (restart check) iter {}  ‖r‖/‖b‖={:.3e}", total_iters, to_f64(rel));
                 }
@@ -142,7 +187,7 @@ impl<T: Scalar> Gmres<T> {
                     history: None,
                 });
             }
-            if total_iters >= params.max_iter {
+            if total_iters >= target_iterations {
                 break;
             }
 
@@ -161,9 +206,14 @@ impl<T: Scalar> Gmres<T> {
 
             let mut inner_converged = false;
             let mut j_final = 0;
+            let local_restart = if allow_early_exit {
+                m
+            } else {
+                m.min(target_iterations - total_iters)
+            };
 
-            'inner: for j in 0..m {
-                if total_iters >= params.max_iter { break; }
+            'inner: for j in 0..local_restart {
+                if total_iters >= target_iterations { break; }
 
                 apply_precond_or_copy(precond, &workspace.v[j], &mut workspace.z_scratch);
                 op.apply(&workspace.z_scratch, &mut workspace.w_scratch);
@@ -231,7 +281,7 @@ impl<T: Scalar> Gmres<T> {
                     println!("    GMRES iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", total_iters);
                 }
 
-                if res < tol || workspace.g[j + 1].abs() < atol {
+                if allow_early_exit && (res < tol || workspace.g[j + 1].abs() < atol) {
                     inner_converged = true;
                     break 'inner;
                 }
@@ -280,7 +330,7 @@ impl<T: Scalar> Gmres<T> {
                 });
             }
 
-            if total_iters >= params.max_iter { break; }
+            if total_iters >= target_iterations { break; }
         }
 
         op.apply(x, &mut workspace.ax_scratch);
@@ -290,7 +340,17 @@ impl<T: Scalar> Gmres<T> {
             (0..n).map(|i| { let d = bs[i] - axs[i]; d * d }).fold(T::zero(), |a, v| a + v).sqrt()
         };
         let final_residual = to_f64(rfnorm / norm_b_f);
-        Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+        if fixed_iterations.is_some() {
+            Ok(SolverResult {
+                converged: false,
+                iterations: total_iters,
+                final_residual,
+                residual_history,
+                history: None,
+            })
+        } else {
+            Err(SolverError::ConvergenceFailed { max_iter: params.max_iter, residual: final_residual })
+        }
     }
 }
 

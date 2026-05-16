@@ -14,11 +14,17 @@ mod baseline;
 
 const SOLVER_SIZES: [usize; 3] = [100, 500, 1000];
 const PCG_PRECOND_SIZE: usize = 500;
+const FIXED_ITER_CG_SIZES: [usize; 2] = [512, 2048];
+const FIXED_ITER_CG_COUNTS: [usize; 2] = [8, 32];
+const FIXED_ITER_GMRES_SIZES: [usize; 2] = [64, 128];
+const FIXED_ITER_GMRES_COUNTS: [usize; 2] = [8, 16];
+const FIXED_ITER_GMRES_RESTART: usize = 30;
 
 fn emit_baseline_manifest() {
     baseline::print_baseline_manifest(&[
         "BASELINE|bench=krylov|group=krylov_solvers|solvers=[CG,GMRES30,BiCGSTAB]|sizes=[100,500,1000]",
         "BASELINE|bench=krylov|group=pcg_preconditioners|n=500|preconds=[none,jacobi,ilu0,ilu1,icc0,ildlt0,ldlt_exact]",
+        "BASELINE|bench=krylov|group=fixed_iters|cg_sizes=[512,2048]|cg_iters=[8,32]|gmres_restart=30|gmres_sizes=[64,128]|gmres_iters=[8,16]",
     ]);
 }
 
@@ -186,5 +192,69 @@ fn bench_preconditioners(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_solvers, bench_preconditioners);
+// ─── Fixed-iteration cost surface ───────────────────────────────────────────
+
+fn bench_fixed_iters(c: &mut Criterion) {
+    emit_baseline_manifest();
+    let mut group = c.benchmark_group("fixed_iters");
+
+    for &n in &FIXED_ITER_CG_SIZES {
+        let (a, b_vec, _) = make_poisson_1d(n);
+        let b = DenseVec::from_vec(b_vec);
+        let cg = ConjugateGradient::<f64>::default();
+        let mut cg_workspace = CgWorkspace::new(n);
+
+        for &iters in &FIXED_ITER_CG_COUNTS {
+            group.bench_with_input(BenchmarkId::new(format!("CG_{iters}iters"), n), &n, |bench, _| {
+                let mut x = DenseVec::zeros(n);
+                bench.iter(|| {
+                    x.as_mut_slice().fill(0.0);
+                    let result = cg
+                        .solve_fixed_iters_with_workspace(
+                            black_box(&a),
+                            None,
+                            black_box(&b),
+                            black_box(&mut x),
+                            iters,
+                            &mut cg_workspace,
+                        )
+                        .unwrap();
+                    black_box(result.final_residual);
+                });
+            });
+        }
+    }
+
+    for &n in &FIXED_ITER_GMRES_SIZES {
+        let (a, b_vec, _) = make_poisson_1d(n);
+        let b = DenseVec::from_vec(b_vec);
+        let restart = FIXED_ITER_GMRES_RESTART.min(n);
+        let gmres = Gmres::<f64>::new(restart);
+        let mut gmres_workspace = GmresWorkspace::new(n, restart);
+
+        for &iters in &FIXED_ITER_GMRES_COUNTS {
+            group.bench_with_input(BenchmarkId::new(format!("GMRES_restart{restart}_{iters}iters"), n), &n, |bench, _| {
+                let mut x = DenseVec::zeros(n);
+                bench.iter(|| {
+                    x.as_mut_slice().fill(0.0);
+                    let result = gmres
+                        .solve_fixed_iters_with_workspace(
+                            black_box(&a),
+                            None,
+                            black_box(&b),
+                            black_box(&mut x),
+                            iters,
+                            &mut gmres_workspace,
+                        )
+                        .unwrap();
+                    black_box(result.final_residual);
+                });
+            });
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_solvers, bench_preconditioners, bench_fixed_iters);
 criterion_main!(benches);
