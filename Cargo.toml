@@ -22,6 +22,7 @@ __native = []                        # internal: gates native-only examples (nal
 #   cargo build --features blas-netlib      (reference BLAS)
 blas           = ["dep:cblas-sys", "dep:blas-src"]
 blas-openblas  = ["blas", "blas-src/openblas"]
+blas-openblas-system = ["blas", "dep:cblas-sys"]
 blas-accelerate = ["blas", "blas-src/accelerate"]
 blas-netlib    = ["blas", "blas-src/netlib"]
 
