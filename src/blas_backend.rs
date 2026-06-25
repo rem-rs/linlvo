@@ -16,6 +16,7 @@ use cblas_sys::{
     cblas_dgemv, cblas_sgemv,
     cblas_zgemv, cblas_cgemv,
     CblasRowMajor, CblasNoTrans, CblasTrans,
+    CBLAS_LAYOUT, CBLAS_TRANSPOSE,
 };
 use num_complex::Complex;
 use crate::core::scalar::Scalar;
@@ -28,14 +29,15 @@ pub fn real_gemv_add<T: Scalar>(
 ) {
     let m = nrows as i32;
     let n = ncols as i32;
+    let layout = CBLAS_LAYOUT::CblasRowMajor;
+    let trans = CBLAS_TRANSPOSE::CblasNoTrans;
     if std::mem::size_of::<T>() == 8 {
-        // f64 path
         let alpha_f = unsafe { *(&alpha as *const T as *const f64) };
         let a_f = unsafe { std::slice::from_raw_parts(a.as_ptr() as *const f64, a.len()) };
         let x_f = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
         let y_f = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
         unsafe {
-            cblas_dgemv(CblasRowMajor, CblasNoTrans, m, n,
+            cblas_dgemv(layout, trans, m, n,
                         alpha_f, a_f.as_ptr(), n,
                         x_f.as_ptr(), 1,
                         1.0_f64, y_f.as_mut_ptr(), 1);
@@ -64,6 +66,8 @@ pub fn real_gemv_t_add<T: Scalar>(
 ) {
     let m = nrows as i32;
     let n = ncols as i32;
+    let layout = CBLAS_LAYOUT::CblasRowMajor;
+    let trans = CBLAS_TRANSPOSE::CblasTrans;
     if std::mem::size_of::<T>() == 8 {
         let alpha_f = unsafe { *(&alpha as *const T as *const f64) };
         let a_f = unsafe { std::slice::from_raw_parts(a.as_ptr() as *const f64, a.len()) };
@@ -107,36 +111,38 @@ pub fn complex_gemv_add<T: Scalar>(
 ) {
     let m = nrows as i32;
     let n = ncols as i32;
+    let layout = CBLAS_LAYOUT::CblasRowMajor;
+    let trans = CBLAS_TRANSPOSE::CblasNoTrans;
     if std::mem::size_of::<T>() == 8 {
         // Complex<f64> path — cblas_zgemv
         let alpha64 = [alpha.re.to_f64().unwrap_or(0.0), alpha.im.to_f64().unwrap_or(0.0)];
         let beta64  = [1.0_f64, 0.0_f64]; // beta = 1 (accumulate)
         // SAFETY: Complex<f64> has the same layout as two consecutive f64s
-        let a_ptr = a.as_ptr() as *const f64;
-        let x_ptr = x.as_ptr() as *const f64;
-        let y_ptr = y.as_mut_ptr() as *mut f64;
+        let a_ptr = a.as_ptr() as *const num_complex::Complex<f64>;
+        let x_ptr = x.as_ptr() as *const num_complex::Complex<f64>;
+        let y_ptr = y.as_mut_ptr() as *mut num_complex::Complex<f64>;
         unsafe {
-            cblas_zgemv(CblasRowMajor, CblasNoTrans, m, n,
-                        alpha64.as_ptr() as *const std::ffi::c_void,
-                        a_ptr as *const std::ffi::c_void, n,
-                        x_ptr as *const std::ffi::c_void, 1,
-                        beta64.as_ptr() as *const std::ffi::c_void,
-                        y_ptr as *mut std::ffi::c_void, 1);
+            cblas_zgemv(layout, trans, m, n,
+                        alpha64.as_ptr() as *const cblas_sys::c_double_complex,
+                        a_ptr as *const cblas_sys::c_double_complex, n,
+                        x_ptr as *const cblas_sys::c_double_complex, 1,
+                        beta64.as_ptr() as *const cblas_sys::c_double_complex,
+                        y_ptr as *mut cblas_sys::c_double_complex, 1);
         }
     } else if std::mem::size_of::<T>() == 4 {
         // Complex<f32> path — cblas_cgemv
         let alpha32 = [alpha.re.to_f32().unwrap_or(0.0), alpha.im.to_f32().unwrap_or(0.0)];
         let beta32  = [1.0_f32, 0.0_f32];
-        let a_ptr = a.as_ptr() as *const f32;
-        let x_ptr = x.as_ptr() as *const f32;
-        let y_ptr = y.as_mut_ptr() as *mut f32;
+        let a_ptr = a.as_ptr() as *const num_complex::Complex<f32>;
+        let x_ptr = x.as_ptr() as *const num_complex::Complex<f32>;
+        let y_ptr = y.as_mut_ptr() as *mut num_complex::Complex<f32>;
         unsafe {
-            cblas_cgemv(CblasRowMajor, CblasNoTrans, m, n,
-                        alpha32.as_ptr() as *const std::ffi::c_void,
-                        a_ptr as *const std::ffi::c_void, n,
-                        x_ptr as *const std::ffi::c_void, 1,
-                        beta32.as_ptr() as *const std::ffi::c_void,
-                        y_ptr as *mut std::ffi::c_void, 1);
+            cblas_cgemv(layout, trans, m, n,
+                        alpha32.as_ptr() as *const cblas_sys::c_float_complex,
+                        a_ptr as *const cblas_sys::c_float_complex, n,
+                        x_ptr as *const cblas_sys::c_float_complex, 1,
+                        beta32.as_ptr() as *const cblas_sys::c_float_complex,
+                        y_ptr as *mut cblas_sys::c_float_complex, 1);
         }
     } else {
         // Scalar fallback
@@ -144,7 +150,7 @@ pub fn complex_gemv_add<T: Scalar>(
         let yd = y;
         for i in 0..nrows {
             let row = &a[i * ncols .. (i + 1) * ncols];
-            let mut s = Complex::zero();
+            let mut s = Complex::new(T::zero(), T::zero());
             for j in 0..ncols { s += row[j] * xd[j]; }
             yd[i] += alpha * s;
         }
