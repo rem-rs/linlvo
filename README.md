@@ -1,6 +1,6 @@
-# linger
+# linlvo
 
-Pure-Rust sparse linear system solver library for FEA (Finite Element Analysis).
+Pure-Rust sparse linear system solver library for FEA (Finite Element Analysis). Name combines **lin**ear + so**lvo** (Latin "I solve").
 
 Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich preconditioner library. The core solver layer compiles to WebAssembly.
 
@@ -21,14 +21,14 @@ Provides Krylov iterative methods, algebraic multigrid (AMG), and a rich precond
 | `rayon` | **on** | Parallel SpMV, AXPY, dot, norm2, and AMG setup phases via Rayon |
 | `wasm` | off | Enables `wasm-bindgen` JS interface (`WasmCsrMatrix`, `WasmCgSolver`, `WasmGmresSolver`) |
 | `mpi` | off | Placeholder for distributed-memory support (not yet implemented) |
-| `mumps` / `mkl` | off | Compatibility flags for linger's own multifrontal replacement paths |
+| `mumps` / `mkl` | off | Compatibility flags for linlvo's own multifrontal replacement paths |
 
 ```toml
-# Cargo.toml — add linger as a dependency
-linger = { path = ".", features = ["rayon"] }
+# Cargo.toml — add linlvo as a dependency
+linlvo = { path = ".", features = ["rayon"] }
 
 # Without parallelism (e.g., embedding in a single-threaded context)
-linger = { path = ".", default-features = false }
+linlvo = { path = ".", default-features = false }
 ```
 
 ---
@@ -52,7 +52,7 @@ Before tagging a release, run this checklist:
 ## Quick start
 
 ```rust
-use linger::{
+use linlvo::{
     iterative::ConjugateGradient,
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,
@@ -101,7 +101,7 @@ println!("Converged in {} iterations, residual = {:.3e}",
 ### With AMG preconditioning
 
 ```rust
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond},
     iterative::ConjugateGradient,
     KrylovSolver, SolverParams,
@@ -147,14 +147,14 @@ directly, so it can be passed to solvers without a wrapper.
 
 Note: nalgebra is an integration layer in this project, not an algorithmic backend.
 The Krylov solvers, preconditioners, AMG, and the default vector/matrix path are
-still implemented on top of linger's own `DenseVec` and sparse matrix types.
+still implemented on top of linlvo's own `DenseVec` and sparse matrix types.
 The nalgebra integration only allows an already-assembled
 `nalgebra_sparse::CsrMatrix<T>` to be used as a `LinearOperator` on native
-builds. The wasm path does not use nalgebra; it uses linger's own COO/CSR types
+builds. The wasm path does not use nalgebra; it uses linlvo's own COO/CSR types
 through `WasmCsrMatrix`.
 
 ```rust
-use linger::{DenseVec, KrylovSolver, SolverParams, iterative::ConjugateGradient};
+use linlvo::{DenseVec, KrylovSolver, SolverParams, iterative::ConjugateGradient};
 use nalgebra_sparse::CooMatrix;
 
 let n = 8;
@@ -237,7 +237,7 @@ cargo run --example ex04_nalgebra --features __native
 ## Module map
 
 ```
-linger/
+linlvo/
 ├── core/
 │   ├── scalar.rs          Scalar trait (f32/f64) + ComplexScalar trait (Complex<f32/f64>)
 │   ├── vector.rs          Vector trait + DenseVec<T>
@@ -321,7 +321,7 @@ linger/
 All eigenvalue algorithms implement `EigenSolver<T>` and accept any `LinearOperator`.
 
 ```rust
-use linger::{
+use linlvo::{
     EigenParams, EigenWhich,
     LanczosIter, ArnoldiIter, KrylovSchur, Lobpcg,
     LanczosSvd, QuadraticEigen,
@@ -352,7 +352,7 @@ println!("λ = {:?}", res.eigenvalues);
 ### Generalised eigenvalue problems (`Ax = λBx`)
 
 ```rust
-use linger::{GeneralizedEigen, ShiftInvertLanczos};
+use linlvo::{GeneralizedEigen, ShiftInvertLanczos};
 
 // ShiftInvertLanczos: shift near σ → targets eigenvalues closest to σ
 let solver = ShiftInvertLanczos::<f64>::new(0.0);  // σ = 0 → smallest eigenvalues
@@ -405,7 +405,7 @@ The `ComplexScalar` trait extends numeric support to `Complex<f32>` and
 (real numbers are a special case).
 
 ```rust
-use linger::{Complex, ComplexScalar};
+use linlvo::{Complex, ComplexScalar};
 
 let z: Complex<f64> = Complex::new(3.0, 4.0);
 let modulus: f64 = ComplexScalar::abs(z);   // 5.0
@@ -562,7 +562,7 @@ M_AMS⁻¹ x  ≈  ω D_A⁻¹ x  +  G · P_v⁻¹ · Gᵀ x
 | `G · P_v⁻¹ · Gᵀ x` | AMG (or ILU(0)) solve on the nodal Laplacian `GᵀAG` |
 
 ```rust
-use linger::precond::{AmsPrecond, AmsConfig, AuxSpaceSolver};
+use linlvo::precond::{AmsPrecond, AmsConfig, AuxSpaceSolver};
 
 // G: discrete gradient matrix (n_edges × n_nodes), user-assembled
 let config = AmsConfig::default();          // AMG coarse solve, ω = 0.667
@@ -585,7 +585,7 @@ M_ADS⁻¹ x  ≈  ω D_A⁻¹ x  +  C · P_e⁻¹ · Cᵀ x  +  C G · P_v⁻¹
 | `C G · P_v⁻¹ · Gᵀ Cᵀ x` | AMG solve on the nodal Laplacian `Gᵀ(CᵀAC)G` |
 
 ```rust
-use linger::precond::{AdsPrecond, AdsConfig};
+use linlvo::precond::{AdsPrecond, AdsConfig};
 
 // C: discrete curl (n_faces × n_edges), G: discrete gradient (n_edges × n_nodes)
 let config = AdsConfig::default();          // AMG for both coarse solves
@@ -599,8 +599,8 @@ Gmres::new(30).solve(&a_face, Some(&precond), &b, &mut x, &params)?;
 Both `AmsConfig` and `AdsConfig` accept `AuxSpaceSolver` for each coarse level:
 
 ```rust
-use linger::precond::{AmsConfig, AuxSpaceSolver};
-use linger::amg::AmgConfig;
+use linlvo::precond::{AmsConfig, AuxSpaceSolver};
+use linlvo::amg::AmgConfig;
 
 // AMG (default, recommended for large problems)
 let config = AmsConfig { node_solver: AuxSpaceSolver::Amg(AmgConfig::default()), ..Default::default() };
@@ -617,8 +617,8 @@ let config = AmsConfig { node_solver: AuxSpaceSolver::Ilu0, ..Default::default()
 ### Via `SolverBuilder`
 
 ```rust
-use linger::builder::{SolverBuilder, SolveMethod, PrecondChoice};
-use linger::precond::{AmsConfig};
+use linlvo::builder::{SolverBuilder, SolveMethod, PrecondChoice};
+use linlvo::precond::{AmsConfig};
 use std::sync::Arc;
 
 let precond = PrecondChoice::Ams {
@@ -636,7 +636,7 @@ let x = SolverBuilder::new()
 ## Algebraic Multigrid (AMG)
 
 ```rust
-use linger::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, SmootherType};
+use linlvo::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, SmootherType};
 
 let config = AmgConfig {
     theta:            0.25,                              // strong-connection threshold
@@ -656,7 +656,7 @@ let precond = AmgPrecond::new(hier);
 ### Standalone AMG solve (V-cycle / W-cycle / K-cycle)
 
 ```rust
-use linger::amg::CycleType;
+use linlvo::amg::CycleType;
 let b_dv = DenseVec::from_vec(b.clone());
 let mut x_dv = DenseVec::zeros(n);
 hier.apply_cycle(&b_dv, &mut x_dv, CycleType::V);
@@ -676,7 +676,7 @@ let precond = AmgPrecond::new(hier).with_cycle(CycleType::K { inner_iters: 2 });
 ## Parallel operations (feature = "rayon")
 
 ```rust
-use linger::{parallel_spmv, parallel_spmv_add, parallel_axpy,
+use linlvo::{parallel_spmv, parallel_spmv_add, parallel_axpy,
              parallel_axpby, parallel_dot, parallel_norm2};
 
 parallel_spmv(&a, &x, &mut y);                       // y = A·x
@@ -696,7 +696,7 @@ AMG setup phases (`strong_connections`, `rs_interpolation`, `smooth_prolongation
 ## Block Sparse Row (BSR) format
 
 ```rust
-use linger::{BsrBuilder, BsrMatrix};
+use linlvo::{BsrBuilder, BsrMatrix};
 
 let mut builder = BsrBuilder::<f64>::new(n_block_rows, n_block_cols, r, c);
 builder.push_block(br, bc, block_values_row_major);  // duplicate blocks are summed
@@ -722,7 +722,7 @@ cargo build --target wasm32-unknown-unknown --no-default-features --features was
 
 JavaScript usage:
 ```js
-import init, { WasmCsrMatrix, WasmCgSolver, WasmGmresSolver } from './linger_wasm.js';
+import init, { WasmCsrMatrix, WasmCgSolver, WasmGmresSolver } from './linlvo_wasm.js';
 await init();
 
 const A = WasmCsrMatrix.from_coo(n, n, rowsU32, colsU32, valsF64);
@@ -797,7 +797,7 @@ pub enum SolverError {
 2. **No global mutable state.** Preconditioners implement `&self` apply — safe for concurrent use.
 3. **No `std::thread::spawn` in library code.** Parallelism flows exclusively through Rayon's `par_iter` and is gated by `#[cfg(feature = "rayon")]`.
 4. **No `std::time::Instant` in the core library** — safe for wasm32 compilation.
-5. **Direct `nalgebra_sparse::CsrMatrix` support** is gated to `cfg(not(target_arch = "wasm32"))`. Use linger's own sparse formats in wasm-targeted code.
+5. **Direct `nalgebra_sparse::CsrMatrix` support** is gated to `cfg(not(target_arch = "wasm32"))`. Use linlvo's own sparse formats in wasm-targeted code.
 6. **Matrix construction is always COO → CSR.** Never construct `CsrMatrix` by hand; use `CooMatrix::push` then `CsrMatrix::from_coo`. Duplicate entries are summed automatically.
 7. **`from_raw` is for internal use.** Prefer `from_coo` unless you have pre-validated CSR arrays. In debug builds, `from_raw` panics if any `col_idx` value is ≥ `ncols` — this protects the `unsafe get_unchecked` calls in `spmv` from out-of-bounds access.
 
@@ -850,7 +850,7 @@ solver.solve_multi(&bs, &mut xs)?;   // multiple right-hand sides
 ### Fill-reducing orderings
 
 ```rust
-use linger::direct::ordering::{rcm, colamd, nd, OrderingMethod};
+use linlvo::direct::ordering::{rcm, colamd, nd, OrderingMethod};
 
 let perm = rcm(&a);    // Reverse Cuthill-McKee
 let perm = colamd(&a); // Column approximate minimum degree
@@ -860,8 +860,8 @@ let perm = nd(&a);     // Nested dissection (best fill for 2D/3D FEA)
 Pass the ordering via `DirectOptions`:
 
 ```rust
-use linger::direct::{SparseLu, DirectOptions};
-use linger::direct::ordering::OrderingMethod;
+use linlvo::direct::{SparseLu, DirectOptions};
+use linlvo::direct::ordering::OrderingMethod;
 
 let mut solver = SparseLu::<f64>::default();
 solver.options.ordering = OrderingMethod::NestedDissection;
@@ -874,7 +874,7 @@ solver.solve(&b, &mut x)?;
 Any `DirectSolver` can be wrapped in `DirectSolverPrecond` for use with Krylov methods:
 
 ```rust
-use linger::direct::{SparseLu, DirectSolverPrecond};
+use linlvo::direct::{SparseLu, DirectSolverPrecond};
 
 let precond = DirectSolverPrecond::new(SparseLu::<f64>::default(), &a)?;
 Gmres::new(30).solve(&a, Some(&precond), &b, &mut x, &params)?;
@@ -888,7 +888,7 @@ arithmetic savings (typically 2–5× for FEA problems).  Use it as a
 high-quality preconditioner rather than an exact solver.
 
 ```rust
-use linger::direct::multifrontal::{MultifrontalLu, MultifrontalOptions};
+use linlvo::direct::multifrontal::{MultifrontalLu, MultifrontalOptions};
 
 let opts = MultifrontalOptions {
     blr_min_size: 16,   // compress fronts larger than this
@@ -907,7 +907,7 @@ Setting `blr_min_size = usize::MAX` disables BLR entirely (exact factorisation).
 `BlrBlock` is also available as a standalone compression primitive:
 
 ```rust
-use linger::direct::{BlrBlock, compress_block};
+use linlvo::direct::{BlrBlock, compress_block};
 
 // Compress a row-major m×n dense block with tolerance 1e-8.
 // max_rank = 0 means no hard cap (uses min(m, n)).

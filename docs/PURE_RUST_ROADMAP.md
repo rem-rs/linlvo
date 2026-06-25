@@ -1,10 +1,10 @@
-# Pure Rust Solver Roadmap (linger)
+# Pure Rust Solver Roadmap (linlvo)
 
 Date: 2026-04-19
 
 ## Positioning
 
-`linger` is a pure Rust sparse linear solver library.
+`linlvo` is a pure Rust sparse linear solver library.
 
 This roadmap tracks only native solver capabilities and scale hardening.
 No external-solver equivalence tracks are part of the active plan.
