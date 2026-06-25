@@ -1,5 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod nalgebra;
 pub mod bsr;
 pub mod coo;
 pub mod csc;
