@@ -213,7 +213,7 @@ cargo bench --bench bench_simd_spmv
 ### 集成到求解器
 
 ```rust
-use linger::{sparse::CsrMatrix, core::DenseVec};
+use linlvo::{sparse::CsrMatrix, core::DenseVec};
 
 let a: CsrMatrix<f64> = /* ... */;
 let x = vec![1.0; n];
