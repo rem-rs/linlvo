@@ -702,6 +702,111 @@ pub mod x86_64 {
     }
 }
 
+// ─── Parallel (Rayon) variants for large vectors ─────────────────────────
+//
+// These dispatch to the existing SIMD ops per chunk, then use
+// std::thread::scope for cross-chunk parallelism. Each chunk stays within
+// SIMD-friendly size, and the threaded divide-and-conquer exploits multi-core.
+// Only activate for vectors large enough to amortise thread overhead.
+
+const PAR_THRESHOLD: usize = 1024; // ~8 KB of f64 — benefit even mid-size problems
+
+fn num_threads() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        let cached = CACHED.load(Ordering::Relaxed);
+        if cached != 0 { return cached as usize; }
+        let n = rayon::current_num_threads().max(2);
+        CACHED.store(n.min(255) as u8, Ordering::Relaxed);
+        n
+    }
+    #[cfg(target_arch = "wasm32")]
+    { 1 }
+}
+
+/// Parallel dot product: Σ xᵢ·yᵢ for vectors > PAR_THRESHOLD.
+/// Falls back to `simd_dot` for smaller vectors.
+pub fn par_dot<T: Scalar + Send>(x: &[T], y: &[T]) -> T {
+    debug_assert_eq!(x.len(), y.len(), "par_dot: length mismatch");
+    if x.len() < PAR_THRESHOLD {
+        return simd_dot(x, y);
+    }
+    let n_threads = num_threads();
+    let chunk_size = (x.len() + n_threads - 1) / n_threads;
+    let mut sum = T::zero();
+    std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(n_threads);
+        for (xc, yc) in x.chunks(chunk_size).zip(y.chunks(chunk_size)) {
+            handles.push(s.spawn(|| simd_dot(xc, yc)));
+        }
+        for h in handles { sum = sum + h.join().unwrap_or(T::zero()); }
+    });
+    sum
+}
+
+/// Parallel AXPY: y += α·x for vectors > PAR_THRESHOLD.
+pub fn par_axpy<T: Scalar + Send>(alpha: T, x: &[T], y: &mut [T]) {
+    debug_assert_eq!(x.len(), y.len(), "par_axpy: length mismatch");
+    if x.len() < PAR_THRESHOLD {
+        return simd_axpy(alpha, x, y);
+    }
+    let n_threads = num_threads();
+    let chunk_size = (x.len() + n_threads - 1) / n_threads;
+    std::thread::scope(|s| {
+        for (xc, yc) in x.chunks(chunk_size).zip(y.chunks_mut(chunk_size)) {
+            s.spawn(|| simd_axpy(alpha, xc, yc));
+        }
+    });
+}
+
+/// Parallel Euclidean norm: √(Σ |xᵢ|²) for vectors > PAR_THRESHOLD.
+pub fn par_norm2<T: Scalar + Send>(x: &[T]) -> T {
+    if x.len() < PAR_THRESHOLD {
+        return simd_norm2(x);
+    }
+    let n_threads = num_threads();
+    let chunk_size = (x.len() + n_threads - 1) / n_threads;
+    let mut sum_sq: f64 = 0.0;
+    std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(n_threads);
+        for xc in x.chunks(chunk_size) {
+            handles.push(s.spawn(|| {
+                let s = simd_norm2(xc);
+                // Extract real part: for f64 it's the value, for Complex<f64> it's the real component
+                fn val<T: Scalar>(v: T) -> f64 {
+                    if std::mem::size_of::<T>() >= 8 {
+                        unsafe { *(&v as *const T as *const f64) }
+                    } else {
+                        unsafe { *(&v as *const T as *const f32) as f64 }
+                    }
+                }
+                let re = val(s);
+                re * re
+            }));
+        }
+        for h in handles { sum_sq += h.join().unwrap_or(0.0); }
+    });
+    let norm = sum_sq.sqrt();
+    // Convert f64 back to T — Scalar::from_f64 is infallible for real types
+    T::from_f64(norm)
+}
+
+/// Parallel scale: y *= α for vectors > PAR_THRESHOLD.
+pub fn par_scale<T: Scalar + Send>(alpha: T, y: &mut [T]) {
+    if y.len() < PAR_THRESHOLD {
+        return simd_scale(alpha, y);
+    }
+    let n_threads = num_threads();
+    let chunk_size = (y.len() + n_threads - 1) / n_threads;
+    std::thread::scope(|s| {
+        for yc in y.chunks_mut(chunk_size) {
+            s.spawn(|| simd_scale(alpha, yc));
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

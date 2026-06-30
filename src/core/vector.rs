@@ -131,22 +131,22 @@ impl<T: Scalar> Vector for DenseVec<T> {
 
     fn dot(&self, other: &Self) -> T {
         debug_assert_eq!(self.0.len(), other.0.len());
-        crate::simd::dense_ops::simd_dot(&self.0, &other.0)
+        crate::simd::dense_ops::par_dot(&self.0, &other.0)
     }
 
     fn axpy(&mut self, alpha: T, x: &Self) {
         debug_assert_eq!(self.0.len(), x.0.len());
-        crate::simd::dense_ops::simd_axpy(alpha, &x.0, &mut self.0);
+        crate::simd::dense_ops::par_axpy(alpha, &x.0, &mut self.0);
     }
 
     fn scale(&mut self, alpha: T) {
-        crate::simd::dense_ops::simd_scale(alpha, &mut self.0);
+        crate::simd::dense_ops::par_scale(alpha, &mut self.0);
     }
 
     /// Returns the Euclidean norm.  For `T: Scalar`, `T::Real = T`, so the
     /// return type is still `T` — identical to the previous API.
     fn norm2(&self) -> T {
-        crate::simd::dense_ops::simd_norm2(&self.0)
+        crate::simd::dense_ops::par_norm2(&self.0)
     }
 
     fn zero_like(&self) -> Self {

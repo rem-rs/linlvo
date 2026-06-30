@@ -394,7 +394,7 @@ fn givens<T: Scalar>(a: T, b: T) -> (T, T) {
 }
 
 fn dot_slice<T: Scalar>(a: &[T], b: &[T]) -> T {
-    crate::simd::dense_ops::simd_dot(a, b)
+    crate::simd::dense_ops::par_dot(a, b)
 }
 
 fn apply_precond_or_copy<T: Scalar>(
