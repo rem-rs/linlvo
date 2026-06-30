@@ -225,7 +225,13 @@ impl<T: Scalar> DenseMatrix<T> {
                                                x.as_slice(), y.as_mut_slice());
             return;
         }
-        #[cfg(not(feature = "blas"))]
+        #[cfg(feature = "blas-oxiblas")]
+        {
+            crate::oxiblas_backend::real_gemv_add(alpha, &self.data, self.nrows, self.ncols,
+                                                  x.as_slice(), y.as_mut_slice());
+            return;
+        }
+        #[cfg(not(any(feature = "blas", feature = "blas-oxiblas")))]
         crate::simd::dense_ops::simd_gemv(alpha, &self.data, self.nrows, self.ncols,
                                           x.as_slice(), y.as_mut_slice());
     }
@@ -241,7 +247,13 @@ impl<T: Scalar> DenseMatrix<T> {
                                                  x.as_slice(), y.as_mut_slice());
             return;
         }
-        #[cfg(not(feature = "blas"))]
+        #[cfg(feature = "blas-oxiblas")]
+        {
+            crate::oxiblas_backend::real_gemv_t_add(alpha, &self.data, self.nrows, self.ncols,
+                                                    x.as_slice(), y.as_mut_slice());
+            return;
+        }
+        #[cfg(not(any(feature = "blas", feature = "blas-oxiblas")))]
         crate::simd::dense_ops::simd_gemv_t(alpha, &self.data, self.nrows, self.ncols,
                                             x.as_slice(), y.as_mut_slice());
     }
@@ -274,7 +286,13 @@ impl<T: Scalar> DenseMatrix<Complex<T>> {
                                                   x.as_slice(), y.as_mut_slice());
             return;
         }
-        #[cfg(not(feature = "blas"))]
+        #[cfg(feature = "blas-oxiblas")]
+        {
+            crate::oxiblas_backend::complex_gemv_add(alpha, &self.data, self.nrows, self.ncols,
+                                                     x.as_slice(), y.as_mut_slice());
+            return;
+        }
+        #[cfg(not(any(feature = "blas", feature = "blas-oxiblas")))]
         {
             let xd = x.as_slice();
             let yd = y.as_mut_slice();

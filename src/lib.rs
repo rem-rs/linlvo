@@ -21,6 +21,9 @@ pub mod simd;
 #[cfg(feature = "blas")]
 pub mod blas_backend;
 
+#[cfg(feature = "blas-oxiblas")]
+pub mod oxiblas_backend;
+
 #[cfg(feature = "wasm")]
 pub mod wasm;
 

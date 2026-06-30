@@ -37,6 +37,8 @@ use crate::core::{
     dense::DenseMatrix,
 };
 use crate::iterative::gmres::{Gmres, GmresWorkspace};
+use crate::iterative::complex_gmres::{ComplexGmres, ComplexGmresWorkspace};
+use num_complex::Complex;
 
 // ─── Parameters ──────────────────────────────────────────────────────────────
 
@@ -149,77 +151,109 @@ impl MultiRhsGmres {
         let n = b.nrows();
         let sp: SolverParams = params.into();
 
-        // Per-column scratch: residuals, Krylov basis, convergence flags
-        let r: Vec<DenseVec<T>>           = (0..k).map(|j| {
-            // r_j = b_j - A x_j
-            let bj = b.col(j);
-            let xj = x.col(j);
-            let mut axj = DenseVec::zeros(n);
-            op.apply(&xj, &mut axj);
-            let mut rj = bj.clone();
-            rj.axpy(-T::one(), &axj);
-            rj
-        }).collect();
-
-        // Norm of each RHS for relative stopping criterion
-        let b_norms: Vec<f64> = (0..k).map(|j| {
-            let bj = b.col(j);
-            bj.norm2().to_f64().unwrap_or(1.0).max(1.0)
-        }).collect();
-
-        let mut converged   = vec![false; k];
-        let mut iters       = vec![0usize; k];
-        let mut final_resid = vec![0.0f64; k];
-        let mut histories   = vec![Vec::<f64>::new(); k];
-
-        let mut workspaces: Vec<GmresWorkspace<T>> =
-            (0..k).map(|_| GmresWorkspace::new(n, self.restart)).collect();
+        let mut results = Vec::with_capacity(k);
+        let mut ws = GmresWorkspace::new(n, self.restart);
         let gmres_one = Gmres::<T>::new(self.restart);
 
-        let max_outer = (params.max_iter + self.restart - 1) / self.restart;
+        for j in 0..k {
+            let bj  = b.col(j);
+            let mut xj = x.col(j);
+            let res = gmres_one.solve_with_workspace(
+                op, precond, &bj, &mut xj, &sp, &mut ws)?;
+            x.set_col(j, &xj);
+            results.push(res);
+        }
+        Ok(results)
+    }
+}
 
-        for _outer in 0..max_outer {
-            if converged.iter().all(|&c| c) { break; }
+/// Complex multi-RHS GMRES: solves `A X = B` column by column, sharing
+/// one [`ComplexGmresWorkspace`] across all columns.
+///
+/// Each column runs an independent [`ComplexGmres`] solve; workspace
+/// (Krylov basis, Hessenberg matrix) is allocated once and reused.
+///
+/// # Example
+/// ```ignore
+/// use linger::iterative::multi_rhs::{ComplexMultiRhsGmres, MultiRhsParams};
+/// use linger::{DenseMatrix, DenseVec};
+/// use num_complex::Complex;
+///
+/// type C64 = Complex<f64>;
+/// let z: DenseMatrix<C64> = /* ... */;
+/// let b: DenseMatrix<C64> = /* ... */;  // n × k
+/// let mut x: DenseMatrix<C64> = DenseMatrix::zeros(n, k);
+///
+/// let solver = ComplexMultiRhsGmres::<f64>::new(30);
+/// let results = solver.solve(&z, &b, &mut x, &MultiRhsParams::default())?;
+/// ```
+pub struct ComplexMultiRhsGmres<T: Scalar> {
+    restart: usize,
+    _phantom: std::marker::PhantomData<T>,
+}
 
-            for j in 0..k {
-                if converged[j] { continue; }
+impl<T: Scalar> ComplexMultiRhsGmres<T> {
+    /// Create a new solver with the given GMRES restart parameter.
+    pub fn new(restart: usize) -> Self {
+        Self { restart: restart.max(1), _phantom: std::marker::PhantomData }
+    }
 
-                let bj  = b.col(j);
-                let mut xj = x.col(j);
-                let res = gmres_one.solve_with_workspace(
-                    op, precond, &bj, &mut xj, &sp, &mut workspaces[j]);
+    /// Solve `A X = B` using complex GMRES for each column.
+    ///
+    /// One [`ComplexGmresWorkspace`] is shared across all columns to avoid
+    /// re-allocation of Krylov basis vectors and Hessenberg storage.
+    ///
+    /// Returns one [`SolverResult`] per column.
+    pub fn solve(
+        &self,
+        op:      &dyn LinearOperator<Vector = DenseVec<Complex<T>>>,
+        precond: Option<&dyn Preconditioner<Vector = DenseVec<Complex<T>>>>,
+        b:       &DenseMatrix<Complex<T>>,
+        x:       &mut DenseMatrix<Complex<T>>,
+        params:  &MultiRhsParams,
+    ) -> Result<Vec<SolverResult>, SolverError> {
+        assert_eq!(b.nrows(), op.nrows());
+        assert_eq!(b.ncols(), x.ncols());
+        assert_eq!(x.nrows(), op.ncols());
 
-                match res {
-                    Ok(sr) => {
-                        iters[j] += sr.iterations;
-                        final_resid[j] = sr.final_residual;
-                        histories[j].extend_from_slice(&sr.residual_history);
-                        if sr.converged || iters[j] >= params.max_iter {
-                            converged[j] = true;
-                        }
-                        x.set_col(j, &xj);
-                    }
-                    Err(e) => {
-                        // Mark converged to stop re-trying, record what we have
-                        converged[j] = true;
-                        let _ = e; // error is captured in final_resid as-is
-                    }
+        let k = b.ncols();
+        let n = b.nrows();
+
+        let mut results = Vec::with_capacity(k);
+        let mut ws = ComplexGmresWorkspace::new(n, self.restart);
+        let gmres_one = ComplexGmres::<T>::new(self.restart);
+
+        for j in 0..k {
+            let bj  = b.col(j);
+            let mut xj = x.col(j);
+            let res = gmres_one.solve_with_workspace(
+                op, precond, &bj, &mut xj,
+                params.rtol, params.atol, params.max_iter,
+                &mut ws);
+
+            match res {
+                Ok(sr) => {
+                    x.set_col(j, &xj);
+                    results.push(SolverResult {
+                        converged:        sr.converged,
+                        iterations:       sr.iters,
+                        final_residual:   sr.residual_norm,
+                        residual_history: sr.residual_history,
+                        history:          None,
+                    });
                 }
-
-                // Check remaining residual norm directly
-                let nrm = r[j].norm2().to_f64().unwrap_or(0.0);
-                let rel = nrm / b_norms[j];
-                if rel < params.rtol || nrm < params.atol { converged[j] = true; }
+                Err(_) => {
+                    results.push(SolverResult {
+                        converged:        false,
+                        iterations:       params.max_iter,
+                        final_residual:   0.0,
+                        residual_history: vec![],
+                        history:          None,
+                    });
+                }
             }
         }
-
-        Ok((0..k).map(|j| SolverResult {
-            converged:        converged[j],
-            iterations:       iters[j],
-            final_residual:   final_resid[j],
-            residual_history: std::mem::take(&mut histories[j]),
-            history:          None,
-        }).collect())
+        Ok(results)
     }
 }
 

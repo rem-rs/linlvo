@@ -20,11 +20,13 @@ __native = []                        # internal: gates native-only examples (nal
 #   cargo build --features blas-openblas    (Linux / macOS with OpenBLAS)
 #   cargo build --features blas-accelerate  (macOS Accelerate framework)
 #   cargo build --features blas-netlib      (reference BLAS)
+#   cargo build --features blas-oxiblas     (pure Rust OxiBLAS, no C deps)
 blas           = ["dep:cblas-sys", "dep:blas-src"]
 blas-openblas  = ["blas", "blas-src/openblas"]
 blas-openblas-system = ["blas", "dep:cblas-sys"]
 blas-accelerate = ["blas", "blas-src/accelerate"]
 blas-netlib    = ["blas", "blas-src/netlib"]
+blas-oxiblas   = ["dep:oxiblas"]
 
 [dependencies]
 num-traits  = "0.2"
@@ -34,8 +36,11 @@ rayon       = { version = "1.10", optional = true }
 mpi         = { version = "0.8", optional = true }
 
 # BLAS optional deps (activated via blas / blas-openblas / blas-accelerate features)
-cblas-sys = { version = "0.1", optional = true }
-blas-src  = { version = "0.10", optional = true, default-features = false }
+cblas-sys  = { version = "0.1", optional = true }
+blas-src   = { version = "0.10", optional = true, default-features = false }
+
+# Pure Rust BLAS/LAPACK alternative (feature = "blas-oxiblas")
+oxiblas    = { version = "0.2", optional = true, default-features = false, features = ["sparse"] }
 
 # WASM optional deps
 wasm-bindgen            = { version = "0.2", optional = true }
