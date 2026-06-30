@@ -111,6 +111,10 @@ pub struct AmsConfig {
     ///
     /// Typical value: 2/3 ≈ 0.667 (optimal for model problems).
     pub smoother_omega: f64,
+    /// Number of pre/post-smoothing sweeps (power/BiCG-stable iterations).
+    /// More sweeps improve h-independence at the cost of more SpMV calls.
+    /// Default: 1 (one Jacobi step).  Recommended: 3–5 for strong scaling.
+    pub smoother_sweeps: usize,
     /// Approximate solver for the nodal Laplacian `GᵀAG`.
     pub node_solver: AuxSpaceSolver,
 }
@@ -119,6 +123,7 @@ impl Default for AmsConfig {
     fn default() -> Self {
         AmsConfig {
             smoother_omega: 0.667,
+            smoother_sweeps: 1,
             node_solver: AuxSpaceSolver::default(),
         }
     }
@@ -127,11 +132,12 @@ impl Default for AmsConfig {
 impl AmsConfig {
     /// HPC-oriented default for auxiliary-space Maxwell solves.
     ///
-    /// Keeps the robust 2/3 Jacobi damping while using SA-AMG with a larger
-    /// coarse threshold to reduce setup/communication pressure on large cases.
+    /// Uses 3 Jacobi smoothing sweeps for better h-independence,
+    /// SA-AMG with larger coarse threshold for the node solve.
     pub fn hpc_default() -> Self {
         AmsConfig {
             smoother_omega: 0.667,
+            smoother_sweeps: 3,
             node_solver: AuxSpaceSolver::Amg(AmgConfig {
                 coarse_threshold: 64,
                 max_levels: 30,
