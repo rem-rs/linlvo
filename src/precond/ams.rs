@@ -170,13 +170,33 @@ pub struct AmsProfile {
 ///
 /// Constructed via [`AmsPrecond::new`]; implements [`Preconditioner`] and can
 /// be passed directly to any [`KrylovSolver`](crate::KrylovSolver).
+///
+/// # Multi-sweep smoothing
+///
+/// When `smoother_sweeps > 1`, the preconditioner applies `smoother_sweeps`
+/// sweeps of a preconditioned Richardson iteration:
+///
+/// ```text
+/// y⁰ = 0
+/// for l = 1…K:
+///   rˡ = x - A·yˡ⁻¹
+///   yˡ = yˡ⁻¹ + ω·D⁻¹·rˡ  +  G·P_v⁻¹·Gᵀ·rˡ
+/// y = yᵏ
+/// ```
+///
+/// More sweeps improve h-independence and robustness for Maxwell eigenvalue
+/// problems at the cost of additional SpMV per preconditioner application.
 pub struct AmsPrecond<T: Scalar> {
     n_edges: usize,
     n_nodes: usize,
+    /// Edge stiffness matrix A (stored for multi-sweep residual).
+    a: CsrMatrix<T>,
     /// Precomputed ω / d_i for each edge i (avoids division in apply).
     scaled_inv_diag: Vec<T>,
     /// Discrete gradient G: n_edges × n_nodes (column-sparse in practice).
     g: CsrMatrix<T>,
+    /// Number of smoother sweeps to apply.
+    smoother_sweeps: usize,
     /// Approximate solver for the nodal coarse problem GᵀAG.
     node_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
     /// Setup diagnostics for observability and tuning.
@@ -270,8 +290,10 @@ impl<T: Scalar> AmsPrecond<T> {
         Ok(AmsPrecond {
             n_edges,
             n_nodes,
+            a: a.clone(),
             scaled_inv_diag,
             g: g.clone(),
+            smoother_sweeps: config.smoother_sweeps,
             node_precond,
             profile,
         })
@@ -284,29 +306,68 @@ impl<T: Scalar> AmsPrecond<T> {
 impl<T: Scalar> Preconditioner for AmsPrecond<T> {
     type Vector = DenseVec<T>;
 
-    /// Apply the 2-term AMS preconditioner: `y ← ω D_A⁻¹ x + G P_v⁻¹ Gᵀ x`.
+    /// Apply the AMS preconditioner.
+    ///
+    /// When `smoother_sweeps == 1` this is the standard Hiptmair-Xu
+    /// preconditioner `M⁻¹ ≈ ω·D⁻¹ + G·P_v⁻¹·Gᵀ`.
+    ///
+    /// When `smoother_sweeps > 1`, multi-sweep Richardson is used (see
+    /// struct-level docs), which gives better h-independence and robustness
+    /// for Maxwell eigenvalue problems.
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
-        // ── Term 1: edge smoother  y[i] ← ω d_i⁻¹ x[i] ─────────────────────
-        {
-            let xs = x.as_slice();
-            let ys = y.as_mut_slice();
-            for i in 0..self.n_edges {
-                ys[i] = self.scaled_inv_diag[i] * xs[i];
-            }
+        let n_edges = self.n_edges;
+        let n_nodes = self.n_nodes;
+
+        // y = 0
+        for ys in y.as_mut_slice().iter_mut().take(n_edges) {
+            *ys = T::zero();
         }
 
-        // ── Term 2: gradient auxiliary-space correction ───────────────────────
-        // 2a. t_node ← Gᵀ x
-        let mut t_node = DenseVec::zeros(self.n_nodes);
-        self.g.apply_transpose(x, &mut t_node);
+        // Temporary vectors reused across sweeps.
+        let mut r = DenseVec::zeros(n_edges);
+        let mut t_node = DenseVec::zeros(n_nodes);
+        let mut s_node = DenseVec::zeros(n_nodes);
+        let mut corr = DenseVec::zeros(n_edges);
 
-        // 2b. s_node ← P_v⁻¹ t_node
-        let mut s_node = DenseVec::zeros(self.n_nodes);
-        self.node_precond.apply_precond(&t_node, &mut s_node);
+        for _ in 0..self.smoother_sweeps {
+            // ── r = x - A·y ────────────────────────────────────────────────
+            self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
+            {
+                let xs = x.as_slice();
+                let rs = r.as_mut_slice();
+                for i in 0..n_edges {
+                    rs[i] = xs[i] - rs[i];
+                }
+            }
 
-        // 2c. y += G s_node
-        self.g
-            .spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
+            // ── corr = ω·D⁻¹·r  (edge smoother) ────────────────────────────
+            {
+                let rs = r.as_slice();
+                let cs = corr.as_mut_slice();
+                for i in 0..n_edges {
+                    cs[i] = self.scaled_inv_diag[i] * rs[i];
+                }
+            }
+
+            // ── corr += G·P_v⁻¹·Gᵀ·r  (coarse auxiliary-space correction) ─
+            self.g.apply_transpose(&r, &mut t_node);
+            self.node_precond.apply_precond(&t_node, &mut s_node);
+            self.g.spmv_add(
+                T::one(),
+                s_node.as_slice(),
+                T::one(),
+                corr.as_mut_slice(),
+            );
+
+            // ── y += corr ───────────────────────────────────────────────────
+            {
+                let cs = corr.as_slice();
+                let ys = y.as_mut_slice();
+                for i in 0..n_edges {
+                    ys[i] = ys[i] + cs[i];
+                }
+            }
+        }
     }
 }
 
