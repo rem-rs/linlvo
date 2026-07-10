@@ -52,7 +52,7 @@
 
 use std::sync::Arc;
 use crate::{
-    core::{preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec},
+    core::{preconditioner::Preconditioner, scalar::ComplexScalar, vector::DenseVec},
     sparse::CsrMatrix,
 };
 
@@ -71,7 +71,7 @@ pub enum SplitMode {
 ///
 /// Type parameters:
 /// - `T`: scalar type (usually `f64`)
-pub struct FieldSplitPrecond<T: Scalar> {
+pub struct FieldSplitPrecond<T: ComplexScalar> {
     split:  usize,
     n:      usize,
     mode:   SplitMode,
@@ -96,7 +96,7 @@ struct OffDiag<T> {
     values: Vec<T>,
 }
 
-impl<T: Scalar> OffDiag<T> {
+impl<T: ComplexScalar> OffDiag<T> {
     /// Apply `y_local += A₁₀ * x_local` where `x_local` is from field 0.
     fn apply_add(&self, x0: &[T], y1: &mut [T]) {
         for i in 0..self.nrows {
@@ -111,7 +111,7 @@ impl<T: Scalar> OffDiag<T> {
 
 // ─── Construction ─────────────────────────────────────────────────────────────
 
-impl<T: Scalar> FieldSplitPrecond<T> {
+impl<T: ComplexScalar> FieldSplitPrecond<T> {
     /// Build a FieldSplit preconditioner from two sub-preconditioners.
     ///
     /// - `n`: total number of DOFs.
@@ -153,7 +153,7 @@ impl<T: Scalar> FieldSplitPrecond<T> {
 
 // ─── Preconditioner impl ──────────────────────────────────────────────────────
 
-impl<T: Scalar> Preconditioner for FieldSplitPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for FieldSplitPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, r: &DenseVec<T>, z: &mut DenseVec<T>) {
@@ -202,7 +202,7 @@ impl<T: Scalar> Preconditioner for FieldSplitPrecond<T> {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Extract the off-diagonal block A₁₀ (rows split..n, cols 0..split).
-fn extract_off_diag<T: Scalar>(mat: &CsrMatrix<T>, split: usize) -> OffDiag<T> {
+fn extract_off_diag<T: ComplexScalar>(mat: &CsrMatrix<T>, split: usize) -> OffDiag<T> {
     let n    = mat.nrows();
     let n1   = n - split;
     let rp   = mat.row_ptr();
