@@ -43,7 +43,7 @@ use crate::core::{
     error::SolverError,
     operator::TransposeOperator,
     preconditioner::Preconditioner,
-    scalar::Scalar,
+    scalar::{ComplexScalar, Scalar},
     vector::DenseVec,
 };
 use crate::precond::ilu0::Ilu0Precond;
@@ -196,7 +196,7 @@ pub struct AmsProfile {
 ///
 /// More sweeps improve h-independence and robustness for Maxwell eigenvalue
 /// problems at the cost of additional SpMV per preconditioner application.
-pub struct AmsPrecond<T: Scalar> {
+pub struct AmsPrecond<T: ComplexScalar> {
     n_edges: usize,
     n_nodes: usize,
     /// Edge stiffness matrix A (stored for multi-sweep residual).
@@ -213,7 +213,7 @@ pub struct AmsPrecond<T: Scalar> {
     profile: AmsProfile,
 }
 
-impl<T: Scalar> AmsPrecond<T> {
+impl<T: ComplexScalar> AmsPrecond<T> {
     /// Build the AMS preconditioner.
     ///
     /// # Arguments
@@ -261,8 +261,8 @@ impl<T: Scalar> AmsPrecond<T> {
         }
 
         // ── 2. Edge smoother: ω / d_i ────────────────────────────────────────
-        let omega = T::from_f64(config.smoother_omega);
-        let tol   = T::machine_epsilon() * T::from_f64(1e6);
+        let omega = T::from_real(<T::Real as Scalar>::from_f64(config.smoother_omega));
+        let tol   = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         let diag  = a.diag();
         let scaled_inv_diag: Vec<T> = diag
             .iter()
@@ -333,7 +333,7 @@ impl<T: Scalar> AmsPrecond<T> {
     pub fn profile(&self) -> &AmsProfile { &self.profile }
 }
 
-impl<T: Scalar> Preconditioner for AmsPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
     type Vector = DenseVec<T>;
 
     /// Apply the AMS preconditioner.
@@ -407,7 +407,7 @@ impl<T: Scalar> Preconditioner for AmsPrecond<T> {
 ///
 /// `pub(super)` so that `ads.rs` can call it without duplicating the match.
 #[allow(clippy::type_complexity)]
-pub(super) fn build_aux_solver<T: Scalar>(
+pub(super) fn build_aux_solver<T: ComplexScalar>(
     mat:    CsrMatrix<T>,
     solver: &AuxSpaceSolver,
 ) -> Result<(Box<dyn Preconditioner<Vector = DenseVec<T>>>, AuxSolverProfile), SolverError> {

@@ -42,7 +42,7 @@ use crate::core::{
     error::SolverError,
     operator::{LinearOperator, TransposeOperator},
     preconditioner::Preconditioner,
-    scalar::Scalar,
+    scalar::{ComplexScalar, Scalar},
     vector::DenseVec,
 };
 use crate::precond::ams::{AuxSolverProfile, AuxSpaceSolver, build_aux_solver};
@@ -130,7 +130,7 @@ pub struct AdsProfile {
 ///
 /// Constructed via [`AdsPrecond::new`]; implements [`Preconditioner`] and can
 /// be passed directly to any [`KrylovSolver`](crate::KrylovSolver).
-pub struct AdsPrecond<T: Scalar> {
+pub struct AdsPrecond<T: ComplexScalar> {
     n_faces: usize,
     n_edges: usize,
     n_nodes: usize,
@@ -148,7 +148,7 @@ pub struct AdsPrecond<T: Scalar> {
     profile: AdsProfile,
 }
 
-impl<T: Scalar> AdsPrecond<T> {
+impl<T: ComplexScalar> AdsPrecond<T> {
     /// Build the ADS preconditioner.
     ///
     /// # Arguments
@@ -205,8 +205,8 @@ impl<T: Scalar> AdsPrecond<T> {
         }
 
         // ── 2. Face smoother: ω / d_i ────────────────────────────────────────
-        let omega = T::from_f64(config.smoother_omega);
-        let tol   = T::machine_epsilon() * T::from_f64(1e6);
+        let omega = T::from_real(<T::Real as Scalar>::from_f64(config.smoother_omega));
+        let tol   = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         let diag  = a.diag();
         let scaled_inv_diag: Vec<T> = diag
             .iter()
@@ -294,7 +294,7 @@ impl<T: Scalar> AdsPrecond<T> {
     pub fn profile(&self) -> &AdsProfile { &self.profile }
 }
 
-impl<T: Scalar> Preconditioner for AdsPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for AdsPrecond<T> {
     type Vector = DenseVec<T>;
 
     /// Apply the 3-term ADS preconditioner:
