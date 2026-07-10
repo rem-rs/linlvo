@@ -41,7 +41,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -69,7 +69,7 @@ pub struct IldltPrecond<T> {
     d:        Vec<T>,
 }
 
-impl<T: Scalar> IldltPrecond<T> {
+impl<T: ComplexScalar> IldltPrecond<T> {
     /// Compute the ILDLᵀ(0) factorisation of `mat`.
     ///
     /// Only the lower-triangular part of `mat` (col ≤ row, including diagonal)
@@ -143,7 +143,7 @@ impl<T: Scalar> IldltPrecond<T> {
         //         if (j, k) exists in L (as l_jk):
         //           l_val[pos(i,j)] -= l_ik * D[k] * l_jk
 
-        let tol = T::machine_epsilon() * T::from_f64(1e6);
+        let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
 
         for i in 0..n {
             // Scan lower-triangular entries of row i: columns k < i.
@@ -198,7 +198,7 @@ impl<T: Scalar> IldltPrecond<T> {
 
 // ─── Preconditioner impl ─────────────────────────────────────────────────────
 
-impl<T: Scalar> Preconditioner for IldltPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for IldltPrecond<T> {
     type Vector = DenseVec<T>;
 
     /// Apply M⁻¹ x = (L D Lᵀ)⁻¹ x:
