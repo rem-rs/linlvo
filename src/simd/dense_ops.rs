@@ -60,6 +60,17 @@ pub fn simd_axpy<T: Scalar>(alpha: T, x: &[T], y: &mut [T]) {
     debug_assert_eq!(x.len(), y.len(), "axpy: length mismatch");
 
     #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            unsafe { with_f64(alpha, x, y, |a, xf, yf| x86_64::avx512_axpy_f64(a, xf, yf)); }
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            unsafe { with_f32(alpha, x, y, |a, xf, yf| x86_64::avx512_axpy_f32(a, xf, yf)); }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
         if std::mem::size_of::<T>() == 8 {
             unsafe { with_f64(alpha, x, y, |a, xf, yf| x86_64::avx2_axpy_f64(a, xf, yf)); }
@@ -96,6 +107,29 @@ pub fn simd_axpy<T: Scalar>(alpha: T, x: &[T], y: &mut [T]) {
 #[inline]
 pub fn simd_axpby<T: Scalar>(alpha: T, x: &[T], beta: T, y: &mut [T]) {
     debug_assert_eq!(x.len(), y.len(), "axpby: length mismatch");
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            unsafe {
+                let a = *(&alpha as *const T as *const f64);
+                let b = *(&beta  as *const T as *const f64);
+                let xf = std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len());
+                let yf = std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len());
+                x86_64::avx512_axpby_f64(a, xf, b, yf);
+            }
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            unsafe {
+                let a = *(&alpha as *const T as *const f32);
+                let b = *(&beta  as *const T as *const f32);
+                let xf = std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len());
+                let yf = std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len());
+                x86_64::avx512_axpby_f32(a, xf, b, yf);
+            }
+            return;
+        }
+    }
 
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
@@ -152,6 +186,21 @@ pub fn simd_dot<T: Scalar>(x: &[T], y: &[T]) -> T {
     debug_assert_eq!(x.len(), y.len(), "dot: length mismatch");
 
     #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts(y.as_ptr() as *const f64, y.len()) };
+            let r = x86_64::avx512_dot_f64(xf, yf);
+            return unsafe { *(&r as *const f64 as *const T) };
+        } else if std::mem::size_of::<T>() == 4 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let yf = unsafe { std::slice::from_raw_parts(y.as_ptr() as *const f32, y.len()) };
+            let r = x86_64::avx512_dot_f32(xf, yf);
+            return unsafe { *(&r as *const f32 as *const T) };
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
         if std::mem::size_of::<T>() == 8 {
             let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
@@ -189,6 +238,19 @@ pub fn simd_dot<T: Scalar>(x: &[T], y: &[T]) -> T {
 /// SIMD-accelerated Euclidean norm `‖x‖₂` for dense vectors.
 #[inline]
 pub fn simd_norm2<T: Scalar>(x: &[T]) -> T {
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let r = x86_64::avx512_norm2_f64(xf);
+            return unsafe { *(&r as *const f64 as *const T) };
+        } else if std::mem::size_of::<T>() == 4 {
+            let xf = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let r = x86_64::avx512_norm2_f32(xf);
+            return unsafe { *(&r as *const f32 as *const T) };
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
         if std::mem::size_of::<T>() == 8 {
@@ -232,6 +294,23 @@ pub fn simd_sub<T: Scalar>(a: &[T], b: &[T], out: &mut [T]) {
     debug_assert_eq!(a.len(), out.len(), "sub: length mismatch a/out");
 
     #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let af  = unsafe { std::slice::from_raw_parts(a.as_ptr()   as *const f64, a.len()) };
+            let bf  = unsafe { std::slice::from_raw_parts(b.as_ptr()   as *const f64, b.len()) };
+            let of_ = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut f64, out.len()) };
+            x86_64::avx512_sub_f64(af, bf, of_);
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let af  = unsafe { std::slice::from_raw_parts(a.as_ptr()   as *const f32, a.len()) };
+            let bf  = unsafe { std::slice::from_raw_parts(b.as_ptr()   as *const f32, b.len()) };
+            let of_ = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut f32, out.len()) };
+            x86_64::avx512_sub_f32(af, bf, of_);
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
         if std::mem::size_of::<T>() == 8 {
             let af  = unsafe { std::slice::from_raw_parts(a.as_ptr()   as *const f64, a.len()) };
@@ -258,6 +337,21 @@ pub fn simd_sub<T: Scalar>(a: &[T], b: &[T], out: &mut [T]) {
 /// SIMD-accelerated in-place scale `y[i] *= alpha`.
 #[inline]
 pub fn simd_scale<T: Scalar>(alpha: T, y: &mut [T]) {
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let a = unsafe { *(&alpha as *const T as *const f64) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
+            x86_64::avx512_scale_f64(a, yf);
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let a = unsafe { *(&alpha as *const T as *const f32) };
+            let yf = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
+            x86_64::avx512_scale_f32(a, yf);
+            return;
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
         if std::mem::size_of::<T>() == 8 {
@@ -301,6 +395,25 @@ pub fn simd_gemv<T: Scalar>(alpha: T, a: &[T], nrows: usize, ncols: usize, x: &[
     debug_assert_eq!(a.len(), nrows * ncols, "simd_gemv: a length mismatch");
     debug_assert_eq!(x.len(), ncols, "simd_gemv: x length mismatch");
     debug_assert_eq!(y.len(), nrows, "simd_gemv: y length mismatch");
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let a_f = unsafe { std::slice::from_raw_parts(a.as_ptr() as *const f64, a.len()) };
+            let x_f = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f64, x.len()) };
+            let y_f = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f64, y.len()) };
+            let al  = unsafe { *(&alpha as *const T as *const f64) };
+            x86_64::avx512_gemv_f64(al, a_f, nrows, ncols, x_f, y_f);
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let a_f = unsafe { std::slice::from_raw_parts(a.as_ptr() as *const f32, a.len()) };
+            let x_f = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const f32, x.len()) };
+            let y_f = unsafe { std::slice::from_raw_parts_mut(y.as_mut_ptr() as *mut f32, y.len()) };
+            let al  = unsafe { *(&alpha as *const T as *const f32) };
+            x86_64::avx512_gemv_f32(al, a_f, nrows, ncols, x_f, y_f);
+            return;
+        }
+    }
 
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
@@ -347,6 +460,23 @@ pub fn simd_gemv_t<T: Scalar>(alpha: T, a: &[T], nrows: usize, ncols: usize, x: 
 pub fn simd_hadamard<T: Scalar>(a: &[T], b: &[T], out: &mut [T]) {
     debug_assert_eq!(a.len(), b.len(), "hadamard: length mismatch a/b");
     debug_assert_eq!(a.len(), out.len(), "hadamard: length mismatch a/out");
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        if std::mem::size_of::<T>() == 8 {
+            let af  = unsafe { std::slice::from_raw_parts(a.as_ptr()   as *const f64, a.len()) };
+            let bf  = unsafe { std::slice::from_raw_parts(b.as_ptr()   as *const f64, b.len()) };
+            let of_ = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut f64, out.len()) };
+            x86_64::avx512_hadamard_f64(af, bf, of_);
+            return;
+        } else if std::mem::size_of::<T>() == 4 {
+            let af  = unsafe { std::slice::from_raw_parts(a.as_ptr()   as *const f32, a.len()) };
+            let bf  = unsafe { std::slice::from_raw_parts(b.as_ptr()   as *const f32, b.len()) };
+            let of_ = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut f32, out.len()) };
+            x86_64::avx512_hadamard_f32(af, bf, of_);
+            return;
+        }
+    }
 
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
@@ -431,6 +561,164 @@ pub mod x86_64 {
         let upper = _mm256_extractf128_ps(v, 1);
         let lower = _mm256_castps256_ps128(v);
         _mm_cvtss_f32(_mm_add_ps(lower, upper))
+    }
+
+    // ── AVX-512 helpers ──────────────────────────────────────────────────────
+
+    #[inline]
+    unsafe fn hsum_pd_512(v: __m512d) -> f64 {
+        // Add upper and lower 256-bit halves, then 256-bit hsum
+        let hi = _mm512_extractf64x4_pd(v, 1);
+        let lo = _mm512_castpd512_pd256(v);
+        hsum_pd(_mm256_add_pd(lo, hi))
+    }
+
+    #[inline]
+    unsafe fn hsum_ps_512(v: __m512) -> f32 {
+        // Convert to pd, extract 256-bit halves, add, convert back, hsum
+        // This only uses AVX-512F (no DQ required for f32x8)
+        let vpd = _mm512_castps_pd(v);
+        let hi = _mm512_extractf64x4_pd(vpd, 1);
+        let lo = _mm512_castpd512_pd256(vpd);
+        let sum256 = _mm256_add_pd(lo, hi);
+        hsum_ps(_mm256_castpd_ps(sum256))
+    }
+
+    pub fn avx512_axpy_f64(alpha: f64, x: &[f64], y: &mut [f64]) {
+        let alpha_vec = unsafe { _mm512_set1_pd(alpha) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            _mm512_storeu_pd(y.as_mut_ptr().add(i), _mm512_fmadd_pd(alpha_vec, _mm512_loadu_pd(x.as_ptr().add(i)), _mm512_loadu_pd(y.as_ptr().add(i))));
+            i += 8;
+        }}
+        while i < len { y[i] += alpha * x[i]; i += 1; }
+    }
+    pub fn avx512_axpy_f32(alpha: f32, x: &[f32], y: &mut [f32]) {
+        let alpha_vec = unsafe { _mm512_set1_ps(alpha) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            _mm512_storeu_ps(y.as_mut_ptr().add(i), _mm512_fmadd_ps(alpha_vec, _mm512_loadu_ps(x.as_ptr().add(i)), _mm512_loadu_ps(y.as_ptr().add(i))));
+            i += 16;
+        }}
+        while i < len { y[i] += alpha * x[i]; i += 1; }
+    }
+    pub fn avx512_axpby_f64(alpha: f64, x: &[f64], beta: f64, y: &mut [f64]) {
+        let (av, bv) = unsafe { (_mm512_set1_pd(alpha), _mm512_set1_pd(beta)) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            let xv = _mm512_loadu_pd(x.as_ptr().add(i));
+            _mm512_storeu_pd(y.as_mut_ptr().add(i), _mm512_fmadd_pd(av, xv, _mm512_mul_pd(bv, _mm512_loadu_pd(y.as_ptr().add(i)))));
+            i += 8;
+        }}
+        while i < len { y[i] = alpha * x[i] + beta * y[i]; i += 1; }
+    }
+    pub fn avx512_axpby_f32(alpha: f32, x: &[f32], beta: f32, y: &mut [f32]) {
+        let (av, bv) = unsafe { (_mm512_set1_ps(alpha), _mm512_set1_ps(beta)) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            let xv = _mm512_loadu_ps(x.as_ptr().add(i));
+            _mm512_storeu_ps(y.as_mut_ptr().add(i), _mm512_fmadd_ps(av, xv, _mm512_mul_ps(bv, _mm512_loadu_ps(y.as_ptr().add(i)))));
+            i += 16;
+        }}
+        while i < len { y[i] = alpha * x[i] + beta * y[i]; i += 1; }
+    }
+    pub fn avx512_dot_f64(x: &[f64], y: &[f64]) -> f64 {
+        let mut sums = unsafe { _mm512_setzero_pd() };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            sums = _mm512_fmadd_pd(_mm512_loadu_pd(x.as_ptr().add(i)), _mm512_loadu_pd(y.as_ptr().add(i)), sums);
+            i += 8;
+        }}
+        let mut s = unsafe { hsum_pd_512(sums) };
+        while i < len { s += x[i] * y[i]; i += 1; } s
+    }
+    pub fn avx512_dot_f32(x: &[f32], y: &[f32]) -> f32 {
+        let mut sums = unsafe { _mm512_setzero_ps() };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            sums = _mm512_fmadd_ps(_mm512_loadu_ps(x.as_ptr().add(i)), _mm512_loadu_ps(y.as_ptr().add(i)), sums);
+            i += 16;
+        }}
+        let mut s = unsafe { hsum_ps_512(sums) };
+        while i < len { s += x[i] * y[i]; i += 1; } s
+    }
+    pub fn avx512_norm2_f64(x: &[f64]) -> f64 {
+        let mut sums = unsafe { _mm512_setzero_pd() };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            let xv = _mm512_loadu_pd(x.as_ptr().add(i));
+            sums = _mm512_fmadd_pd(xv, xv, sums);
+            i += 8;
+        }}
+        let mut s = unsafe { hsum_pd_512(sums) };
+        while i < len { s += x[i] * x[i]; i += 1; } s.sqrt()
+    }
+    pub fn avx512_norm2_f32(x: &[f32]) -> f32 {
+        let mut sums = unsafe { _mm512_setzero_ps() };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            let xv = _mm512_loadu_ps(x.as_ptr().add(i));
+            sums = _mm512_fmadd_ps(xv, xv, sums);
+            i += 16;
+        }}
+        let mut s = unsafe { hsum_ps_512(sums) };
+        while i < len { s += x[i] * x[i]; i += 1; } s.sqrt()
+    }
+    pub fn avx512_sub_f64(x: &[f64], y: &[f64], z: &mut [f64]) {
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            _mm512_storeu_pd(z.as_mut_ptr().add(i), _mm512_sub_pd(_mm512_loadu_pd(x.as_ptr().add(i)), _mm512_loadu_pd(y.as_ptr().add(i))));
+            i += 8;
+        }}
+        while i < len { z[i] = x[i] - y[i]; i += 1; }
+    }
+    pub fn avx512_sub_f32(x: &[f32], y: &[f32], z: &mut [f32]) {
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            _mm512_storeu_ps(z.as_mut_ptr().add(i), _mm512_sub_ps(_mm512_loadu_ps(x.as_ptr().add(i)), _mm512_loadu_ps(y.as_ptr().add(i))));
+            i += 16;
+        }}
+        while i < len { z[i] = x[i] - y[i]; i += 1; }
+    }
+    pub fn avx512_scale_f64(alpha: f64, x: &mut [f64]) {
+        let av = unsafe { _mm512_set1_pd(alpha) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            _mm512_storeu_pd(x.as_mut_ptr().add(i), _mm512_mul_pd(av, _mm512_loadu_pd(x.as_ptr().add(i))));
+            i += 8;
+        }}
+        while i < len { x[i] *= alpha; i += 1; }
+    }
+    pub fn avx512_scale_f32(alpha: f32, x: &mut [f32]) {
+        let av = unsafe { _mm512_set1_ps(alpha) };
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            _mm512_storeu_ps(x.as_mut_ptr().add(i), _mm512_mul_ps(av, _mm512_loadu_ps(x.as_ptr().add(i))));
+            i += 16;
+        }}
+        while i < len { x[i] *= alpha; i += 1; }
+    }
+    pub fn avx512_gemv_f64(alpha: f64, a: &[f64], nrows: usize, ncols: usize, x: &[f64], y: &mut [f64]) {
+        for i in 0..nrows { y[i] += alpha * crate::simd::simd_dot(&a[i * ncols..(i + 1) * ncols], x); }
+    }
+    pub fn avx512_gemv_f32(alpha: f32, a: &[f32], nrows: usize, ncols: usize, x: &[f32], y: &mut [f32]) {
+        for i in 0..nrows { y[i] += alpha * crate::simd::simd_dot(&a[i * ncols..(i + 1) * ncols], x); }
+    }
+    pub fn avx512_hadamard_f64(x: &[f64], y: &[f64], z: &mut [f64]) {
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 8 <= len {
+            _mm512_storeu_pd(z.as_mut_ptr().add(i), _mm512_mul_pd(_mm512_loadu_pd(x.as_ptr().add(i)), _mm512_loadu_pd(y.as_ptr().add(i))));
+            i += 8;
+        }}
+        while i < len { z[i] = x[i] * y[i]; i += 1; }
+    }
+    pub fn avx512_hadamard_f32(x: &[f32], y: &[f32], z: &mut [f32]) {
+        let len = x.len(); let mut i = 0;
+        unsafe { while i + 16 <= len {
+            _mm512_storeu_ps(z.as_mut_ptr().add(i), _mm512_mul_ps(_mm512_loadu_ps(x.as_ptr().add(i)), _mm512_loadu_ps(y.as_ptr().add(i))));
+            i += 16;
+        }}
+        while i < len { z[i] = x[i] * y[i]; i += 1; }
     }
 
     /// y ← α·x + y  (f64, 4-lane AVX2)
