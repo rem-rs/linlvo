@@ -40,7 +40,7 @@ pub enum OrderingMethod {
 ///
 /// `perm[i] = j` means row/column `j` of the original becomes row/column `i`
 /// in the permuted matrix (i.e. `perm` maps *new* index → *old* index).
-pub fn permute_symmetric<T: crate::core::scalar::Scalar>(
+pub fn permute_symmetric<T: crate::core::scalar::ComplexScalar>(
     a: &crate::sparse::CsrMatrix<T>,
     perm: &[usize],
 ) -> crate::sparse::CsrMatrix<T> {

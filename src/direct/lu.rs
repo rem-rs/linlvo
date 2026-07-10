@@ -112,7 +112,7 @@ impl<T: ComplexScalar> SparseLu<T> {
 
 // ─── DirectSolver impl ───────────────────────────────────────────────────────
 
-impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
+impl<T: ComplexScalar> DirectSolver<T> for SparseLu<T> {
     fn analyze(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError> {
         let n = a.nrows();
         if n != a.ncols() {
@@ -185,7 +185,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             }
 
             let u_jj = get_entry(&rows[j], j).unwrap_or(T::zero());
-            let eps_pivot = T::machine_epsilon() * T::from_f64(1e6);
+            let eps_pivot = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
             if u_jj.abs() < eps_pivot {
                 return Err(SolverError::NumericalBreakdown {
                     detail: format!(
@@ -402,7 +402,7 @@ fn sparse_axpy<T: ComplexScalar>(
 
 /// Find pivot row: row with max |entry at col j| among rows[j..n].
 /// Respects threshold pivoting: if diagonal is large enough, prefer it.
-fn find_pivot_sparse<T: Scalar>(
+fn find_pivot_sparse<T: ComplexScalar>(
     rows: &[Vec<(usize, T)>],
     n: usize,
     j: usize,
@@ -416,7 +416,7 @@ fn find_pivot_sparse<T: Scalar>(
     }
     if threshold < 1.0 - 1e-12 {
         let diag_v = get_entry(&rows[j], j).unwrap_or(T::zero()).abs();
-        let thresh = T::from_f64(threshold) * best_v;
+        let thresh = <T::Real as Scalar>::from_f64(threshold) * best_v;
         if diag_v >= thresh { return j; }
     }
     best
@@ -450,4 +450,45 @@ fn coo_to_csr<T: ComplexScalar>(
     }
 
     (row_ptr, col_idx, values, diag_pos)
+}
+
+#[cfg(test)]
+mod complex_tests {
+    use super::*;
+    use crate::sparse::{CooMatrix, CsrMatrix};
+    use num_complex::Complex;
+
+    #[test]
+    fn sparse_lu_complex_solve() {
+        // 3×3 complex matrix: A = [[2+i, 1, 0], [1, 3+2i, 1], [0, 1, 4-i]]
+        let mut coo = CooMatrix::<Complex<f64>>::new_complex(3, 3);
+        coo.push_complex(0, 0, Complex::new(2.0, 1.0));
+        coo.push_complex(0, 1, Complex::new(1.0, 0.0));
+        coo.push_complex(1, 0, Complex::new(1.0, 0.0));
+        coo.push_complex(1, 1, Complex::new(3.0, 2.0));
+        coo.push_complex(1, 2, Complex::new(1.0, 0.0));
+        coo.push_complex(2, 1, Complex::new(1.0, 0.0));
+        coo.push_complex(2, 2, Complex::new(4.0, -1.0));
+        let a = CsrMatrix::from_coo(&coo);
+
+        // RHS: b = [3+i, 5+2i, 4-i]
+        let b = DenseVec::from_vec(vec![
+            Complex::new(3.0, 1.0),
+            Complex::new(5.0, 2.0),
+            Complex::new(4.0, -1.0),
+        ]);
+        let mut x = DenseVec::zeros(3);
+
+        let mut solver = SparseLu::<Complex<f64>>::default();
+        solver.factor(&a).expect("factor failed");
+        solver.solve(&b, &mut x).expect("solve failed");
+
+        // Verify: A·x ≈ b
+        let mut ax = DenseVec::zeros(3);
+        a.apply(&x, &mut ax);
+        for i in 0..3 {
+            let diff = (ax[i] - b[i]).abs();
+            assert!(diff < 1e-10, "residual too large at {i}: {diff}");
+        }
+    }
 }

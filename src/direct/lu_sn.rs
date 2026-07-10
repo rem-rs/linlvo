@@ -175,7 +175,7 @@ impl<T: ComplexScalar> SupernodalSparseLu<T> {
 
 // ─── DirectSolver impl ───────────────────────────────────────────────────────
 
-impl<T: Scalar> DirectSolver<T> for SupernodalSparseLu<T> {
+impl<T: ComplexScalar> DirectSolver<T> for SupernodalSparseLu<T> {
     fn analyze(&mut self, a: &CsrMatrix<T>) -> Result<(), SolverError> {
         let n = a.nrows();
         if n != a.ncols() {
@@ -259,7 +259,7 @@ impl<T: Scalar> DirectSolver<T> for SupernodalSparseLu<T> {
                 }
 
                 let u_jj = mat[pivot_row * n + (col + j)];
-                let eps_pivot = T::machine_epsilon() * T::from_f64(1e6);
+                let eps_pivot = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
                 if u_jj.abs() < eps_pivot {
                     return Err(SolverError::SingularMatrix { row: pivot_row });
                 }
@@ -394,7 +394,7 @@ impl<T: Scalar> DirectSolver<T> for SupernodalSparseLu<T> {
 /// Find the best pivot row for column `col_j` starting from `start_row`.
 ///
 /// Returns `start_row` if the diagonal element meets the threshold.
-fn find_pivot_sn<T: Scalar>(
+fn find_pivot_sn<T: ComplexScalar>(
     mat: &[T],
     n: usize,
     start_row: usize,
@@ -409,7 +409,7 @@ fn find_pivot_sn<T: Scalar>(
     }
     // Stability threshold: stay on diagonal unless off-diagonal is much better.
     if threshold < 1.0 - 1e-12 {
-        let thresh = T::from_f64(threshold) * best_v;
+        let thresh = <T::Real as Scalar>::from_f64(threshold) * best_v;
         if mat[start_row * n + col_j].abs() >= thresh { return start_row; }
     }
     best

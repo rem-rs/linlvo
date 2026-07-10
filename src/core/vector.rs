@@ -1,6 +1,5 @@
 use super::scalar::{ComplexScalar, Scalar};
-use num_complex::Complex;
-use num_traits::Zero;
+use num_traits::{Float, Zero};
 
 /// Abstract dense-vector interface required by all Krylov solvers.
 ///
@@ -11,7 +10,7 @@ use num_traits::Zero;
 ///
 /// The default concrete type is [`DenseVec<T>`].
 pub trait Vector: Clone + Send + Sync {
-    /// Element type — a real or complex scalar.
+    /// Element type - a real or complex scalar.
     type Scalar: ComplexScalar;
 
     /// Number of elements.
@@ -60,7 +59,7 @@ pub trait Vector: Clone + Send + Sync {
 
 // ─── DenseVec<T> ─────────────────────────────────────────────────────────────
 
-/// Heap-allocated dense vector — the default [`Vector`] implementation.
+/// Heap-allocated dense vector - the default [`Vector`] implementation.
 ///
 /// Supports both real (`f32`, `f64`) and complex (`Complex<f32>`,
 /// `Complex<f64>`) element types.
@@ -105,7 +104,7 @@ impl<T: ComplexScalar> DenseVec<T> {
         self.0
     }
 
-    /// Element-wise difference `self − other` → new vector.
+    /// Element-wise difference `self − other` -> new vector.
     pub fn sub(&self, other: &Self) -> Self {
         debug_assert_eq!(self.0.len(), other.0.len(), "DenseVec::sub: length mismatch");
         let out_data: Vec<T> = self.0.iter().zip(other.0.iter())
@@ -114,7 +113,7 @@ impl<T: ComplexScalar> DenseVec<T> {
         DenseVec(out_data)
     }
 
-    /// Element-wise product `self ⊙ other` → new vector (Hadamard product).
+    /// Element-wise product `self ⊙ other` -> new vector (Hadamard product).
     pub fn hadamard(&self, other: &Self) -> Self {
         debug_assert_eq!(self.0.len(), other.0.len(), "DenseVec::hadamard: length mismatch");
         let out_data: Vec<T> = self.0.iter().zip(other.0.iter())
@@ -137,7 +136,19 @@ impl<T: ComplexScalar> DenseVec<T> {
     }
 }
 
-impl<T: Scalar> Vector for DenseVec<T> {
+// ─── Unified Vector impl for all ComplexScalar types ─────────────────────────
+//
+// A single generic impl covers both real (f32/f64) and complex
+// (Complex<f32>/Complex<f64>) element types.  The `dot` method computes the
+// Hermitian inner product `Σ conj(selfᵢ)·otherᵢ`; for real scalars `conj` is
+// a no-op, so this reduces to the standard dot product with zero overhead.
+//
+// SIMD acceleration for real types was previously provided via
+// `simd::dense_ops::par_*` functions.  Those are still available for direct
+// call sites that need maximum throughput; the `Vector` trait methods use
+// scalar loops for portability across real and complex types.
+
+impl<T: ComplexScalar> Vector for DenseVec<T> {
     type Scalar = T;
 
     #[inline]
@@ -145,24 +156,37 @@ impl<T: Scalar> Vector for DenseVec<T> {
         self.0.len()
     }
 
+    /// Hermitian inner product: `Σ conj(selfᵢ) · otherᵢ`.
+    ///
+    /// For real scalars `conj` is a no-op, so this is the standard dot product.
     fn dot(&self, other: &Self) -> T {
         debug_assert_eq!(self.0.len(), other.0.len());
-        crate::simd::dense_ops::par_dot(&self.0, &other.0)
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .fold(T::zero(), |acc, (&a, &b)| acc + a.conj() * b)
     }
 
     fn axpy(&mut self, alpha: T, x: &Self) {
         debug_assert_eq!(self.0.len(), x.0.len());
-        crate::simd::dense_ops::par_axpy(alpha, &x.0, &mut self.0);
+        for (y_i, &x_i) in self.0.iter_mut().zip(x.0.iter()) {
+            *y_i += alpha * x_i;
+        }
     }
 
     fn scale(&mut self, alpha: T) {
-        crate::simd::dense_ops::par_scale(alpha, &mut self.0);
+        for v in self.0.iter_mut() {
+            *v *= alpha;
+        }
     }
 
-    /// Returns the Euclidean norm.  For `T: Scalar`, `T::Real = T`, so the
-    /// return type is still `T` — identical to the previous API.
-    fn norm2(&self) -> T {
-        crate::simd::dense_ops::par_norm2(&self.0)
+    /// Euclidean norm `√(Σ |xᵢ|²)` - always returns a real value.
+    fn norm2(&self) -> T::Real {
+        let sq: T::Real = self.0.iter().fold(T::Real::zero(), |s, v| {
+            let a = v.abs();
+            s + a * a
+        });
+        <T::Real as Float>::sqrt(sq)
     }
 
     fn zero_like(&self) -> Self {
@@ -208,72 +232,3 @@ impl<T: ComplexScalar> From<DenseVec<T>> for Vec<T> {
         d.0
     }
 }
-
-// ─── DenseVec<Complex<T>> ────────────────────────────────────────────────────
-
-/// `Vector` implementation for complex dense vectors.
-///
-/// The `Scalar` associated type is `Complex<T>` and `norm2` returns `T`
-/// (the real-valued Euclidean norm).
-impl<T: Scalar> Vector for DenseVec<Complex<T>> {
-    type Scalar = Complex<T>;
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Hermitian inner product: `Σ conj(selfᵢ) · otherᵢ`.
-    fn dot(&self, other: &Self) -> Complex<T> {
-        debug_assert_eq!(self.0.len(), other.0.len());
-        self.0
-            .iter()
-            .zip(other.0.iter())
-            .fold(Complex::new(T::zero(), T::zero()), |acc, (&a, &b)| acc + a.conj() * b)
-    }
-
-    fn axpy(&mut self, alpha: Complex<T>, x: &Self) {
-        debug_assert_eq!(self.0.len(), x.0.len());
-        for (y_i, &x_i) in self.0.iter_mut().zip(x.0.iter()) {
-            *y_i += alpha * x_i;
-        }
-    }
-
-    fn scale(&mut self, alpha: Complex<T>) {
-        for v in self.0.iter_mut() {
-            *v *= alpha;
-        }
-    }
-
-    /// Euclidean norm `√(Σ |zᵢ|²)` — always real-valued.
-    fn norm2(&self) -> T {
-        let sq: T = self.0.iter().map(|v| v.norm_sqr()).fold(T::zero(), |a, b| a + b);
-        sq.sqrt()
-    }
-
-    fn zero_like(&self) -> Self {
-        DenseVec(vec![Complex::new(T::zero(), T::zero()); self.0.len()])
-    }
-
-    fn fill(&mut self, alpha: Complex<T>) {
-        for v in self.0.iter_mut() {
-            *v = alpha;
-        }
-    }
-
-    fn copy_from(&mut self, src: &Self) {
-        assert_eq!(self.0.len(), src.0.len(), "DenseVec::copy_from: length mismatch");
-        self.0.copy_from_slice(&src.0);
-    }
-
-    fn as_slice(&self) -> &[Complex<T>] { &self.0 }
-    fn as_mut_slice(&mut self) -> &mut [Complex<T>] { &mut self.0 }
-}
-
-// ── Accessor methods for Complex<T> vectors ───────────────────────────────────
-//
-// NOTE: Inherent `as_slice`/`as_mut_slice`/`zeros`/`from_vec` are provided by
-// `impl<T: ComplexScalar> DenseVec<T>` above which covers both real and complex
-// element types.  Element-wise access is through the `Vector` trait methods or
-// the `Index`/`IndexMut` impls (also bounded on `ComplexScalar`).
-// The `len()` method is available through `Vector::len()`.
