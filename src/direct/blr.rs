@@ -115,7 +115,7 @@ use crate::core::scalar::Scalar;
 /// The original `m×n` block `A` is approximated as `U * Vᵀ` where
 /// `U` is `m×rank` and `V` is `n×rank` (column-major storage).
 #[derive(Debug, Clone)]
-pub struct BlrBlock<T: Scalar> {
+pub struct BlrBlock<T> {
     pub m: usize,
     pub n: usize,
     pub rank: usize,
