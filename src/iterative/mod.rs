@@ -8,6 +8,7 @@ pub mod idrs;
 pub mod tfqmr;
 pub mod pipecg;
 pub mod multi_rhs;
+pub mod complex_cg;
 pub mod complex_gmres;
 pub mod block_gmres;
 
@@ -20,6 +21,7 @@ pub use lgmres::Lgmres;
 pub use idrs::Idrs;
 pub use tfqmr::Tfqmr;
 pub use pipecg::PipeCg;
+pub use complex_cg::{ComplexCg, ComplexCgResult, ComplexCgWorkspace};
 pub use complex_gmres::{ComplexGmres, ComplexGmresResult, ComplexGmresWorkspace};
 pub use multi_rhs::{MultiRhsGmres, MultiRhsParams, ComplexMultiRhsGmres, multi_rhs_solve};
 pub use block_gmres::{BlockGmres, BlockGmresParams};
