@@ -188,17 +188,16 @@ impl<T: Scalar> DivFreeProjector<T> {
         let mut rhs = DenseVec::zeros(n_nodes);
         self.g_t.spmv(t.as_slice(), rhs.as_mut_slice());
 
-        // 3. Solve (GᵀMG) z = rhs  via PCG-AMG (≈5-10 inner iterations)
+        // 3. Solve (GᵀMG) z = rhs  via PCG-AMG (tight tolerance for accuracy)
         let mut z = DenseVec::zeros(n_nodes);
         let cg_params = SolverParams {
-            max_iter: 20,
-            rtol: 1e-4,
+            max_iter: 100,
+            rtol: 1e-8,
             ..SolverParams::default()
         };
         // Apply PCG-AMG; if it fails, fall back to one AMG V-cycle.
         let cg = ConjugateGradient::<T>::default();
         if cg.solve(&self.g_t_m_g, Some(&self.node_precond), &rhs, &mut z, &cg_params).is_err() {
-            // Fallback: single V-cycle
             self.node_precond.apply_precond(&rhs, &mut z);
         }
 
@@ -337,10 +336,28 @@ impl<T: Scalar> AmeSolver<T> {
         let mut lambdas: Vec<T> = (0..block).map(|j| {
             let xj = x_cols[j].as_slice();
             let axj = ax_cols[j].as_slice();
-            super::dot(axj, xj) // λ = xᵀAx / xᵀMx  (both ≡ 1 after mass-orthonorm)
+            let mxj = mx_cols[j].as_slice();
+            let num = super::dot(axj, xj);
+            let den = super::dot(mxj, xj);
+            if den > T::zero() { num / den } else { num }
         }).collect();
+        if self.cfg.verbose {
+            let rq_debug: Vec<f64> = lambdas.iter().map(|&v| num_traits::ToPrimitive::to_f64(&v).unwrap_or(f64::NAN)).collect();
+            eprintln!("  [AME] initial RQs (first 5): {:?}", &rq_debug[..5.min(rq_debug.len())]);
+            // Check mass-norms
+            let mut norms = Vec::new();
+            for j in 0..block.min(5) {
+                let nrm = mass_norm2(&x_cols[j], m);
+                norms.push(num_traits::ToPrimitive::to_f64(&nrm).unwrap_or(f64::NAN));
+            }
+            eprintln!("  [AME] mass-norms (first 5): {:?}", norms);
+        }
         // Small dense Rayleigh–Ritz to get better initial guess
         rr_update(&mut x_cols, &mut ax_cols, &mut mx_cols, &mut lambdas, m, a, block);
+        if self.cfg.verbose {
+            let rr_debug: Vec<f64> = lambdas.iter().map(|&v| num_traits::ToPrimitive::to_f64(&v).unwrap_or(f64::NAN)).collect();
+            eprintln!("  [AME] after RR (first 5): {:?}", &rr_debug[..5.min(rr_debug.len())]);
+        }
 
         // P columns (previous search directions): start None
         let mut p_cols: Vec<Option<DenseVec<T>>> = vec![None; block];
@@ -396,9 +413,18 @@ impl<T: Scalar> AmeSolver<T> {
                     continue;
                 }
 
-                // Apply AMS preconditioner: W[:,j] ≈ A⁻¹·R[:,j]
+                // Inner PCG-AMS: solve A·W[:,j] ≈ R[:,j] to a relaxed tolerance.
+                // A single AMS apply degenerates to ωD⁻¹ on the div-free complement,
+                // so we run a few PCG iterations with AMS as the preconditioner.
+                // This matches how HYPRE AME uses AMS (inner PCG mode).
                 let mut w = DenseVec::zeros(n);
-                ams.apply_precond(&r_cols[j], &mut w);
+                let inner_params = SolverParams {
+                    max_iter: 30,
+                    rtol: 1e-6,
+                    ..SolverParams::default()
+                };
+                let cg = ConjugateGradient::<T>::default();
+                let _ = cg.solve(a, Some(&ams), &r_cols[j], &mut w, &inner_params);
 
                 // Apply div-free projection: W[:,j] = P·W[:,j]
                 let mut w_proj = DenseVec::zeros(n);
