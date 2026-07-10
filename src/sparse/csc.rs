@@ -1,5 +1,5 @@
 #![allow(clippy::needless_range_loop)]
-use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};
+use crate::core::{operator::LinearOperator, scalar::{ComplexScalar, Scalar}, vector::DenseVec};
 use crate::sparse::csr::CsrMatrix;
 
 /// Compressed Sparse Column (CSC) matrix.
@@ -17,7 +17,7 @@ pub struct CscMatrix<T> {
     values:  Vec<T>,     // length nnz
 }
 
-impl<T: Scalar> CscMatrix<T> {
+impl<T: ComplexScalar> CscMatrix<T> {
     // ─── Constructors ────────────────────────────────────────────────────────
 
     /// Construct from raw CSC arrays.

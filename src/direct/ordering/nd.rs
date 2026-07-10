@@ -37,7 +37,7 @@
 //! Positive Definite Systems.*  Prentice-Hall.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 use std::collections::VecDeque;
 
@@ -76,7 +76,7 @@ const BALANCE_SLACK: f64 = 0.25;
 /// let perm = nd(&csr);
 /// assert_eq!(perm.len(), 4);
 /// ```
-pub fn nd<T: Scalar>(a: &CsrMatrix<T>) -> Vec<usize> {
+pub fn nd<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<usize> {
     let n = a.nrows();
     if n == 0 { return vec![]; }
 
@@ -532,7 +532,7 @@ fn amd_small(local_adj: &[Vec<usize>]) -> Vec<usize> {
 
 // ─── Graph utilities ─────────────────────────────────────────────────────────
 
-pub(super) fn build_symmetric_adj<T: Scalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
+pub(super) fn build_symmetric_adj<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
     let n = a.nrows();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {

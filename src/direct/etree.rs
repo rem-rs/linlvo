@@ -26,7 +26,7 @@
 //! SIAM J. Sci. Comput., 15(5), 1075-1091.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Compute the elimination tree of a symmetric (or structurally symmetric)
@@ -38,7 +38,7 @@ use crate::sparse::CsrMatrix;
 /// Only the upper-triangular part (row i, col j with j > i) is used.
 /// This is equivalent to the e-tree of `Aᵀ A` for unsymmetric matrices,
 /// and to the Cholesky e-tree for SPD matrices.
-pub fn elimination_tree<T: Scalar>(a: &CsrMatrix<T>) -> Vec<usize> {
+pub fn elimination_tree<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<usize> {
     let n = a.nrows();
     let mut parent = vec![n; n];     // n = no parent (root sentinel)
     let mut ancestor = vec![n; n];   // path-compression ancestor
@@ -114,7 +114,7 @@ pub fn post_order(parent: &[usize]) -> Vec<usize> {
 /// links, marking visited nodes and incrementing their count, until a
 /// previously-marked node is encountered (which means the rest of the path
 /// was already counted for this row).
-pub fn col_counts<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> Vec<usize> {
+pub fn col_counts<T: ComplexScalar>(a: &CsrMatrix<T>, parent: &[usize]) -> Vec<usize> {
     let n = a.nrows();
     let mut count = vec![1usize; n]; // diagonal always non-zero
     let mut mark = vec![n; n]; // mark[j] = i means j already visited for row i

@@ -19,7 +19,7 @@
 //! symmetric matrices.*  Proceedings of the ACM National Conference.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 use std::collections::VecDeque;
 
@@ -46,7 +46,7 @@ use std::collections::VecDeque;
 /// let perm = rcm(&csr);
 /// assert_eq!(perm.len(), 4);
 /// ```
-pub fn rcm<T: Scalar>(a: &CsrMatrix<T>) -> Vec<usize> {
+pub fn rcm<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<usize> {
     let n = a.nrows();
     if n == 0 { return vec![]; }
 
@@ -144,7 +144,7 @@ fn find_start_in_component(
 }
 
 /// Build symmetric adjacency lists from `A` (union of row and column patterns).
-fn build_symmetric_adj<T: Scalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
+fn build_symmetric_adj<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
     let n = a.nrows();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
 

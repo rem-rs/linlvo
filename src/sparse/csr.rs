@@ -1,5 +1,5 @@
 #![allow(clippy::needless_range_loop)]
-use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};
+use crate::core::{operator::LinearOperator, scalar::{ComplexScalar, Scalar}, vector::DenseVec};
 use crate::sparse::{coo::CooMatrix, csc::CscMatrix};
 
 /// Compressed Sparse Row (CSR) matrix.
@@ -31,7 +31,7 @@ pub struct CsrMatrix<T> {
     values:  Vec<T>,     // length nnz
 }
 
-impl<T: Scalar> CsrMatrix<T> {
+impl<T: ComplexScalar> CsrMatrix<T> {
     // ─── Constructors ────────────────────────────────────────────────────────
 
     /// Build a CSR matrix from COO format.
@@ -389,7 +389,7 @@ impl<T: Scalar> CsrMatrix<T> {
 }
 
 #[inline(always)]
-unsafe fn csr_row_dot_unchecked<T: Scalar>(
+unsafe fn csr_row_dot_unchecked<T: ComplexScalar>(
     col_idx: &[usize],
     values: &[T],
     x: &[T],
@@ -556,10 +556,4 @@ impl<T: Scalar> CsrMatrix<num_complex::Complex<T>> {
         Self { nrows, ncols, row_ptr, col_idx, values }
     }
 
-    /// Number of rows.
-    pub fn nrows(&self) -> usize { self.nrows }
-    /// Number of columns.
-    pub fn ncols(&self) -> usize { self.ncols }
-    /// Number of non-zero entries.
-    pub fn nnz(&self) -> usize { self.values.len() }
 }

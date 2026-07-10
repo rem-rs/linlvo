@@ -3,7 +3,7 @@
 //! AVX2 provides 256-bit vectors (4 × f64 or 8 × f32 lanes).
 //! This is widely available on modern x86_64 CPUs (post-2013).
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 
 /// Efficient horizontal sum for 256-bit f64 vector (4 lanes).
 /// 
@@ -53,7 +53,7 @@ unsafe fn hsum_f32(v: std::arch::x86_64::__m256) -> f32 {
 }
 
 /// AVX2-accelerated sparse row dot product (dispatch based on type).
-pub unsafe fn avx2_row_dot<T: Scalar>(
+pub unsafe fn avx2_row_dot<T: ComplexScalar>(
     col_idx: &[usize],
     values: &[T],
     x: &[T],

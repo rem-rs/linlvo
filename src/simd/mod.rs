@@ -6,7 +6,7 @@
 //! CPU feature detection is performed at runtime via `std::is_x86_feature_detected!`.
 //! For targets without SIMD support, scalar implementations are used.
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
@@ -31,7 +31,7 @@ pub use smoother::{jacobi_smooth_simd, gs_smooth_simd, chebyshev_smooth_simd,
 /// # Safety
 /// - All indices in `col_idx[start..end]` must be < `x.len()`
 /// - Indices `start` and `end` must be valid for both `values` and `col_idx`
-pub unsafe fn simd_row_dot<T: Scalar>(
+pub unsafe fn simd_row_dot<T: ComplexScalar>(
     col_idx: &[usize],
     values: &[T],
     x: &[T],
@@ -68,7 +68,7 @@ pub unsafe fn simd_row_dot<T: Scalar>(
 
 /// Scalar fallback implementation for sparse row dot product.
 #[inline]
-unsafe fn scalar_row_dot<T: Scalar>(
+unsafe fn scalar_row_dot<T: ComplexScalar>(
     col_idx: &[usize],
     values: &[T],
     x: &[T],

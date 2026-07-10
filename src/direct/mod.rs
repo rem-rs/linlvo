@@ -61,7 +61,7 @@ pub use blr::{BlrBlock, BlrMatrix, compress_block, compress_block_adaptive};
 pub use triangular::{forward_solve, backward_solve};
 pub use symbolic::{SymbolicCholesky, SymbolicLu, symbolic_cholesky, symbolic_lu};
 
-use crate::core::{error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec};
+use crate::core::{error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec};
 use crate::sparse::CsrMatrix;
 
 // ─── Core trait ──────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ use crate::sparse::CsrMatrix;
 /// // same factors — solve for another RHS cheaply
 /// solver.solve(&b2, &mut x2)?;
 /// ```
-pub trait DirectSolver<T: Scalar>: Send + Sync {
+pub trait DirectSolver<T: ComplexScalar>: Send + Sync {
     /// Structural analysis: reordering + symbolic factorisation.
     ///
     /// Must be called once before `factorize`.  Can be skipped on subsequent

@@ -25,7 +25,7 @@
 //! SIAM J. Sci. Comput., 15(5), 1075-1091.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Pre-computed symbolic Cholesky factorisation result.
@@ -161,7 +161,7 @@ pub struct SymbolicLu {
 /// For the numeric phase with partial pivoting, the actual patterns may be
 /// slightly different; in practice the symbolic bound is tight for
 /// well-ordered matrices.
-pub fn symbolic_lu<T: Scalar>(a: &CsrMatrix<T>, parent: &[usize]) -> SymbolicLu {
+pub fn symbolic_lu<T: ComplexScalar>(a: &CsrMatrix<T>, parent: &[usize]) -> SymbolicLu {
     let n = a.nrows();
 
     // Build column-access: col_ptr[j] → list of row indices in column j of A.

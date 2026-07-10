@@ -48,7 +48,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{error::SolverError, scalar::{ComplexScalar, Scalar}, vector::{DenseVec, Vector}};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
@@ -80,7 +80,7 @@ pub struct SNode {
 /// println!("supernodes: {}", solver.snode_count());
 /// println!("avg width:  {:.1}", n as f64 / solver.snode_count() as f64);
 /// ```
-pub struct SupernodalSparseLu<T: Scalar> {
+pub struct SupernodalSparseLu<T: ComplexScalar> {
     options: DirectOptions,
     /// Maximum columns per supernode.  Larger → bigger GEMM tiles but wider
     /// dense pivot blocks.  Default: 8.
@@ -111,11 +111,11 @@ pub struct SupernodalSparseLu<T: Scalar> {
     symbolic_n: Option<usize>,
 }
 
-impl<T: Scalar> Default for SupernodalSparseLu<T> {
+impl<T: ComplexScalar> Default for SupernodalSparseLu<T> {
     fn default() -> Self { Self::new(DirectOptions::default(), 8) }
 }
 
-impl<T: Scalar> SupernodalSparseLu<T> {
+impl<T: ComplexScalar> SupernodalSparseLu<T> {
     /// Create with explicit options and supernode target width.
     pub fn new(options: DirectOptions, sn_target: usize) -> Self {
         Self {
@@ -259,7 +259,8 @@ impl<T: Scalar> DirectSolver<T> for SupernodalSparseLu<T> {
                 }
 
                 let u_jj = mat[pivot_row * n + (col + j)];
-                if u_jj.abs() < T::machine_epsilon() * T::from_f64(1e6) {
+                let eps_pivot = T::machine_epsilon() * T::from_f64(1e6);
+                if u_jj.abs() < eps_pivot {
                     return Err(SolverError::SingularMatrix { row: pivot_row });
                 }
 
@@ -414,7 +415,7 @@ fn find_pivot_sn<T: Scalar>(
     best
 }
 
-fn coo_to_csr_sn<T: Scalar>(
+fn coo_to_csr_sn<T: ComplexScalar>(
     n: usize,
     coo: &[(usize, usize, T)],
     lower: bool,

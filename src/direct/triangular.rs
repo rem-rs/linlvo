@@ -4,7 +4,7 @@
 //! diagonal-position index and an optional row/column permutation.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::{error::SolverError, scalar::Scalar, vector::DenseVec};
+use crate::core::{error::SolverError, scalar::ComplexScalar, vector::DenseVec};
 
 // ─── Forward solve  L x = b ──────────────────────────────────────────────────
 
@@ -91,12 +91,12 @@ pub(crate) fn backward_solve_csr(
 
 // ─── Generic wrappers (public in the direct module) ──────────────────────────
 
-/// Generic CSR forward solve `L x = b` for any `T: Scalar`.
+/// Generic CSR forward solve `L x = b` for any `T: ComplexScalar`.
 ///
 /// `L` is stored as the lower-triangular portion of a CSR matrix.
 /// `diag_pos[i]` is the index into `col_idx`/`values` of `L[i,i]`.
 /// `unit_diag = true` treats `L[i,i] = 1` regardless of stored values.
-pub fn forward_solve<T: Scalar>(
+pub fn forward_solve<T: ComplexScalar>(
     row_ptr: &[usize],
     col_idx: &[usize],
     values: &[T],
@@ -121,7 +121,8 @@ pub fn forward_solve<T: Scalar>(
             xs[i] = s;
         } else {
             let d = values[diag_pos[i]];
-            if d.abs() < T::machine_epsilon() * T::from_f64(1e6) {
+            let eps = T::machine_epsilon() * T::Real::from_f64(1e6);
+            if d.abs() < eps {
                 return Err(SolverError::SingularMatrix { row: i });
             }
             xs[i] = s / d;
@@ -134,7 +135,7 @@ pub fn forward_solve<T: Scalar>(
 ///
 /// `U` is the upper-triangular portion of a CSR matrix.
 /// `diag_pos[i]` is the index of `U[i,i]` in `col_idx`/`values`.
-pub fn backward_solve<T: Scalar>(
+pub fn backward_solve<T: ComplexScalar>(
     row_ptr: &[usize],
     col_idx: &[usize],
     values: &[T],
@@ -155,7 +156,8 @@ pub fn backward_solve<T: Scalar>(
             s -= values[k] * xs[j];
         }
         let d = values[diag_pos[i]];
-        if d.abs() < T::machine_epsilon() * T::from_f64(1e6) {
+        let eps = T::machine_epsilon() * T::Real::from_f64(1e6);
+        if d.abs() < eps {
             return Err(SolverError::SingularMatrix { row: i });
         }
         xs[i] = s / d;

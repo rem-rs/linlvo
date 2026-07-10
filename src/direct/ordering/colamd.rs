@@ -26,7 +26,7 @@
 //! degree ordering algorithm.*  SIAM J. Matrix Anal. Appl. 17(4):886-905.
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 use std::collections::BinaryHeap;
 use std::cmp::Reverse;
@@ -52,7 +52,7 @@ use std::cmp::Reverse;
 /// let perm = colamd(&csr);
 /// assert_eq!(perm.len(), 4);
 /// ```
-pub fn colamd<T: Scalar>(a: &CsrMatrix<T>) -> Vec<usize> {
+pub fn colamd<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<usize> {
     let n = a.nrows();
     if n == 0 { return vec![]; }
 
@@ -143,7 +143,7 @@ pub(crate) fn amd_order(n: usize, adj: &[Vec<usize>]) -> Vec<usize> {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn build_symmetric_adj<T: Scalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
+fn build_symmetric_adj<T: ComplexScalar>(a: &CsrMatrix<T>) -> Vec<Vec<usize>> {
     let n = a.nrows();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
 

@@ -17,7 +17,7 @@
 //! For very large fill or dense problems, use [`MultifrontalLu`](super::multifrontal::MultifrontalLu).
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}, operator::LinearOperator};
+use crate::core::{error::SolverError, scalar::{ComplexScalar, Scalar}, vector::{DenseVec, Vector}, operator::LinearOperator};
 use crate::sparse::CsrMatrix;
 use crate::direct::{
     DirectSolver, DirectOptions,
@@ -50,7 +50,7 @@ use crate::direct::{
 /// solver.factor(&a).unwrap();
 /// solver.solve(&b, &mut x).unwrap();
 /// ```
-pub struct SparseLu<T: Scalar> {
+pub struct SparseLu<T: ComplexScalar> {
     options: DirectOptions,
 
     n: usize,
@@ -85,11 +85,11 @@ pub struct SparseLu<T: Scalar> {
     symbolic_n: Option<usize>,
 }
 
-impl<T: Scalar> Default for SparseLu<T> {
+impl<T: ComplexScalar> Default for SparseLu<T> {
     fn default() -> Self { Self::new(DirectOptions::default()) }
 }
 
-impl<T: Scalar> SparseLu<T> {
+impl<T: ComplexScalar> SparseLu<T> {
     pub fn new(options: DirectOptions) -> Self {
         Self {
             options, n: 0,
@@ -185,7 +185,8 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
             }
 
             let u_jj = get_entry(&rows[j], j).unwrap_or(T::zero());
-            if u_jj.abs() < T::machine_epsilon() * T::from_f64(1e6) {
+            let eps_pivot = T::machine_epsilon() * T::from_f64(1e6);
+            if u_jj.abs() < eps_pivot {
                 return Err(SolverError::NumericalBreakdown {
                     detail: format!(
                         "SparseLu: pivot too small at step {} (|u_jj|={:.3e}); matrix may be singular/ill-conditioned, try NodeNd/Colamd ordering, pivot threshold tuning, or iterative fallback",
@@ -207,7 +208,7 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
                 if let Some(mult) = get_entry(&rows[i], j) {
                     let mult = mult / u_jj;
                     set_entry(&mut rows[i], j, mult); // in-place: store L multiplier
-                    sparse_axpy(&mut rows[i], &pivot_upper, -mult, j);
+                    sparse_axpy(&mut rows[i], &pivot_upper, T::zero() - mult, j);
                 }
             }
         }
@@ -360,14 +361,14 @@ impl<T: Scalar> DirectSolver<T> for SparseLu<T> {
 // ─── Sparse row helpers ───────────────────────────────────────────────────────
 
 /// Get the value at column `col` from a sorted sparse row, or None.
-fn get_entry<T: Scalar>(row: &[(usize, T)], col: usize) -> Option<T> {
+fn get_entry<T: ComplexScalar>(row: &[(usize, T)], col: usize) -> Option<T> {
     row.binary_search_by_key(&col, |&(c, _)| c)
         .ok()
         .map(|idx| row[idx].1)
 }
 
 /// Set the value at column `col` in a sorted sparse row (must already exist).
-fn set_entry<T: Scalar>(row: &mut [(usize, T)], col: usize, val: T) {
+fn set_entry<T: ComplexScalar>(row: &mut [(usize, T)], col: usize, val: T) {
     if let Ok(idx) = row.binary_search_by_key(&col, |&(c, _)| c) {
         row[idx].1 = val;
     }
@@ -375,7 +376,7 @@ fn set_entry<T: Scalar>(row: &mut [(usize, T)], col: usize, val: T) {
 
 /// Sparse axpy: row += scale * pivot_upper, only for cols > skip_below.
 /// Merges new entries from pivot_upper into the sorted sparse row.
-fn sparse_axpy<T: Scalar>(
+fn sparse_axpy<T: ComplexScalar>(
     row: &mut Vec<(usize, T)>,
     pivot_upper: &[(usize, T)],
     scale: T,
@@ -421,7 +422,7 @@ fn find_pivot_sparse<T: Scalar>(
     best
 }
 
-fn coo_to_csr<T: Scalar>(
+fn coo_to_csr<T: ComplexScalar>(
     n: usize,
     coo: &[(usize, usize, T)],
     lower: bool,
