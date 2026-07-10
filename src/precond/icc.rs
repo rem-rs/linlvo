@@ -19,9 +19,10 @@
 
 #![allow(clippy::needless_range_loop)]
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
+use num_traits::Zero;
 
 /// ICC(0) preconditioner for symmetric positive-definite matrices.
 pub struct Icc0Precond<T> {
@@ -33,7 +34,7 @@ pub struct Icc0Precond<T> {
     diag_pos: Vec<usize>,
 }
 
-impl<T: Scalar> Icc0Precond<T> {
+impl<T: ComplexScalar> Icc0Precond<T> {
     /// Compute ICC(0) factorisation of `mat`.
     ///
     /// Only the lower-triangular part of `mat` (including diagonal) is used.
@@ -83,7 +84,7 @@ impl<T: Scalar> Icc0Precond<T> {
         //   val[i, k] /= val[k, k]
         // Then:
         //   val[i, i] = sqrt(val[i, i] - sum_{k < i} val[i, k]²)
-        let eps = T::machine_epsilon() * T::from_f64(1e6);
+        let eps = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
 
         for i in 0..n {
             // Process each lower-triangle entry (i, k) with k < i
@@ -127,7 +128,7 @@ impl<T: Scalar> Icc0Precond<T> {
                 let l_ik = val[pos_ik];
                 d -= l_ik * l_ik;
             }
-            if d <= T::zero() {
+            if d.real() <= T::Real::zero() {
                 return Err(SolverError::NumericalBreakdown {
                     detail: format!("ICC(0): non-positive definite pivot at row {i} (d={d:?})"),
                 });
@@ -139,7 +140,7 @@ impl<T: Scalar> Icc0Precond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for Icc0Precond<T> {
+impl<T: ComplexScalar> Preconditioner for Icc0Precond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {

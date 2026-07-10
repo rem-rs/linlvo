@@ -16,9 +16,10 @@
 
 #![allow(clippy::needless_range_loop)]
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
+use num_traits::Zero;
 
 // ─── shared internals ────────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ struct SplitCsr<T> {
     u_values: Vec<T>,
 }
 
-impl<T: Scalar> SplitCsr<T> {
+impl<T: ComplexScalar> SplitCsr<T> {
     fn from_csr(mat: &CsrMatrix<T>) -> Result<Self, SolverError> {
         let n = mat.nrows();
         if mat.ncols() != n {
@@ -46,7 +47,7 @@ impl<T: Scalar> SplitCsr<T> {
             });
         }
 
-        let tol = T::machine_epsilon() * T::from_f64(1e6);
+        let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         let diag_vec = mat.diag();
         for (i, &d) in diag_vec.iter().enumerate() {
             if d.abs() < tol {
@@ -129,11 +130,13 @@ pub struct SorPrecond<T> {
     omega: T,
 }
 
-impl<T: Scalar> SorPrecond<T> {
+impl<T: ComplexScalar> SorPrecond<T> {
     /// Build from a CSR matrix with relaxation parameter ω ∈ (0, 2).
     pub fn from_csr(mat: &CsrMatrix<T>, omega: T) -> Result<Self, SolverError> {
-        let two = T::from_f64(2.0);
-        if omega <= T::zero() || omega >= two {
+        let omega_real = omega.real();
+        let zero = T::Real::zero();
+        let two = <T::Real as Scalar>::from_f64(2.0);
+        if omega_real <= zero || omega_real >= two {
             return Err(SolverError::PrecondSetupFailed {
                 reason: format!("omega must be in (0,2), got {omega:?}"),
             });
@@ -145,7 +148,7 @@ impl<T: Scalar> SorPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for SorPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for SorPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
@@ -166,11 +169,13 @@ pub struct SsorPrecond<T> {
     omega: T,
 }
 
-impl<T: Scalar> SsorPrecond<T> {
+impl<T: ComplexScalar> SsorPrecond<T> {
     /// Build from a CSR matrix with relaxation parameter ω ∈ (0, 2).
     pub fn from_csr(mat: &CsrMatrix<T>, omega: T) -> Result<Self, SolverError> {
-        let two = T::from_f64(2.0);
-        if omega <= T::zero() || omega >= two {
+        let omega_real = omega.real();
+        let zero = T::Real::zero();
+        let two = <T::Real as Scalar>::from_f64(2.0);
+        if omega_real <= zero || omega_real >= two {
             return Err(SolverError::PrecondSetupFailed {
                 reason: format!("omega must be in (0,2), got {omega:?}"),
             });
@@ -182,7 +187,7 @@ impl<T: Scalar> SsorPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for SsorPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for SsorPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
