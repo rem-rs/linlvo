@@ -14,6 +14,8 @@ mumps   = []                         # compatibility flag for native linger mult
 mkl     = []                         # compatibility flag for native linger multifrontal MKL-style entrypoint
 wasm    = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 __native = []                        # internal: gates native-only examples (nalgebra etc.)
+hypre-rs = []                        # external solver interface gate
+petsc-rs = []                        # external solver interface gate
 
 # ── BLAS backend ────────────────────────────────────────────────────────────
 # Enable with one of:
