@@ -106,7 +106,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::{ComplexScalar, Scalar};
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -125,7 +125,9 @@ pub struct BlrBlock<T> {
     pub v: Vec<T>,
 }
 
-impl<T: Scalar> BlrBlock<T> {
+// ─── ComplexScalar impl: methods that only need basic arithmetic ────────────
+
+impl<T: ComplexScalar> BlrBlock<T> {
     /// Construct a `BlrBlock` directly from pre-computed `U` and `V` factors.
     ///
     /// The rank is inferred from the lengths of `u` and `v`:
@@ -184,6 +186,7 @@ impl<T: Scalar> BlrBlock<T> {
             }
         }
     }
+
     /// Apply block to vector (transpose): `y += alpha * V (Uᵀ x)`.
     ///
     /// Computes `y ← y + α Vᵀ (Uᵀ x)` — i.e. applies the transpose `(UVᵀ)ᵀ = V Uᵀ`.
@@ -274,6 +277,42 @@ impl<T: Scalar> BlrBlock<T> {
         }
     }
 
+    /// Scale all elements of the represented matrix in-place: `A ← α · A`.
+    ///
+    /// Implemented by scaling only the `U` columns: `(αU) Vᵀ = α (UVᵀ)`.
+    /// Cost: `O(m · rank)`.
+    pub fn scale(&mut self, alpha: T) {
+        for v in self.u.iter_mut() { *v *= alpha; }
+    }
+
+    /// Returns `(dense_bytes, blr_bytes)` as a pair for memory comparison.
+    ///
+    /// `dense_bytes = m * n * sizeof(T)`.
+    /// `blr_bytes   = (m + n) * rank * sizeof(T)`.
+    pub fn memory_bytes(&self) -> (usize, usize) {
+        let elem = std::mem::size_of::<T>();
+        (self.m * self.n * elem, (self.m + self.n) * self.rank * elem)
+    }
+
+    /// Fraction of memory used relative to the dense equivalent: `(m+n)*r / (m*n)`.
+    ///
+    /// Returns 0.0 for a zero-rank block, 1.0 if no compression is achieved.
+    pub fn compression_ratio(&self) -> f64 {
+        if self.m == 0 || self.n == 0 { return 0.0; }
+        (self.m + self.n) as f64 * self.rank as f64 / (self.m * self.n) as f64
+    }
+
+    /// Check if this block actually achieved compression vs the dense original.
+    pub fn used_blr_check(&self, _orig: &[T], m: usize, n: usize) -> bool {
+        self.rank < usize::MAX
+            && self.rank > 0
+            && self.rank * (m + n) < m * n
+    }
+}
+
+// ─── Scalar impl: methods requiring f64 conversion (recompression, norms) ───
+
+impl<T: Scalar> BlrBlock<T> {
     /// Re-compress this block with a looser (or equal) tolerance `new_tol`.
     ///
     /// Works entirely with the stored `U` and `V` factors — no access to the
@@ -348,31 +387,6 @@ impl<T: Scalar> BlrBlock<T> {
         }
         let norm_sq: f64 = (0..r*r).map(|idx| gu[idx] * gv[idx]).sum();
         norm_sq.sqrt()
-    }
-
-    /// Scale all elements of the represented matrix in-place: `A ← α · A`.
-    ///
-    /// Implemented by scaling only the `U` columns: `(αU) Vᵀ = α (UVᵀ)`.
-    /// Cost: `O(m · rank)`.
-    pub fn scale(&mut self, alpha: T) {
-        for v in self.u.iter_mut() { *v *= alpha; }
-    }
-
-    /// Returns `(dense_bytes, blr_bytes)` as a pair for memory comparison.
-    ///
-    /// `dense_bytes = m * n * sizeof(T)`.
-    /// `blr_bytes   = (m + n) * rank * sizeof(T)`.
-    pub fn memory_bytes(&self) -> (usize, usize) {
-        let elem = std::mem::size_of::<T>();
-        (self.m * self.n * elem, (self.m + self.n) * self.rank * elem)
-    }
-
-    /// Fraction of memory used relative to the dense equivalent: `(m+n)*r / (m*n)`.
-    ///
-    /// Returns 0.0 for a zero-rank block, 1.0 if no compression is achieved.
-    pub fn compression_ratio(&self) -> f64 {
-        if self.m == 0 || self.n == 0 { return 0.0; }
-        (self.m + self.n) as f64 * self.rank as f64 / (self.m * self.n) as f64
     }
 
     /// Add two same-size BLR blocks and re-compress the result.
@@ -460,7 +474,7 @@ impl<T: Scalar> BlrBlock<T> {
 
 // ─── Display ──────────────────────────────────────────────────────────────────
 
-impl<T: Scalar> std::fmt::Display for BlrBlock<T> {
+impl<T: ComplexScalar> std::fmt::Display for BlrBlock<T> {
     /// Compact one-line summary: `BLR [m×n, rank=r, ratio=xx.x%]`.
     ///
     /// The compression ratio is `(m+n)·rank / (m·n)`, shown as a percentage.
@@ -556,6 +570,89 @@ fn qr_svd_recompress_f64<T: Scalar>(
 
 // ─── Truncated SVD via randomised algorithm ───────────────────────────────────
 
+// ─── Complex-to-wide real conversion helpers ────────────────────────────────
+
+/// Convert a dense row-major `&[T]` block to a "wide" f64 matrix for the SVD
+/// pipeline.
+///
+/// For real types (`T::Real == T`), this is a straightforward f64 cast of the
+/// original `m×n` matrix.
+///
+/// For complex types (`T` is `Complex<T::Real>`), the real and imaginary parts
+/// are stacked vertically: `Ã = [Re(A); Im(A)]` (size `(2m) × n`).  The SVD of
+/// `Ã` directly gives the optimal rank-`r` Frobenius-norm approximation of `A`
+/// in `U Vᵀ` format, because `‖Ã‖_F = ‖A‖_F`.
+fn blr_to_f64_wide<T: ComplexScalar>(a: &[T], m: usize, n: usize) -> (Vec<f64>, usize) {
+    // Determine whether T is truly complex by comparing memory footprint.
+    // Complex<T::Real> is twice the size of T::Real.
+    if std::mem::size_of::<T>() == std::mem::size_of::<T::Real>() {
+        // ── Real path: direct f64 cast via real() (which returns self) ───────
+        // T = T::Real : Scalar, so T::Real : Float : NumCast : ToPrimitive .
+        let f: Vec<f64> = a.iter()
+            .map(|&v| <f64 as num_traits::NumCast>::from(v.real()).unwrap_or(0.0))
+            .collect();
+        (f, m)
+    } else {
+        // ── Complex path: stack [Re(A); Im(A)] → (2m)×n ──────────────────────
+        let mut wide = vec![0.0f64; 2 * m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let v = a[i * n + j];
+                wide[i * n + j] = <f64 as num_traits::NumCast>::from(v.real())
+                    .unwrap_or(0.0);
+                wide[(m + i) * n + j] = <f64 as num_traits::NumCast>::from(v.imag())
+                    .unwrap_or(0.0);
+            }
+        }
+        (wide, 2 * m)
+    }
+}
+
+/// Pack the tall f64 SVD result back into `BlrBlock<T>`.
+///
+/// `u_tall` is `eff_m × rank` (col-major f64), `v_real` is `n × rank`
+/// (col-major f64).
+///
+/// For real T: `u_tall` IS the U factor; both U and V are cast directly to T.
+/// For complex T: the top `m` rows of `u_tall` become the real part of U,
+/// the bottom `m` rows become the imaginary part; V stays real-valued
+/// (zero imaginary part).
+fn blr_from_f64_wide<T: ComplexScalar>(
+    u_tall: Vec<f64>,
+    v_real: Vec<f64>,
+    m: usize,
+    n: usize,
+    rank: usize,
+    eff_m: usize,
+) -> (Vec<T>, Vec<T>) {
+    if eff_m == m {
+        // ── Real type: direct cast ────────────────────────────────────────────
+        let u: Vec<T> = u_tall.iter().map(|&x| T::from_f64(x)).collect();
+        let v: Vec<T> = v_real.iter().map(|&x| T::from_f64(x)).collect();
+        (u, v)
+    } else {
+        // ── Complex type: split U_tall into re/im, V as real-valued complex ──
+        let mut u = Vec::with_capacity(m * rank);
+        let mut v = Vec::with_capacity(n * rank);
+        for k in 0..rank {
+            for i in 0..m {
+                let re = u_tall[i + k * eff_m];
+                let im = u_tall[(m + i) + k * eff_m];
+                u.push(T::from_parts(
+                    <<T as ComplexScalar>::Real as Scalar>::from_f64(re),
+                    <<T as ComplexScalar>::Real as Scalar>::from_f64(im),
+                ));
+            }
+        }
+        for k in 0..rank {
+            for j in 0..n {
+                v.push(T::from_real(<<T as ComplexScalar>::Real as Scalar>::from_f64(v_real[j + k * n])));
+            }
+        }
+        (u, v)
+    }
+}
+
 /// Compress the `m×n` row-major dense block `a` with tolerance `tol` (relative).
 ///
 /// Returns a [`BlrBlock`] of rank ≤ `max_rank.min(min(m, n))`.  When the block
@@ -565,7 +662,16 @@ fn qr_svd_recompress_f64<T: Scalar>(
 /// `max_rank = 0` is treated as "no limit" (same as passing `min(m, n)`).
 ///
 /// The pseudo-random seed is deterministic so compression is reproducible.
-pub fn compress_block<T: Scalar>(
+///
+/// ## Complex-valued matrices
+///
+/// For `T = Complex<f64>`, the compression internally stacks the real and
+/// imaginary parts into a `(2m)×n` real matrix, computes the SVD of that tall
+/// matrix, and recovers complex U and V from the result.  This gives the
+/// optimal rank-`r` approximation of the complex matrix in Frobenius norm
+/// under the `U Vᵀ` storage format — correct and practical for use as a
+/// preconditioner.
+pub fn compress_block<T: ComplexScalar>(
     a: &[T],
     m: usize,
     n: usize,
@@ -578,39 +684,19 @@ pub fn compress_block<T: Scalar>(
 
     let natural_max = m.min(n);
     let max_rank = if max_rank == 0 { natural_max } else { max_rank.min(natural_max) };
-    // All arithmetic is performed in f64 regardless of whether T = f32 or f64.
-    // For f32 inputs this means a widening conversion on the way in and a
-    // narrowing conversion on the way out.  This is intentional: the randomised
-    // SVD requires enough precision to distinguish singular values separated by
-    // `tol`, and f32 arithmetic (≈7 digits) is not reliable below tol ≈ 1e-5.
-    let a_f: Vec<f64> = a.iter().map(|&v| {
-        <f64 as num_traits::NumCast>::from(v).unwrap_or(0.0)
-    }).collect();
 
-    // Sketch with (max_rank + oversampling) columns.
-    //
-    // Oversampling p improves accuracy for slowly-decaying spectra (Halko et al.
-    // recommend p = 5..10 for most problems).  We use p = min(10, max_rank) so
-    // the total sketch width scales with the requested rank rather than being
-    // capped at the old hard-coded value of 20.
-    let p_os = 10_usize.min(max_rank);
-    let k_sketch = (max_rank + p_os).min(natural_max);
+    // ── Convert to wide f64 representation (real-stacking for complex) ─────
+    // All arithmetic is performed in f64 regardless of whether T = f32, f64,
+    // or Complex<f64>.  For f32 inputs this means a widening conversion on the
+    // way in and a narrowing conversion on the way out.  This is intentional:
+    // the randomised SVD requires enough precision to distinguish singular
+    // values separated by `tol`, and f32 arithmetic (≈7 digits) is not
+    // reliable below tol ≈ 1e-5.
+    let (a_f, eff_m) = blr_to_f64_wide(a, m, n);
+    let a = &a_f[..]; // shadow with f64 slice for the matmul macros
 
-    // ── Step 1: Gaussian sketch Ω ∈ ℝ^{n × k_sketch} ────────────────────────
-    let mut rng = Lcg64::new((m as u64).wrapping_mul(31337).wrapping_add(n as u64 * 7919));
-    let mut omega = vec![0.0f64; n * k_sketch];
-    for v in omega.iter_mut() { *v = rng.gaussian(); }
-
-    // ── Step 2: Y = A Ω  (m × k_sketch), one power-iteration step ───────────
-    // Compute Y = A (Aᵀ (A Ω)) for better accuracy on slowly-decaying spectra.
-    let a = &a_f[..]; // shadow with f64 slice
-
-    // Each of the three matmuls below is a dense Y ← A·X product where the
-    // output columns are fully independent.  We parallelise over output columns
-    // when the `rayon` feature is enabled and the block is large enough to
-    // amortise threading overhead (heuristic: m·k_sketch > 4096).
+    // Macro: y_out (rows × cols) = A (rows×inner) · x_in (inner × cols)
     macro_rules! matmul_a_x {
-        // y_out (m × k_sketch col-major) = A (m×n) · x_in (n × k_sketch col-major)
         ($y_out:expr, $x_in:expr, $rows:expr, $inner:expr, $cols:expr) => {{
             #[cfg(feature = "rayon")]
             if $rows * $cols > 4096 {
@@ -645,7 +731,6 @@ pub fn compress_block<T: Scalar>(
         }};
     }
     macro_rules! matmul_at_x {
-        // y_out (n × k col-major) = Aᵀ (n×m) · x_in (m × k col-major)
         ($y_out:expr, $x_in:expr, $out_rows:expr, $inner:expr, $cols:expr) => {{
             #[cfg(feature = "rayon")]
             if $out_rows * $cols > 4096 {
@@ -677,46 +762,45 @@ pub fn compress_block<T: Scalar>(
         }};
     }
 
-    // Y₀ = A Ω  (m × k_sketch)
-    let mut y0 = vec![0.0f64; m * k_sketch];
-    matmul_a_x!(y0, omega, m, n, k_sketch);
+    // Sketch with (max_rank + oversampling) columns.
+    let p_os = 10_usize.min(max_rank);
+    let k_sketch = (max_rank + p_os).min(natural_max);
+
+    // ── Step 1: Gaussian sketch Ω ∈ ℝ^{n × k_sketch} ───────────────────────
+    let mut rng = Lcg64::new((m as u64).wrapping_mul(31337).wrapping_add(n as u64 * 7919));
+    let mut omega = vec![0.0f64; n * k_sketch];
+    for v in omega.iter_mut() { *v = rng.gaussian(); }
+
+    // ── Step 2: Y = A (Aᵀ (A Ω)), one power-iteration step ─────────────────
+    // Y₀ = A Ω  (eff_m × k_sketch)
+    let mut y0 = vec![0.0f64; eff_m * k_sketch];
+    matmul_a_x!(y0, omega, eff_m, n, k_sketch);
     // tmp = Aᵀ Y₀  (n × k_sketch)
     let mut tmp = vec![0.0f64; n * k_sketch];
-    matmul_at_x!(tmp, y0, n, m, k_sketch);
-    // Y = A tmp  (m × k_sketch)
-    let mut y = vec![0.0f64; m * k_sketch];
-    matmul_a_x!(y, tmp, m, n, k_sketch);
+    matmul_at_x!(tmp, y0, n, eff_m, k_sketch);
+    // Y = A tmp  (eff_m × k_sketch)
+    let mut y = vec![0.0f64; eff_m * k_sketch];
+    matmul_a_x!(y, tmp, eff_m, n, k_sketch);
 
-    // ── Step 3: QR of Y → Q (m × q_cols) via modified Gram-Schmidt (MGS×2) ───
-    // Two passes of MGS (double reorthogonalisation) are used to handle
-    // nearly linearly-dependent columns that arise when the sketch matrix Y
-    // has a slowly-decaying spectrum.  A single pass can leave significant
-    // residual components along already-accepted basis vectors; the second
-    // pass reduces this error from O(ε·κ) to O(ε·κ²) where ε = machine eps
-    // and κ is the condition number of Y.
-    let mut q_buf = vec![0.0f64; m * k_sketch]; // compacted accepted columns
+    // ── Step 3: QR of Y → Q (eff_m × q_cols) via MGS×2 ─────────────────────
+    let mut q_buf = vec![0.0f64; eff_m * k_sketch];
     let mut q_cols = 0usize;
-    // `pending`: working copy of each sketch column, modified in-place.
     let mut pending = y.clone();
     for j in 0..k_sketch {
-        // ── First orthogonalisation pass: project out all accepted columns ──
         for qc in 0..q_cols {
-            let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * pending[i + j*m]).sum();
-            for i in 0..m { pending[i + j*m] -= dot * q_buf[i + qc*m]; }
+            let dot: f64 = (0..eff_m).map(|i| q_buf[i + qc*eff_m] * pending[i + j*eff_m]).sum();
+            for i in 0..eff_m { pending[i + j*eff_m] -= dot * q_buf[i + qc*eff_m]; }
         }
-        // ── Second pass (reorthogonalisation): eliminates residual drift ───
         for qc in 0..q_cols {
-            let dot: f64 = (0..m).map(|i| q_buf[i + qc*m] * pending[i + j*m]).sum();
-            for i in 0..m { pending[i + j*m] -= dot * q_buf[i + qc*m]; }
+            let dot: f64 = (0..eff_m).map(|i| q_buf[i + qc*eff_m] * pending[i + j*eff_m]).sum();
+            for i in 0..eff_m { pending[i + j*eff_m] -= dot * q_buf[i + qc*eff_m]; }
         }
-        // Compute norm after double-reorthogonalisation.
-        let norm_sq: f64 = (0..m).map(|i| { let v = pending[i + j*m]; v*v }).sum();
+        let norm_sq: f64 = (0..eff_m).map(|i| { let v = pending[i + j*eff_m]; v*v }).sum();
         let nrm = norm_sq.sqrt();
         if nrm < 1e-10 * (k_sketch as f64).sqrt() { continue; }
-        // Accept: store normalised column.
         let inv = 1.0 / nrm;
         let qc = q_cols;
-        for i in 0..m { q_buf[i + qc*m] = pending[i + j*m] * inv; }
+        for i in 0..eff_m { q_buf[i + qc*eff_m] = pending[i + j*eff_m] * inv; }
         q_cols += 1;
         if q_cols == max_rank { break; }
     }
@@ -725,17 +809,17 @@ pub fn compress_block<T: Scalar>(
         return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
     }
 
-    // ── Step 4: B = Qᵀ A  (q_cols × n) ──────────────────────────────────────
+    // ── Step 4: B = Qᵀ A  (q_cols × n) ────────────────────────────────────
     let mut b_small = vec![0.0f64; q_cols * n];
     for i in 0..q_cols {
         for j in 0..n {
             let mut s = 0.0f64;
-            for row in 0..m { s += q_buf[row + i*m] * a[row*n+j]; }
+            for row in 0..eff_m { s += q_buf[row + i*eff_m] * a[row*n+j]; }
             b_small[i * n + j] = s;
         }
     }
 
-    // ── Step 5: thin SVD of B (q_cols × n) via deflating power iteration ────
+    // ── Step 5: thin SVD of B (q_cols × n) via deflating power iteration ──
     let p_svd = q_cols.min(n);
     let (sigma_f, u_hat_f, v_svd_f) = power_iter_svd_f64(&b_small, q_cols, n, p_svd);
 
@@ -743,7 +827,7 @@ pub fn compress_block<T: Scalar>(
         return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
     }
 
-    // ── Step 6: truncate at tol * sigma_1 ────────────────────────────────────
+    // ── Step 6: truncate at tol * sigma_1 ──────────────────────────────────
     let sigma1 = sigma_f[0];
     let threshold = tol * sigma1;
     let rank = sigma_f.iter().take_while(|&&s| s >= threshold).count().min(p_svd);
@@ -751,26 +835,22 @@ pub fn compress_block<T: Scalar>(
         return BlrBlock { m, n, rank: 0, u: vec![], v: vec![] };
     }
 
-    // U = Q * Û * Σ  (m × rank, column-major, T).
-    let mut u_full = vec![T::zero(); m * rank];
+    // ── Step 7: build tall U = Q * Û * Σ  (eff_m × rank) ──────────────────
+    let mut u_tall = vec![0.0f64; eff_m * rank];
     for k_col in 0..rank {
-        let sig = T::from_f64(sigma_f[k_col]);
-        for i in 0..m {
-            let mut s = T::zero();
+        let sig = sigma_f[k_col];
+        for i in 0..eff_m {
+            let mut s = 0.0f64;
             for qi in 0..q_cols {
-                s += T::from_f64(q_buf[i + qi*m]) * T::from_f64(u_hat_f[qi + k_col*q_cols]);
+                s += q_buf[i + qi*eff_m] * u_hat_f[qi + k_col*q_cols];
             }
-            u_full[i + k_col*m] = s * sig;
+            u_tall[i + k_col*eff_m] = s * sig;
         }
     }
 
-    // V = V_svd[:, :rank]  (n × rank, column-major, T).
-    let mut v_full = vec![T::zero(); n * rank];
-    for k_col in 0..rank {
-        for j in 0..n {
-            v_full[j + k_col*n] = T::from_f64(v_svd_f[j + k_col*n]);
-        }
-    }
+    // ── Pack into BlrBlock<T> (split U_tall for complex types) ────────────
+    let v_part = &v_svd_f[..n * rank];
+    let (u_full, v_full) = blr_from_f64_wide(u_tall, v_part.to_vec(), m, n, rank, eff_m);
 
     BlrBlock { m, n, rank, u: u_full, v: v_full }
 }
@@ -1202,7 +1282,7 @@ impl Lcg64 {
 /// | `apply_add_t(x, y, alpha)` | `y += alpha · Aᵀ · x` |
 /// | `compress_from_dense(a, tol, max_rank)` | Build from a dense row-major matrix |
 #[derive(Debug, Clone)]
-pub struct BlrMatrix<T: Scalar> {
+pub struct BlrMatrix<T: ComplexScalar> {
     /// Number of block rows.
     pub nb_rows: usize,
     /// Number of block columns.
@@ -1220,7 +1300,9 @@ pub struct BlrMatrix<T: Scalar> {
     pub dense_blocks: Vec<Option<Vec<T>>>,
 }
 
-impl<T: Scalar> BlrMatrix<T> {
+// ─── BlrMatrix: methods that work for any ComplexScalar ─────────────────────
+
+impl<T: ComplexScalar> BlrMatrix<T> {
     /// Total number of rows.
     #[inline]
     pub fn nrows(&self) -> usize { self.row_sizes.iter().sum() }
@@ -1244,13 +1326,29 @@ impl<T: Scalar> BlrMatrix<T> {
         self.dense_blocks[i * self.nb_cols + j].as_deref()
     }
 
+    /// Total memory used by all stored blocks (dense + BLR) in bytes.
+    pub fn memory_bytes(&self) -> usize {
+        let elem = std::mem::size_of::<T>();
+        let blr: usize = self.blr_blocks.iter().flatten()
+            .map(|b| b.memory_bytes().1)
+            .sum();
+        let dense: usize = self.dense_blocks.iter().flatten()
+            .map(|d| d.len() * elem)
+            .sum();
+        blr + dense
+    }
+}
+
+// ─── BlrMatrix: methods requiring Scalar (SIMD dense ops, compress_block) ──
+
+impl<T: Scalar> BlrMatrix<T> {
     /// Compute `y += alpha · A · x` (full matrix-vector product).
     ///
     /// `x` has length `ncols()`, `y` has length `nrows()`.
     ///
     /// Each block contributes independently:
     /// - BLR blocks use `BlrBlock::apply_add`.
-    /// - Dense blocks use a direct triple-loop matvec.
+    /// - Dense blocks use SIMD GEMV.
     ///
     /// # Panics
     /// Panics if `x.len() != ncols()` or `y.len() != nrows()`.
@@ -1374,18 +1472,6 @@ impl<T: Scalar> BlrMatrix<T> {
             blr_blocks,
             dense_blocks,
         }
-    }
-
-    /// Total memory used by all stored blocks (dense + BLR) in bytes.
-    pub fn memory_bytes(&self) -> usize {
-        let elem = std::mem::size_of::<T>();
-        let blr: usize = self.blr_blocks.iter().flatten()
-            .map(|b| b.memory_bytes().1)
-            .sum();
-        let dense: usize = self.dense_blocks.iter().flatten()
-            .map(|d| d.len() * elem)
-            .sum();
-        blr + dense
     }
 }
 

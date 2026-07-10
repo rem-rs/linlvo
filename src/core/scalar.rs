@@ -59,6 +59,9 @@ pub trait ComplexScalar:
 
     fn from_f64(v: f64) -> Self;
     fn from_real(r: Self::Real) -> Self;
+    /// Construct from real and imaginary parts.
+    /// For real types, `im` is ignored and only `re` is returned.
+    fn from_parts(re: Self::Real, im: Self::Real) -> Self;
     fn real(self) -> Self::Real;
     fn imag(self) -> Self::Real;
     /// Modulus |z|.
@@ -76,6 +79,7 @@ impl<T: Scalar> ComplexScalar for T {
 
     #[inline] fn from_f64(v: f64) -> Self { <T as Scalar>::from_f64(v) }
     #[inline] fn from_real(r: T) -> Self { r }
+    #[inline] fn from_parts(re: T, _im: T) -> Self { re }
     #[inline] fn real(self) -> T { self }
     #[inline] fn imag(self) -> T { T::zero() }
     #[inline] fn abs(self) -> T { <T as Float>::abs(self) }
@@ -94,6 +98,7 @@ impl<T: Scalar> ComplexScalar for num_complex::Complex<T> {
 
     #[inline] fn from_f64(v: f64) -> Self { num_complex::Complex::new(T::from_f64(v), T::zero()) }
     #[inline] fn from_real(r: T)  -> Self { num_complex::Complex::new(r, T::zero()) }
+    #[inline] fn from_parts(re: T, im: T) -> Self { num_complex::Complex::new(re, im) }
     #[inline] fn real(self) -> T { self.re }
     #[inline] fn imag(self) -> T { self.im }
     #[inline] fn abs(self)  -> T { num_complex::Complex::norm(self) }

@@ -34,7 +34,7 @@ use crate::direct::{
     DirectSolver, DirectOptions,
     ordering::{OrderingMethod, permute_symmetric, rcm, colamd, nd},
     etree::{elimination_tree, post_order},
-    blr::BlrBlock,
+    blr::{BlrBlock, compress_block},
 };
 
 // ─── Options ─────────────────────────────────────────────────────────────────
@@ -366,12 +366,13 @@ impl<T: ComplexScalar> DirectSolver<T> for MultifrontalLu<T> {
                         }
                     }
 
-                    // ── BLR: compress sub_dense if front is large enough ──────
-                    // Note: BLR compression (compress_block) requires T: Scalar.
-                    // For ComplexScalar types, we use the dense fallback always.
-                    // This is handled by always using sentinel_blr here; the BLR
-                    // factorize path is the only caller of compress_block.
-                    let (blr, used_blr) = (sentinel_blr(), false);
+                    // ── BLR: compress sub_dense (now works for ComplexScalar) ──
+                    // For complex types, the internal SVD uses the real-stacking
+                    // approach (see blr::blr_to_f64_wide), which yields the
+                    // optimal Frobenius-norm approximation in UVᵀ format.
+                    let blk = compress_block(&sub_dense, ur, sn_size, blr_tol, 0);
+                    let used_blr = blk.used_blr_check(&sub_dense, ur, sn_size);
+                    let blr = if used_blr { blk } else { sentinel_blr() };
 
                     self.blr_factors.push(BlrFactor {
                         start: col,
@@ -530,7 +531,7 @@ impl<T: ComplexScalar> DirectSolver<T> for MultifrontalLu<T> {
 
 // ─── BLR solve ───────────────────────────────────────────────────────────────
 
-impl<T: Scalar> MultifrontalLu<T> {
+impl<T: ComplexScalar> MultifrontalLu<T> {
     ///
     /// The forward substitution applies each supernode's LU factors in order,
     /// using BLR sub-diagonal blocks where available.  The backward pass then
@@ -640,17 +641,6 @@ impl<T: Scalar> MultifrontalLu<T> {
 /// Sentinel BlrBlock meaning "use dense_sub instead".
 fn sentinel_blr<T: ComplexScalar>() -> BlrBlock<T> {
     BlrBlock { m: 0, n: 0, rank: usize::MAX, u: vec![], v: vec![] }
-}
-
-impl<T: ComplexScalar> BlrBlock<T> {
-    /// Check if this block actually achieved compression vs the dense original.
-    fn used_blr_check(&self, _orig: &[T], m: usize, n: usize) -> bool {
-        // Consider BLR "used" (i.e. actually compressed) when:
-        // rank > 0  AND  rank * (m + n) < m * n  (saves memory).
-        self.rank < usize::MAX
-            && self.rank > 0
-            && self.rank * (m + n) < m * n
-    }
 }
 
 fn find_pivot<T: ComplexScalar>(mat: &[T], n: usize, j: usize, threshold: f64) -> usize {
