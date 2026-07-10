@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -31,7 +31,7 @@ pub struct IlukPrecond<T> {
     diag_pos: Vec<usize>,
 }
 
-impl<T: Scalar> IlukPrecond<T> {
+impl<T: ComplexScalar> IlukPrecond<T> {
     /// Compute ILU(k) factorisation of `mat` with fill level `fill_level`.
     pub fn from_csr(mat: &CsrMatrix<T>, fill_level: usize) -> Result<Self, SolverError> {
         let n = mat.nrows();
@@ -110,7 +110,7 @@ impl<T: Scalar> IlukPrecond<T> {
         }
 
         // ── Numeric phase: ILU factorisation on extended pattern ──────────
-        let tol = T::machine_epsilon() * T::from_f64(1e6);
+        let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         for i in 1..n {
             let i_start = new_rp[i];
             let i_end   = new_rp[i + 1];
@@ -142,7 +142,7 @@ impl<T: Scalar> IlukPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for IlukPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for IlukPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
@@ -173,7 +173,7 @@ impl<T: Scalar> Preconditioner for IlukPrecond<T> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 /// Look up the value of entry (i, j) in the original CSR matrix; return 0 if absent.
-fn orig_val<T: Scalar>(rp: &[usize], ci: &[usize], vs: &[T], i: usize, j: usize) -> T {
+fn orig_val<T: ComplexScalar>(rp: &[usize], ci: &[usize], vs: &[T], i: usize, j: usize) -> T {
     for pos in rp[i]..rp[i + 1] {
         match ci[pos].cmp(&j) {
             std::cmp::Ordering::Equal   => return vs[pos],

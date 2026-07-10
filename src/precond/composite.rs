@@ -19,22 +19,22 @@
 //!          `PC_COMPOSITE_MULTIPLICATIVE`
 //!   HYPRE: composite preconditioners via custom setup
 
-use crate::core::{preconditioner::Preconditioner, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{preconditioner::Preconditioner, scalar::ComplexScalar, vector::{DenseVec, Vector}};
 
 /// Additive composite preconditioner.
 ///
 /// `apply_precond(x) = ∑ᵢ Mᵢ⁻¹ x`
-pub struct AdditivePrecond<T: Scalar> {
+pub struct AdditivePrecond<T: ComplexScalar> {
     preconditioners: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>>,
 }
 
-impl<T: Scalar> AdditivePrecond<T> {
+impl<T: ComplexScalar> AdditivePrecond<T> {
     pub fn new(preconditioners: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>>) -> Self {
         AdditivePrecond { preconditioners }
     }
 }
 
-impl<T: Scalar> Preconditioner for AdditivePrecond<T> {
+impl<T: ComplexScalar> Preconditioner for AdditivePrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
@@ -56,17 +56,17 @@ impl<T: Scalar> Preconditioner for AdditivePrecond<T> {
 /// Multiplicative composite preconditioner.
 ///
 /// `apply_precond(x) = Mₖ⁻¹ … M₁⁻¹ x`
-pub struct MultiplicativePrecond<T: Scalar> {
+pub struct MultiplicativePrecond<T: ComplexScalar> {
     preconditioners: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>>,
 }
 
-impl<T: Scalar> MultiplicativePrecond<T> {
+impl<T: ComplexScalar> MultiplicativePrecond<T> {
     pub fn new(preconditioners: Vec<Box<dyn Preconditioner<Vector = DenseVec<T>>>>) -> Self {
         MultiplicativePrecond { preconditioners }
     }
 }
 
-impl<T: Scalar> Preconditioner for MultiplicativePrecond<T> {
+impl<T: ComplexScalar> Preconditioner for MultiplicativePrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {

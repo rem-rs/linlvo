@@ -7,7 +7,7 @@
 //!   HYPRE: `HYPRE_BoomerAMGSetRelaxType(precond, 7)` (Jacobi relaxation)
 
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -20,14 +20,14 @@ pub struct JacobiPrecond<T> {
     inv_diag: Vec<T>,
 }
 
-impl<T: Scalar> JacobiPrecond<T> {
+impl<T: ComplexScalar> JacobiPrecond<T> {
     /// Build from a CSR matrix.
     ///
     /// Returns `Err(SolverError::PrecondSetupFailed)` if any diagonal entry
     /// has absolute value below `1e6 * ε_machine` (near-zero pivot).
     pub fn from_csr(mat: &CsrMatrix<T>) -> Result<Self, SolverError> {
         let diag = mat.diag();
-        let tol = T::machine_epsilon() * T::from_f64(1e6);
+        let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         for (i, &d) in diag.iter().enumerate() {
             if d.abs() < tol {
                 return Err(SolverError::PrecondSetupFailed {
@@ -40,7 +40,7 @@ impl<T: Scalar> JacobiPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for JacobiPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for JacobiPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {

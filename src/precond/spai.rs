@@ -26,7 +26,7 @@
 
 #![allow(clippy::needless_range_loop)]
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -40,7 +40,7 @@ pub struct SpaiPrecond<T> {
     cols:  Vec<Vec<(usize, T)>>,
 }
 
-impl<T: Scalar> SpaiPrecond<T> {
+impl<T: ComplexScalar> SpaiPrecond<T> {
     /// Compute the static-pattern SPAI for `mat`.
     ///
     /// Assumes `mat` is (approximately) symmetric; uses row patterns as column
@@ -109,7 +109,7 @@ impl<T: Scalar> SpaiPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for SpaiPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for SpaiPrecond<T> {
     type Vector = DenseVec<T>;
 
     /// Compute y = M x  (SpMV with M stored column-by-column).
@@ -136,7 +136,7 @@ impl<T: Scalar> Preconditioner for SpaiPrecond<T> {
 ///
 /// `a` is stored **column-major**: a[i + j*m] is row i, col j.
 /// Returns the `n`-vector solution m̂ (or zeros if the system is rank-deficient).
-fn qr_lstsq<T: Scalar>(a: &[T], b: &[T], m: usize, n: usize) -> Vec<T> {
+fn qr_lstsq<T: ComplexScalar>(a: &[T], b: &[T], m: usize, n: usize) -> Vec<T> {
     if m == 0 || n == 0 {
         return vec![T::zero(); n];
     }
@@ -145,15 +145,15 @@ fn qr_lstsq<T: Scalar>(a: &[T], b: &[T], m: usize, n: usize) -> Vec<T> {
     let mut q = a.to_vec();   // column-major, m × n
     let mut r  = vec![T::zero(); n * n]; // upper triangular, n × n, column-major
 
-    let eps = T::machine_epsilon() * T::from_f64(1e3);
+    let eps_real = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e3);
 
     // Modified Gram-Schmidt
     for j in 0..n {
-        // ‖q[:, j]‖
+        // ‖q[:, j]‖²
         let norm_sq: T = (0..m).fold(T::zero(), |s, i| s + q[i + j * m] * q[i + j * m]);
         let norm = norm_sq.sqrt();
 
-        if norm < eps {
+        if norm.abs() < eps_real {
             // Rank-deficient column: leave as zero, set r[j,j] = 0
             r[j + j * n] = T::zero();
             continue;
@@ -186,7 +186,7 @@ fn qr_lstsq<T: Scalar>(a: &[T], b: &[T], m: usize, n: usize) -> Vec<T> {
     let mut m_hat = vec![T::zero(); n];
     for j in (0..n).rev() {
         let rjj = r[j + j * n];
-        if rjj.abs() < eps {
+        if rjj.abs() < eps_real {
             m_hat[j] = T::zero();
             continue;
         }

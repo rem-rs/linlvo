@@ -13,7 +13,7 @@
 
 #![allow(clippy::needless_range_loop)]
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -33,7 +33,7 @@ pub struct Ilu0Precond<T> {
     diag_pos: Vec<usize>,
 }
 
-impl<T: Scalar> Ilu0Precond<T> {
+impl<T: ComplexScalar> Ilu0Precond<T> {
     /// Compute the ILU(0) factorisation of `mat`.
     ///
     /// Returns `Err(SolverError::SingularMatrix)` if a zero pivot is encountered.
@@ -68,7 +68,7 @@ impl<T: Scalar> Ilu0Precond<T> {
         }
 
         // ILU(0) factorisation in-place (Saad, "Iterative Methods", Alg. 10.4).
-        let tol = T::machine_epsilon() * T::from_f64(1e6);
+        let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         for i in 1..n {
             // For each entry (i, k) in row i where k < i (lower-triangle):
             let i_start = row_ptr[i];
@@ -122,7 +122,7 @@ fn find_entry(col_idx: &[usize], start: usize, end: usize, j: usize) -> Option<u
     None
 }
 
-impl<T: Scalar> Preconditioner for Ilu0Precond<T> {
+impl<T: ComplexScalar> Preconditioner for Ilu0Precond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {

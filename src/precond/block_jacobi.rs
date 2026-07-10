@@ -11,9 +11,10 @@
 //!   PETSc: `PCBJACOBI`
 
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
+use num_traits::Zero;
 
 /// Block Jacobi preconditioner.
 ///
@@ -27,7 +28,7 @@ pub struct BlockJacobiPrecond<T> {
     pivots:     Vec<Vec<usize>>,
 }
 
-impl<T: Scalar> BlockJacobiPrecond<T> {
+impl<T: ComplexScalar> BlockJacobiPrecond<T> {
     /// Build from a CSR matrix.
     ///
     /// Returns `Err` if:
@@ -83,7 +84,7 @@ impl<T: Scalar> BlockJacobiPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for BlockJacobiPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for BlockJacobiPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
@@ -111,14 +112,14 @@ impl<T: Scalar> Preconditioner for BlockJacobiPrecond<T> {
 /// Factorise a bs×bs dense matrix (row-major) in-place with partial pivoting.
 /// Stores L (strictly lower) and U (upper) packed into `block`.
 /// Returns Err(row) if a zero pivot is encountered.
-fn dense_lu_factor<T: Scalar>(
+fn dense_lu_factor<T: ComplexScalar>(
     block:  &mut [T],
     pivots: &mut [usize],
     bs:     usize,
 ) -> Result<(), usize> {
     for k in 0..bs {
         // Find the pivot in column k below row k.
-        let mut max_abs = T::zero();
+        let mut max_abs = T::Real::zero();
         let mut max_row = k;
         for i in k..bs {
             let v = block[i * bs + k].abs();
@@ -157,7 +158,7 @@ fn dense_lu_factor<T: Scalar>(
 
 /// Forward/back substitution using the LU factorisation in `block`.
 /// Overwrites `rhs` with the solution.
-fn dense_lu_solve<T: Scalar>(block: &[T], pivots: &[usize], rhs: &mut [T], bs: usize) {
+fn dense_lu_solve<T: ComplexScalar>(block: &[T], pivots: &[usize], rhs: &mut [T], bs: usize) {
     // Apply row permutations (forward pass).
     for (k, &piv) in pivots[..bs].iter().enumerate() {
         rhs.swap(k, piv);
@@ -180,12 +181,12 @@ fn dense_lu_solve<T: Scalar>(block: &[T], pivots: &[usize], rhs: &mut [T], bs: u
 }
 
 #[inline]
-fn dense_lu_solve_1x1<T: Scalar>(block: &[T], rhs: &mut [T]) {
+fn dense_lu_solve_1x1<T: ComplexScalar>(block: &[T], rhs: &mut [T]) {
     rhs[0] /= block[0];
 }
 
 #[inline]
-fn dense_lu_solve_small<T: Scalar, const BS: usize>(
+fn dense_lu_solve_small<T: ComplexScalar, const BS: usize>(
     block: &[T],
     pivots: &[usize],
     rhs: &mut [T],

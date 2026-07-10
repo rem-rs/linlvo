@@ -14,7 +14,7 @@
 //!   HYPRE: `HYPRE_EuclidCreate` with threshold parameter
 
 use crate::core::{
-    error::SolverError, preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec,
+    error::SolverError, preconditioner::Preconditioner, scalar::{ComplexScalar, Scalar}, vector::DenseVec,
 };
 use crate::sparse::CsrMatrix;
 
@@ -29,7 +29,7 @@ pub struct IlutPrecond<T> {
     u_diag:  Vec<T>,                // u[i, i]
 }
 
-impl<T: Scalar> IlutPrecond<T> {
+impl<T: ComplexScalar> IlutPrecond<T> {
     /// Compute ILUT factorisation.
     ///
     /// * `tau`    — relative drop tolerance (e.g. 0.01)
@@ -55,7 +55,7 @@ impl<T: Scalar> IlutPrecond<T> {
         // Active column set (sorted).
         let mut active: Vec<usize> = Vec::new();
 
-        let eps = T::machine_epsilon() * T::from_f64(1e6);
+        let eps = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
 
         for i in 0..n {
             // ── Initialise w from row i of A ──────────────────────────────
@@ -73,7 +73,7 @@ impl<T: Scalar> IlutPrecond<T> {
                 .map(|&j| to_f64_sq(w[j]))
                 .sum::<f64>()
                 .sqrt();
-            let thresh = T::from_f64(tau * row_norm);
+            let thresh = <T::Real as Scalar>::from_f64(tau * row_norm);
 
             // ── Elimination pass ─────────────────────────────────────────
             let lower_cols: Vec<usize> = active.iter().copied().filter(|&j| j < i).collect();
@@ -153,7 +153,7 @@ impl<T: Scalar> IlutPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for IlutPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for IlutPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
@@ -183,19 +183,20 @@ impl<T: Scalar> Preconditioner for IlutPrecond<T> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-fn to_f64_sq<T: Scalar>(v: T) -> f64 {
-    let f = num_traits::ToPrimitive::to_f64(&v).unwrap_or(0.0);
-    f * f
+fn to_f64_sq<T: ComplexScalar>(v: T) -> f64 {
+    let r = v.abs();
+    let f = num_traits::ToPrimitive::to_f64(&r).unwrap_or(0.0);
+    f * f // |v|^2
 }
 
-fn zero_active<T: Scalar>(w: &mut [T], active: &[usize]) {
+fn zero_active<T: ComplexScalar>(w: &mut [T], active: &[usize]) {
     for &j in active {
         w[j] = T::zero();
     }
 }
 
 /// Keep the top `p` entries by absolute value; sort remaining by column index.
-fn top_p_sort<T: Scalar>(entries: &mut Vec<(usize, T)>, p: usize) {
+fn top_p_sort<T: ComplexScalar>(entries: &mut Vec<(usize, T)>, p: usize) {
     if entries.len() > p {
         entries.sort_unstable_by(|a, b| {
             b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal)
