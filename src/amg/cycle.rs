@@ -17,7 +17,7 @@
 //! F-cycle calls the coarse level twice: first with V, then with F (recursive).
 
 use crate::amg::{setup::AmgHierarchy, smoother::{smooth_with_hint, SmootherType}};
-use crate::core::{operator::LinearOperator, scalar::Scalar, vector::{DenseVec, Vector}};
+use crate::core::{operator::LinearOperator, scalar::{Scalar}, vector::{DenseVec, Vector}};
 
 struct LevelScratch<T: Scalar> {
     ax: DenseVec<T>,

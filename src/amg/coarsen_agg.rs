@@ -11,13 +11,13 @@
 //! **Reference**: Vaněk, Mandel & Brezina, Computing 56 (1996).
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Build aggregates from the strong-connection graph `s`.
 ///
 /// Returns `agg_id[i]` = aggregate index for fine node i (0-based).
-pub fn build_aggregates<T: Scalar>(s: &CsrMatrix<T>) -> Vec<usize> {
+pub fn build_aggregates<T: ComplexScalar>(s: &CsrMatrix<T>) -> Vec<usize> {
     let n  = s.nrows();
     let rp = s.row_ptr();
     let ci = s.col_idx();
@@ -48,7 +48,7 @@ pub fn build_aggregates<T: Scalar>(s: &CsrMatrix<T>) -> Vec<usize> {
 ///
 /// P₀[i, k] = 1 if node i belongs to aggregate k, else 0.
 /// Returns P₀ as a CSR matrix of size n_fine × n_coarse.
-pub fn tentative_prolongation<T: Scalar>(
+pub fn tentative_prolongation<T: ComplexScalar>(
     agg_id: &[usize],
     n_coarse: usize,
 ) -> CsrMatrix<T> {

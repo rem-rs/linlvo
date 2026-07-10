@@ -13,7 +13,7 @@
 //! **Reference**: Ruge & Stüben 1987; Stuben 2001 (survey).
 
 #![allow(clippy::needless_range_loop)]
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Node classification.
@@ -27,7 +27,7 @@ pub enum NodeType {
 /// Perform RS coarsening.
 ///
 /// Returns a `Vec<NodeType>` of length `n` classifying each DOF.
-pub fn rs_coarsen<T: Scalar>(s: &CsrMatrix<T>) -> Vec<NodeType> {
+pub fn rs_coarsen<T: ComplexScalar>(s: &CsrMatrix<T>) -> Vec<NodeType> {
     let n   = s.nrows();
     let rp  = s.row_ptr();
     let ci  = s.col_idx();

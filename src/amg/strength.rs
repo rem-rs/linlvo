@@ -14,8 +14,9 @@
 //!
 //! **Reference**: Ruge & Stüben, §3.1; Saad §12.5.
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::{ComplexScalar, Scalar};
 use crate::sparse::CsrMatrix;
+use num_traits::Zero;
 
 /// Compute the strong-connection matrix S for `a` with threshold `theta`.
 ///
@@ -23,9 +24,9 @@ use crate::sparse::CsrMatrix;
 /// connections.  Diagonal entries are excluded.
 ///
 /// When compiled with `feature = "rayon"`, row computations run in parallel.
-pub fn strong_connections<T: Scalar>(a: &CsrMatrix<T>, theta: f64) -> CsrMatrix<T> {
+pub fn strong_connections<T: ComplexScalar>(a: &CsrMatrix<T>, theta: f64) -> CsrMatrix<T> {
     let n       = a.nrows();
-    let theta_t = T::from_f64(theta);
+    let theta_t = <T::Real as Scalar>::from_f64(theta);
 
     let rp = a.row_ptr();
     let ci = a.col_idx();
@@ -33,7 +34,7 @@ pub fn strong_connections<T: Scalar>(a: &CsrMatrix<T>, theta: f64) -> CsrMatrix<
 
     // Each row is independent: compute the list of strong neighbours per row.
     let compute_row = |i: usize| -> Vec<(usize, T)> {
-        let mut max_off = T::zero();
+        let mut max_off = T::Real::zero();
         for k in rp[i]..rp[i + 1] {
             if ci[k] != i {
                 let v = vs[k].abs();
@@ -45,7 +46,7 @@ pub fn strong_connections<T: Scalar>(a: &CsrMatrix<T>, theta: f64) -> CsrMatrix<
         let mut row = Vec::new();
         for k in rp[i]..rp[i + 1] {
             let j = ci[k];
-            if j != i && vs[k].abs() >= cutoff && cutoff > T::zero() {
+            if j != i && vs[k].abs() >= cutoff && cutoff > T::Real::zero() {
                 row.push((j, T::one()));
             }
         }

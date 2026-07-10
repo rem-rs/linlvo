@@ -13,13 +13,13 @@
 //! This corresponds to a diagonal approximation of `A_ff^{-1}`.
 
 use crate::amg::coarsen_rs::{coarse_index_map, NodeType};
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Build a baseline AIR restriction operator with diagonal `A_ff^{-1}`.
 ///
 /// Returns a matrix `R` of shape `(n_coarse, n_fine)`.
-pub fn air_restriction_diag<T: Scalar>(
+pub fn air_restriction_diag<T: ComplexScalar>(
     a: &CsrMatrix<T>,
     status: &[NodeType],
 ) -> CsrMatrix<T> {
@@ -49,7 +49,7 @@ pub fn air_restriction_diag<T: Scalar>(
             if status[j] == NodeType::Fine || status[j] == NodeType::Undecided {
                 let dff = diag[j];
                 if dff.abs() > T::machine_epsilon() {
-                    row.push((j, -vs[k] / dff));
+                    row.push((j, T::zero() - vs[k] / dff));
                 }
             }
         }
@@ -61,7 +61,7 @@ pub fn air_restriction_diag<T: Scalar>(
     pack_csr(nc, n, rows)
 }
 
-fn pack_csr<T: Scalar>(
+fn pack_csr<T: ComplexScalar>(
     nrows: usize,
     ncols: usize,
     rows: Vec<Vec<(usize, T)>>,

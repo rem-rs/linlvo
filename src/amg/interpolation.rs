@@ -24,16 +24,17 @@
 //! Row computations in both routines are independent and are parallelised with
 //! Rayon when the `rayon` feature is enabled.
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::{ComplexScalar, Scalar};
 use crate::sparse::CsrMatrix;
 use crate::amg::coarsen_rs::{NodeType, coarse_index_map};
+use num_traits::Zero;
 
 // ─── RS direct interpolation ─────────────────────────────────────────────────
 
 /// Build P for classical RS-AMG.
 ///
 /// When compiled with `feature = "rayon"`, rows are computed in parallel.
-pub fn rs_interpolation<T: Scalar>(
+pub fn rs_interpolation<T: ComplexScalar>(
     a:      &CsrMatrix<T>,
     status: &[NodeType],
 ) -> CsrMatrix<T> {
@@ -71,7 +72,7 @@ pub fn rs_interpolation<T: Scalar>(
 
                 let mut row: Vec<(usize, T)> = c_entries
                     .into_iter()
-                    .map(|(coarse_j, a_ij)| (coarse_j, -a_ij / denom))
+                    .map(|(coarse_j, a_ij)| (coarse_j, T::zero() - a_ij / denom))
                     .collect();
                 row.sort_unstable_by_key(|&(j, _)| j);
                 row
@@ -99,7 +100,7 @@ pub fn rs_interpolation<T: Scalar>(
 /// `omega_factor`: fraction of 4/3; use 0.667 (default) for standard SA.
 ///
 /// When compiled with `feature = "rayon"`, rows are computed in parallel.
-pub fn smooth_prolongation<T: Scalar>(
+pub fn smooth_prolongation<T: ComplexScalar>(
     a:            &CsrMatrix<T>,
     p0:           &CsrMatrix<T>,
     omega_factor: f64,
@@ -110,22 +111,22 @@ pub fn smooth_prolongation<T: Scalar>(
     let vs = a.values();
 
     // Gershgorin spectral radius estimate of D⁻¹A (sequential — O(nnz)).
-    let mut rho = T::zero();
+    let mut rho = T::Real::zero();
     for i in 0..n {
-        let mut d   = T::zero();
-        let mut off = T::zero();
+        let mut d   = T::Real::zero();
+        let mut off = T::Real::zero();
         for k in rp[i]..rp[i + 1] {
             if ci[k] == i { d = vs[k].abs(); } else { off += vs[k].abs(); }
         }
-        if d > T::zero() {
+        if d > T::Real::zero() {
             let r = off / d;
             if r > rho { rho = r; }
         }
     }
-    let omega = if rho > T::zero() {
-        T::from_f64(omega_factor * 4.0 / 3.0) / rho
+    let omega = if rho > T::Real::zero() {
+        T::from_real(<T::Real as Scalar>::from_f64(omega_factor * 4.0 / 3.0) / rho)
     } else {
-        T::from_f64(omega_factor * 2.0 / 3.0)
+        T::from_real(<T::Real as Scalar>::from_f64(omega_factor * 2.0 / 3.0))
     };
 
     let diag   = a.diag();
@@ -161,7 +162,7 @@ pub fn smooth_prolongation<T: Scalar>(
 
         let mut row: Vec<(usize, T)> = acc
             .into_iter()
-            .filter(|&(_, v)| v.abs() > T::machine_epsilon() * T::from_f64(1e-3))
+            .filter(|&(_, v)| v.abs() > T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e-3))
             .collect();
         row.sort_unstable_by_key(|&(j, _)| j);
         row
@@ -181,7 +182,7 @@ pub fn smooth_prolongation<T: Scalar>(
 
 // ─── helper ───────────────────────────────────────────────────────────────────
 
-fn pack_csr<T: Scalar>(
+fn pack_csr<T: ComplexScalar>(
     nrows: usize,
     ncols: usize,
     rows:  Vec<Vec<(usize, T)>>,
