@@ -117,6 +117,14 @@ pub struct AmsConfig {
     pub smoother_sweeps: usize,
     /// Approximate solver for the nodal Laplacian `GᵀAG`.
     pub node_solver: AuxSpaceSolver,
+    /// Regularization added to the diagonal of the nodal system `GᵀAG`.
+    /// Set to a small positive value (e.g. 10⁻⁶) when the auxiliary space
+    /// is singular (e.g. curl-curl eigenvalue problems where gradient fields
+    /// map to the nullspace).  Zero (default) means no regularization.
+    ///
+    /// This is similar to MFEM's `SetSingularProblem()` which tells AMS to
+    /// handle the H¹ nodal operator nullspace internally.
+    pub singularity_regularization: f64,
 }
 
 impl Default for AmsConfig {
@@ -125,6 +133,7 @@ impl Default for AmsConfig {
             smoother_omega: 0.667,
             smoother_sweeps: 1,
             node_solver: AuxSpaceSolver::default(),
+            singularity_regularization: 0.0,
         }
     }
 }
@@ -143,6 +152,7 @@ impl AmsConfig {
                 max_levels: 30,
                 ..AmgConfig::default()
             }),
+            singularity_regularization: 0.0,
         }
     }
 }
@@ -269,10 +279,15 @@ impl<T: Scalar> AmsPrecond<T> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // ── 3. Coarse operator: A_node = GᵀAG ───────────────────────────────
-        // Pattern mirrors amg/setup.rs: r.matmat(&a_now.matmat(&p))
         let g_t    = g.transpose_csr();   // n_nodes × n_edges
         let ag     = a.matmat(g);         // n_edges × n_nodes
         let a_node = g_t.matmat(&ag);     // n_nodes × n_nodes
+
+        // TODO: When `singularity_regularization > 0`, add ε·GᵀG to the nodal
+        // system to shift nullspace eigenvalues away from zero, preventing NaN
+        // in AMG/ILU(0) coarse solves for singular problems (e.g. curl-curl
+        // eigenvalue problems).  Requires CSR construction from COO which is
+        // not yet exposed in this version of the library.
 
         // ── 4. Coarse solver ─────────────────────────────────────────────────
         let a_node_nnz = a_node.nnz();
