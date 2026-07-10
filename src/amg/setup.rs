@@ -16,7 +16,7 @@ use crate::amg::{
     smoother::{SmootherType},
     strength::strong_connections,
 };
-use crate::core::scalar::Scalar;
+use crate::core::scalar::ComplexScalar;
 use crate::sparse::CsrMatrix;
 
 /// Coarsening strategy selection.
@@ -104,7 +104,7 @@ impl<T: Clone> Clone for AmgHierarchy<T> {
     }
 }
 
-impl<T: Scalar> AmgHierarchy<T> {
+impl<T: ComplexScalar> AmgHierarchy<T> {
     /// Build the AMG hierarchy for operator `a`.
     pub fn build(a: CsrMatrix<T>, config: AmgConfig) -> Self {
         let mut levels: Vec<AmgLevel<T>> = Vec::new();

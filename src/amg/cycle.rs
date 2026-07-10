@@ -17,9 +17,10 @@
 //! F-cycle calls the coarse level twice: first with V, then with F (recursive).
 
 use crate::amg::{setup::AmgHierarchy, smoother::{smooth_with_hint, SmootherType}};
-use crate::core::{operator::LinearOperator, scalar::{Scalar}, vector::{DenseVec, Vector}};
+use crate::core::{operator::LinearOperator, scalar::{ComplexScalar, Scalar}, vector::{DenseVec, Vector}};
+use num_traits::Zero;
 
-struct LevelScratch<T: Scalar> {
+struct LevelScratch<T: ComplexScalar> {
     ax: DenseVec<T>,
     res: DenseVec<T>,
     coarse_rhs: DenseVec<T>,
@@ -27,7 +28,7 @@ struct LevelScratch<T: Scalar> {
     pe: DenseVec<T>,
 }
 
-impl<T: Scalar> LevelScratch<T> {
+impl<T: ComplexScalar> LevelScratch<T> {
     fn new(n: usize, nc: usize) -> Self {
         Self {
             ax: DenseVec::zeros(n),
@@ -39,11 +40,11 @@ impl<T: Scalar> LevelScratch<T> {
     }
 }
 
-pub(crate) struct CycleWorkspace<T: Scalar> {
+pub(crate) struct CycleWorkspace<T: ComplexScalar> {
     levels: Vec<LevelScratch<T>>,
 }
 
-impl<T: Scalar> CycleWorkspace<T> {
+impl<T: ComplexScalar> CycleWorkspace<T> {
     pub(crate) fn new(hier: &AmgHierarchy<T>) -> Self {
         let levels = hier.levels
             .iter()
@@ -57,7 +58,7 @@ impl<T: Scalar> CycleWorkspace<T> {
     }
 }
 
-fn residual_norm_into<T: Scalar>(
+fn residual_norm_into<T: ComplexScalar>(
     a: &crate::sparse::CsrMatrix<T>,
     x: &DenseVec<T>,
     b: &DenseVec<T>,
@@ -66,14 +67,10 @@ fn residual_norm_into<T: Scalar>(
     a.apply(x, ax);
     let bs = b.as_slice();
     let axs = ax.as_slice();
-    let nrm2 = (0..b.len())
-        .map(|i| {
-            let diff = bs[i] - axs[i];
-            diff * diff
-        })
-        .fold(T::zero(), |acc, value| acc + value)
-        .sqrt();
-    num_traits::ToPrimitive::to_f64(&nrm2).unwrap_or(f64::INFINITY)
+    let nrm = (0..b.len())
+        .map(|i| (bs[i] - axs[i]).abs())
+        .fold(T::Real::zero(), |s, d| s + d * d);
+    num_traits::ToPrimitive::to_f64(&nrm.sqrt()).unwrap_or(f64::INFINITY)
 }
 
 /// Number of coarse-level recursions per cycle level.
@@ -88,7 +85,7 @@ pub enum CycleType {
     K { inner_iters: usize },
 }
 
-impl<T: Scalar> AmgHierarchy<T> {
+impl<T: ComplexScalar> AmgHierarchy<T> {
     /// Apply one AMG cycle as a preconditioner:  `x ← M⁻¹ b`  (x starts at 0).
     ///
     /// Records ‖b - A x_after‖ / ‖b - A x_before‖ in `self.last_cycle_rate`
@@ -121,7 +118,7 @@ impl<T: Scalar> AmgHierarchy<T> {
     }
 }
 
-fn vcycle<T: Scalar>(
+fn vcycle<T: ComplexScalar>(
     hier:  &AmgHierarchy<T>,
     workspace: &mut [LevelScratch<T>],
     level: usize,
@@ -154,7 +151,10 @@ fn vcycle<T: Scalar>(
     // Residual: res = b - A x.
     let n = b.len();
     lv.a.apply(x, &mut scratch.ax);
-    crate::simd::dense_ops::simd_sub(b.as_slice(), scratch.ax.as_slice(), scratch.res.as_mut_slice());
+    let bs = b.as_slice();
+    let axs = scratch.ax.as_slice();
+    let rs = scratch.res.as_mut_slice();
+    for i in 0..n { rs[i] = bs[i] - axs[i]; }
 
     // Restrict: r_c = R * res.
     r.apply(&scratch.res, &mut scratch.coarse_rhs);
@@ -203,7 +203,7 @@ fn vcycle<T: Scalar>(
 /// Solves `A_coarse * e = b_coarse` for exactly `max_iter` iterations
 /// using vcycle(level, V) as the preconditioner.  No convergence check
 /// is performed — the fixed iteration count is intentional for the K-cycle.
-fn inner_cg_solve<T: Scalar>(
+fn inner_cg_solve<T: ComplexScalar>(
     hier:     &AmgHierarchy<T>,
     workspace: &mut [LevelScratch<T>],
     level:    usize,
@@ -218,7 +218,10 @@ fn inner_cg_solve<T: Scalar>(
     let mut ax = DenseVec::zeros(n);
     lv.a.apply(x, &mut ax);
     let mut r = DenseVec::zeros(n);
-    crate::simd::dense_ops::simd_sub(b.as_slice(), ax.as_slice(), r.as_mut_slice());
+    let bs = b.as_slice();
+    let axs = ax.as_slice();
+    let rs = r.as_mut_slice();
+    for i in 0..n { rs[i] = bs[i] - axs[i]; }
 
     // z = M^{-1} r  (one V-cycle applied to r, not b)
     let mut z = DenseVec::zeros(n);
@@ -233,7 +236,7 @@ fn inner_cg_solve<T: Scalar>(
         lv.a.apply(&p, &mut v);
 
         let pv = dot_dense(&p, &v);
-        if pv.abs() < T::machine_epsilon() * T::from_f64(1e4) { break; }
+        if pv.abs() < T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e4) { break; }
         let alpha = rho / pv;
 
         // x += alpha * p
@@ -254,7 +257,7 @@ fn inner_cg_solve<T: Scalar>(
         vcycle(hier, workspace, level, &r, &mut z, CycleType::V);
 
         let rho_new = dot_dense(&r, &z);
-        if rho.abs() < T::machine_epsilon() * T::from_f64(1e4) { break; }
+        if rho.abs() < T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e4) { break; }
         let beta = rho_new / rho;
         rho = rho_new;
 
@@ -267,7 +270,7 @@ fn inner_cg_solve<T: Scalar>(
     }
 }
 
-fn dot_dense<T: Scalar>(a: &DenseVec<T>, b: &DenseVec<T>) -> T {
+fn dot_dense<T: ComplexScalar>(a: &DenseVec<T>, b: &DenseVec<T>) -> T {
     a.as_slice().iter().zip(b.as_slice().iter())
         .fold(T::zero(), |s, (&ai, &bi)| s + ai * bi)
 }

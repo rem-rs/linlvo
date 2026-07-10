@@ -4,11 +4,12 @@
 //! The inner dense-vector update kernels (AXPBY, element-wise scale) are
 //! dispatched to AVX2 on x86-64 and fall back to scalar on other targets.
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::{ComplexScalar, Scalar};
 use crate::core::vector::{DenseVec, Vector};
 use crate::core::operator::LinearOperator;
 use crate::sparse::CsrMatrix;
 use crate::simd::dense_ops::{simd_axpby, simd_axpy};
+use num_traits::Zero;
 
 /// SIMD-accelerated Jacobi smoother: `x ← x + ω·D⁻¹·(b - A·x)`.
 ///
@@ -103,7 +104,7 @@ fn jacobi_scale_simd<T: Scalar>(
     jacobi_scale_scalar(x, diag, v, alpha);
 }
 #[inline]
-fn jacobi_scale_scalar<T: Scalar>(
+fn jacobi_scale_scalar<T: ComplexScalar>(
     x: &mut [T],
     diag: &[T],
     v: &[T],
@@ -328,9 +329,176 @@ pub fn chebyshev_smooth_simd<T: Scalar>(
     }
 }
 
+// ─── Scalar-based smoother variants for ComplexScalar ────────────────────────
+//
+// These variants use scalar loops instead of SIMD, making them compatible with
+// all ComplexScalar types including Complex<f64>.  They are functionally
+// equivalent to the SIMD-accelerated variants above.
+
+/// Jacobi smoother (scalar, ComplexScalar-compatible).
+pub fn jacobi_smooth<T: ComplexScalar>(
+    a: &CsrMatrix<T>,
+    x: &mut DenseVec<T>,
+    b: &DenseVec<T>,
+    omega: T,
+    iterations: usize,
+) {
+    let n = x.len();
+    debug_assert_eq!(a.nrows(), n);
+    debug_assert_eq!(a.ncols(), n);
+    debug_assert_eq!(b.len(), n);
+
+    let diag = a.diag();
+    let mut r = b.clone();
+    let mut ax = DenseVec::zeros(n);
+
+    for _ in 0..iterations {
+        a.spmv(x.as_slice(), &mut ax.as_mut_slice());
+        for i in 0..n {
+            r.as_mut_slice()[i] = b.as_slice()[i] - ax.as_slice()[i];
+        }
+        jacobi_scale_scalar(x.as_mut_slice(), &diag, &r.as_slice(), omega);
+    }
+}
+
+/// Gauss-Seidel smoother (scalar, ComplexScalar-compatible).
+pub fn gs_smooth<T: ComplexScalar>(
+    a: &CsrMatrix<T>,
+    x: &mut DenseVec<T>,
+    b: &DenseVec<T>,
+    symmetric: bool,
+    iterations: usize,
+) {
+    let n = x.len();
+    debug_assert_eq!(a.nrows(), n);
+    debug_assert_eq!(a.ncols(), n);
+    debug_assert_eq!(b.len(), n);
+
+    let rp = a.row_ptr();
+    let ci = a.col_idx();
+    let vs = a.values();
+    let bs = b.as_slice();
+
+    for _ in 0..iterations {
+        // Forward sweep
+        {
+            let xs = x.as_mut_slice();
+            for i in 0..n {
+                let start = rp[i];
+                let end   = rp[i + 1];
+                let mut diag = T::zero();
+                let mut off_sum = T::zero();
+                for k in start..end {
+                    let j = ci[k];
+                    if j == i {
+                        diag = vs[k];
+                    } else {
+                        off_sum += vs[k] * xs[j];
+                    }
+                }
+                if diag != T::zero() {
+                    xs[i] = (bs[i] - off_sum) / diag;
+                }
+            }
+        }
+
+        if symmetric {
+            // Backward sweep
+            let xs = x.as_mut_slice();
+            for i in (0..n).rev() {
+                let start = rp[i];
+                let end   = rp[i + 1];
+                let mut diag = T::zero();
+                let mut off_sum = T::zero();
+                for k in start..end {
+                    let j = ci[k];
+                    if j == i {
+                        diag = vs[k];
+                    } else {
+                        off_sum += vs[k] * xs[j];
+                    }
+                }
+                if diag != T::zero() {
+                    xs[i] = (bs[i] - off_sum) / diag;
+                }
+            }
+        }
+    }
+}
+
+/// Chebyshev smoother (scalar, ComplexScalar-compatible).
+pub fn chebyshev_smooth<T: ComplexScalar>(
+    a:          &CsrMatrix<T>,
+    x:          &mut DenseVec<T>,
+    b:          &DenseVec<T>,
+    lambda_min: T,
+    lambda_max: T,
+    degree:     usize,
+) {
+    let n = b.len();
+    if n == 0 || degree == 0 { return; }
+
+    let sigma = (lambda_max + lambda_min) / T::from_real(<T::Real as Scalar>::from_f64(2.0));
+    let delta = (lambda_max - lambda_min) / T::from_real(<T::Real as Scalar>::from_f64(2.0));
+    if sigma.abs() < T::machine_epsilon() { return; }
+
+    let theta              = T::one() / sigma;
+    let half_delta_over_sigma = delta / (sigma * T::from_real(<T::Real as Scalar>::from_f64(2.0)));
+    let qdsa               = half_delta_over_sigma * half_delta_over_sigma;
+    let two_theta          = theta * T::from_real(<T::Real as Scalar>::from_f64(2.0));
+
+    let rp = a.row_ptr();
+    let ci = a.col_idx();
+    let vs = a.values();
+    let mut diag_inv = vec![T::one(); n];
+    for i in 0..n {
+        for k in rp[i]..rp[i + 1] {
+            if ci[k] == i {
+                let d = vs[k];
+                if d.abs() > T::machine_epsilon() { diag_inv[i] = T::one() / d; }
+                break;
+            }
+        }
+    }
+
+    let mut ax    = DenseVec::zeros(n);
+    let mut r_vec = DenseVec::zeros(n);
+    let mut d_vec = vec![T::zero(); n];
+
+    let bs = b.as_slice();
+    let mut rho_prev = T::zero();
+
+    for k in 0..degree {
+        a.apply(x, &mut ax);
+        {
+            let axs = ax.as_slice();
+            let rs  = r_vec.as_mut_slice();
+            for i in 0..n { rs[i] = diag_inv[i] * (bs[i] - axs[i]); }
+        }
+
+        if k == 0 {
+            let rs = r_vec.as_slice();
+            for i in 0..n { d_vec[i] = theta * rs[i]; }
+            rho_prev = T::one();
+        } else {
+            let rho = T::one() / (T::one() - qdsa * rho_prev);
+            // d_k = ρ_k · (ρ_k - 1) · d_{k-1} + ρ_k · 2θ · r  (scalar)
+            let rs = r_vec.as_slice();
+            for i in 0..n {
+                d_vec[i] = rho * ((rho - T::one()) * d_vec[i] + two_theta * rs[i]);
+            }
+            rho_prev = rho;
+        }
+
+        // x ← x + d  (scalar)
+        let xs = x.as_mut_slice();
+        for i in 0..n { xs[i] += d_vec[i]; }
+    }
+}
+
 /// Estimate spectral radius of `D⁻¹A` via power iteration (used to auto-tune
 /// Chebyshev bounds).  Public so callers can cache the result across sweeps.
-pub fn estimate_spectral_radius<T: Scalar>(a: &CsrMatrix<T>, n_iter: usize) -> T {
+pub fn estimate_spectral_radius<T: ComplexScalar>(a: &CsrMatrix<T>, n_iter: usize) -> T {
     let n = a.nrows();
     if n == 0 { return T::zero(); }
 
@@ -359,12 +527,14 @@ pub fn estimate_spectral_radius<T: Scalar>(a: &CsrMatrix<T>, n_iter: usize) -> T
         let ws = w.as_mut_slice();
         for i in 0..n { ws[i] *= diag_inv[i]; }
 
-        let norm_sq: f64 = ws.iter()
-            .map(|&xi| { let f: f64 = num_traits::ToPrimitive::to_f64(&xi).unwrap_or(0.0); f * f })
-            .sum();
-        rho = T::from_f64(norm_sq.sqrt());
+        // L2 norm via abs() — works for both real and complex scalars.
+        let norm_sq = ws.iter()
+            .map(|&xi| { let a = xi.abs(); a * a })
+            .fold(T::Real::zero(), |s, v| s + v);
+        let norm_f64: f64 = num_traits::ToPrimitive::to_f64(&norm_sq).unwrap_or(0.0);
+        rho = T::from_f64(norm_f64.sqrt());
 
-        if rho > T::from_f64(1e-14) {
+        if rho.abs() > <T::Real as Scalar>::from_f64(1e-14) {
             let inv = T::one() / rho;
             let vs2 = v.as_mut_slice();
             for i in 0..n { vs2[i] = ws[i] * inv; }

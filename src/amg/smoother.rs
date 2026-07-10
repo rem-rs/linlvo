@@ -4,12 +4,12 @@
 //! [`crate::simd::smoother`].  The private scalar helpers (jacobi_sweep,
 //! gs_forward, gs_backward, chebyshev_sweep) have been removed.
 
-use crate::core::scalar::Scalar;
+use crate::core::scalar::{ComplexScalar, Scalar};
 use crate::core::vector::DenseVec;
 use crate::sparse::CsrMatrix;
 use crate::simd::smoother::{
-    jacobi_smooth_simd, gs_smooth_simd,
-    chebyshev_smooth_simd, estimate_spectral_radius,
+    jacobi_smooth, gs_smooth, chebyshev_smooth,
+    estimate_spectral_radius,
 };
 
 /// Smoother variant.
@@ -29,7 +29,7 @@ pub enum SmootherType {
 }
 
 /// Apply `n_sweeps` pre-smoothing iterations: `x ← smooth(A, x, b)`.
-pub fn smooth<T: Scalar>(
+pub fn smooth<T: ComplexScalar>(
     a:       &CsrMatrix<T>,
     x:       &mut DenseVec<T>,
     b:       &DenseVec<T>,
@@ -43,7 +43,7 @@ pub fn smooth<T: Scalar>(
 ///
 /// When the smoother is `Chebyshev` and `spectral_radius` is `Some`, the
 /// expensive power-iteration estimate is skipped.
-pub fn smooth_with_hint<T: Scalar>(
+pub fn smooth_with_hint<T: ComplexScalar>(
     a:       &CsrMatrix<T>,
     x:       &mut DenseVec<T>,
     b:       &DenseVec<T>,
@@ -54,13 +54,13 @@ pub fn smooth_with_hint<T: Scalar>(
     match smoother {
         SmootherType::WeightedJacobi { omega } => {
             let omega = T::from_f64(*omega);
-            jacobi_smooth_simd(a, x, b, omega, n_sweeps);
+            jacobi_smooth(a, x, b, omega, n_sweeps);
         }
         SmootherType::GaussSeidel => {
-            gs_smooth_simd(a, x, b, false, n_sweeps);
+            gs_smooth(a, x, b, false, n_sweeps);
         }
         SmootherType::SymmetricGaussSeidel => {
-            gs_smooth_simd(a, x, b, true, n_sweeps);
+            gs_smooth(a, x, b, true, n_sweeps);
         }
         SmootherType::Chebyshev { degree, ratio } => {
             // Use cached ρ(D⁻¹A) or estimate via power iterations.
@@ -68,12 +68,12 @@ pub fn smooth_with_hint<T: Scalar>(
             let lambda_max = rho * T::from_f64(1.1);
             let lambda_min = lambda_max / T::from_f64(*ratio);
             // Guard: if estimate is zero/tiny, fall back to Jacobi.
-            if lambda_max.abs() < T::from_f64(1e-14) {
-                let omega = T::from_f64(0.667);
-                jacobi_smooth_simd(a, x, b, omega, n_sweeps);
+            if lambda_max.abs() < <T::Real as Scalar>::from_f64(1e-14) {
+                let omega = T::from_real(<T::Real as Scalar>::from_f64(0.667));
+                jacobi_smooth(a, x, b, omega, n_sweeps);
             } else {
                 for _ in 0..n_sweeps {
-                    chebyshev_smooth_simd(a, x, b, lambda_min, lambda_max, *degree);
+                    chebyshev_smooth(a, x, b, lambda_min, lambda_max, *degree);
                 }
             }
         }

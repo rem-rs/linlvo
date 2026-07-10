@@ -13,7 +13,7 @@ pub use setup::{AmgConfig, AmgHierarchy, CoarsenStrategy, AmgLevel, LevelInfo};
 pub use smoother::SmootherType;
 pub use cycle::CycleType;
 
-use crate::core::{preconditioner::Preconditioner, scalar::Scalar, vector::DenseVec};
+use crate::core::{preconditioner::Preconditioner, scalar::ComplexScalar, vector::DenseVec};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrd};
 
@@ -25,7 +25,7 @@ static AMGPRECOND_ID: AtomicU64 = AtomicU64::new(1);
 /// Workspace memory is allocated per-thread via `thread_local!` so that
 /// concurrent preconditioner applications (e.g., inside a rayon parallel
 /// region) never contend on a shared lock.
-pub struct AmgPrecond<T: Scalar> {
+pub struct AmgPrecond<T: ComplexScalar> {
     pub hier:  AmgHierarchy<T>,
     pub cycle: CycleType,
     /// Unique ID — used to key the per-thread workspace so that multiple
@@ -33,7 +33,7 @@ pub struct AmgPrecond<T: Scalar> {
     id: u64,
 }
 
-impl<T: Scalar> AmgPrecond<T> {
+impl<T: ComplexScalar> AmgPrecond<T> {
     pub fn new(hier: AmgHierarchy<T>) -> Self {
         AmgPrecond {
             hier,
@@ -47,7 +47,7 @@ impl<T: Scalar> AmgPrecond<T> {
     }
 }
 
-impl<T: Scalar> Preconditioner for AmgPrecond<T> {
+impl<T: ComplexScalar> Preconditioner for AmgPrecond<T> {
     type Vector = DenseVec<T>;
 
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
