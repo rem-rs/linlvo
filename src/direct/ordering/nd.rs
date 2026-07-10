@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn nd_empty() {
         let a: CsrMatrix<f64> = CsrMatrix::from_coo(&CooMatrix::new(0, 0));
-        assert_eq!(nd(&a), vec![]);
+        assert_eq!(nd(&a), Vec::<usize>::new());
     }
 
     #[test]

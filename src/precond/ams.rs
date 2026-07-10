@@ -47,7 +47,7 @@ use crate::core::{
     vector::DenseVec,
 };
 use crate::precond::ilu0::Ilu0Precond;
-use crate::sparse::CsrMatrix;
+use crate::sparse::{CooMatrix, CsrMatrix};
 
 /// Profiling summary for an AMG auxiliary-space solve.
 #[derive(Debug, Clone)]
@@ -281,13 +281,28 @@ impl<T: Scalar> AmsPrecond<T> {
         // ── 3. Coarse operator: A_node = GᵀAG ───────────────────────────────
         let g_t    = g.transpose_csr();   // n_nodes × n_edges
         let ag     = a.matmat(g);         // n_edges × n_nodes
-        let a_node = g_t.matmat(&ag);     // n_nodes × n_nodes
+        let mut a_node = g_t.matmat(&ag);     // n_nodes × n_nodes
 
-        // TODO: When `singularity_regularization > 0`, add ε·GᵀG to the nodal
+        // When `singularity_regularization > 0`, add ε·GᵀG to the nodal
         // system to shift nullspace eigenvalues away from zero, preventing NaN
         // in AMG/ILU(0) coarse solves for singular problems (e.g. curl-curl
-        // eigenvalue problems).  Requires CSR construction from COO which is
-        // not yet exposed in this version of the library.
+        // eigenvalue problems).
+        let eps_f64 = config.singularity_regularization;
+        if eps_f64 > 0.0 {
+            let eps = T::from_f64(eps_f64);
+            // GᵀG has the same dimensions as GᵀAG: n_nodes × n_nodes.
+            // The `g_t` transpose from step 3.1 is still live.
+            let gtg = g_t.matmat(g);       // n_nodes × n_nodes
+            // Merge a_node + ε·GᵀG via COO (CooMatrix handles duplicate summing).
+            let mut coo = CooMatrix::new(n_nodes, n_nodes);
+            for (r, c, v) in a_node.triplets() {
+                coo.push(r, c, v);
+            }
+            for (r, c, v) in gtg.triplets() {
+                coo.push(r, c, eps * v);
+            }
+            a_node = CsrMatrix::from_coo(&coo);
+        }
 
         // ── 4. Coarse solver ─────────────────────────────────────────────────
         let a_node_nnz = a_node.nnz();

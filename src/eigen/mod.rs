@@ -23,6 +23,7 @@ pub mod lobpcg;
 pub mod svd;
 pub mod qep;
 pub mod nep;
+pub mod ame;
 
 pub use power::PowerIter;
 pub use inverse::{InverseIter, RayleighQuotientIter};
@@ -35,6 +36,7 @@ pub use lobpcg::Lobpcg;
 pub use svd::{LanczosSvd, SvdResult};
 pub use qep::QuadraticEigen;
 pub use nep::{NonlinearOperator, NepNewton};
+pub use ame::{AmeSolver, AmeConfig, AmeResult};
 
 use crate::core::{error::SolverError, scalar::Scalar, vector::{DenseVec, Vector}};
 

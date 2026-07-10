@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn rcm_empty() {
         let a: CsrMatrix<f64> = CsrMatrix::from_coo(&CooMatrix::new(0, 0));
-        assert_eq!(rcm(&a), vec![]);
+        assert_eq!(rcm(&a), Vec::<usize>::new());
     }
 
     #[test]

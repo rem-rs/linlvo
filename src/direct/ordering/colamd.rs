@@ -195,6 +195,6 @@ mod tests {
     #[test]
     fn colamd_empty() {
         let a: CsrMatrix<f64> = CsrMatrix::from_coo(&CooMatrix::new(0, 0));
-        assert_eq!(colamd(&a), vec![]);
+        assert_eq!(colamd(&a), Vec::<usize>::new());
     }
 }
