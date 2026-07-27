@@ -1,5 +1,6 @@
 pub mod jacobi;
 pub mod sor;
+pub mod gs_smoother;
 pub mod ilu0;
 pub mod iluk;
 pub mod ilut;
@@ -13,6 +14,7 @@ pub mod ads;
 pub mod fieldsplit;
 
 pub use jacobi::JacobiPrecond;
+pub use gs_smoother::GaussSeidelSmoother;
 pub use sor::{SorPrecond, SsorPrecond};
 pub use ilu0::Ilu0Precond;
 pub use iluk::IlukPrecond;

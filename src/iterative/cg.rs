@@ -156,7 +156,19 @@ impl<T: Scalar> ConjugateGradient<T> {
         op.apply(x, &mut workspace.ax);
         crate::simd::dense_ops::simd_sub(b.as_slice(), workspace.ax.as_slice(), workspace.r.as_mut_slice());
 
+        // Compute z = M⁻¹ r (preconditioner) or z = r (no preconditioner).
         apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
+
+        // MFEM-compatible convergence: use (B r, r) / (B r₀, r₀) when
+        // a preconditioner is present (preconditioned residual energy),
+        // or ‖r‖/‖b‖ otherwise (true residual).
+        let rz_initial = if precond.is_some() {
+            let rz0 = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
+            if rz0 == T::zero() { T::one() } else { rz0 }
+        } else {
+            norm_b_f * norm_b_f  // ‖r₀‖² / ‖b‖² = (‖r₀‖/‖b‖)² → initial true rel. res. squared
+        };
+
         workspace.p.copy_from(&workspace.z);
 
         let mut rz = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
@@ -255,8 +267,17 @@ impl<T: Scalar> ConjugateGradient<T> {
             if params.verbose == VerboseLevel::Iterations {
                 println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
             }
-            if allow_early_exit && (res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)) {
-                if params.verbose != VerboseLevel::Silent {
+            // MFEM-compatible convergence: when a preconditioner is present,
+            // use the preconditioned residual energy (B r, r) which decreases
+            // faster than the true residual (‖r‖/‖b‖).  See MFEM's CGSolver::Mult.
+            let converged = if precond.is_some() {
+                rz_new.abs() / rz_initial.abs() < T::from_f64(params.rtol)
+                    || workspace.r.norm2() < T::from_f64(params.atol)
+            } else {
+                res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)
+            };
+            if allow_early_exit && converged {
+                if params.verbose == VerboseLevel::Iterations {
                     println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
                 }
                 return Ok(SolverResult {

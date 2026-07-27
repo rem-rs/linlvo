@@ -48,7 +48,7 @@ pub use crate::core::{
 pub use num_complex::Complex;
 
 pub use crate::precond::{
-    JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
+    GaussSeidelSmoother, JacobiPrecond, SorPrecond, SsorPrecond, Ilu0Precond,
     IlukPrecond, IlutPrecond, Icc0Precond, IldltPrecond, SpaiPrecond,
     AdditivePrecond, MultiplicativePrecond, BlockJacobiPrecond,
     AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile,
