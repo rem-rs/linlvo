@@ -27,3 +27,10 @@ pub use block_jacobi::BlockJacobiPrecond;
 pub use ams::{AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile};
 pub use ads::{AdsPrecond, AdsConfig, AdsProfile};
 pub use fieldsplit::{FieldSplitPrecond, SplitMode};
+
+/// MFEM-compatible alias: block-diagonal preconditioner over contiguous fields.
+///
+/// Construct with `SplitMode::BlockJacobi` to match MFEM's
+/// `BlockDiagonalPreconditioner` (used in ex5, ex4, Stokes examples, etc.),
+/// or `SplitMode::BlockTriangular` for lower-triangular coupling.
+pub type BlockDiagonalPreconditioner<T> = FieldSplitPrecond<T>;

@@ -92,14 +92,17 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
             });
         }
 
-        // ── Initialise Lanczos (following Matlab SOL naming) ─────────────────
+        // ── Initialise Lanczos ────────────────────────────────────────────────
         //   r2  = current "unnormalized" Lanczos vector  (= beta * v_k)
+        //        In the M-inner-product space the first Lanczos vector
+        //        satisfies  β₁ v₁ = M⁻¹ r₀, so r₂ must be M⁻¹ r₀, not r₀.
         //   r1  = previous one                           (= beta_prev * v_{k-1})
-        //   y   = M⁻¹ * r2
+        //   y   = M⁻¹ * r (computed above — we use it as a workspace)
         let mut oldb  = T::zero();
         let mut beta  = beta1;
-        let mut r1    = r.clone();    // r1 = b - Ax₀
-        let mut r2    = r.clone();    // r2 starts as r1
+        let mut r1    = r.clone();    // r1 starts as residual; overwritten each iter
+        let mut r2    = y.clone();    // r2 = M⁻¹ r₀ = β₁ v₁  ✓
+        // y is reused below as the preconditioned workspace
 
         // Paige–Saunders QR state
         let mut dbar   = T::zero();
@@ -116,41 +119,53 @@ impl<T: Scalar> KrylovSolver for Minres<T> {
             // ── Lanczos step ──────────────────────────────────────────────────
             let s = T::one() / beta;
 
-            // v = r2 / beta  (current normalized Lanczos vector)
+            // v = r2 / beta  (= v_k, the current M-orthonormal Lanczos vector)
             let mut v = r2.clone();
             v.scale(s);
 
-            // Compute A * v
+            // av = A * v_k   (unmodified — saved for alpha and beta²)
             let mut av = b.zero_like();
             op.apply(&v, &mut av);
 
-            // Subtract previous Lanczos component: av -= (beta / oldb) * r1
-            // (Only from iter 2 onwards; when k=0, oldb=0 and r1=r2 so skip)
-            if k > 0 {
-                let scale = beta / oldb;
-                let avs = av.as_mut_slice();
-                let r1s = r1.as_slice();
-                for i in 0..n { avs[i] -= scale * r1s[i]; }
-            }
-
-            // alpha = v' * av
+            // alpha = v_k · A v_k  (from unmodified av)
             let alpha = dot_slice(v.as_slice(), av.as_slice());
 
-            // Subtract current component: av -= (alpha / beta) * r2
+            // ── Correct preconditioned Lanczos recurrence ──────────────────
+            //   β_{k+1} v_{k+1} = M⁻¹ A v_k - α_k v_k - β_k v_{k-1}
+            //
+            // Apply M⁻¹ ONLY to A v_k, then do the orthogonalisation in the
+            // M⁻¹-space (so the subtracted terms are α v_k and β v_{k-1},
+            // NOT α M⁻¹ v_k and β M⁻¹ v_{k-1}).
+
+            // 1. Store the unmodified av for beta² (av = A v_k)
+            let av_unmod = av.clone();
+
+            // 2. y = M⁻¹ * (A v_k)   (precondition A v_k only)
+            apply_precond_or_copy(precond, &av, &mut y);
+
+            // 3. Lanczos orthogonalisation in the preconditioned space:
+            //    y -= α v_k - β v_{k-1}
             {
-                let avs = av.as_mut_slice();
+                let ys = y.as_mut_slice();
                 let r2s = r2.as_slice();
-                for i in 0..n { avs[i] -= (alpha / beta) * r2s[i]; }
+                for i in 0..n { ys[i] -= (alpha / beta) * r2s[i]; }
+            }
+            if k > 0 {
+                let scale = beta / oldb;
+                let ys = y.as_mut_slice();
+                let r1s = r1.as_slice();
+                for i in 0..n { ys[i] -= scale * r1s[i]; }
             }
 
-            // Advance Lanczos storage
+            // 4. Shift: r1 = old r2, r2 = y (= β_{k+1} v_{k+1})
             r1.copy_from(&r2);
+            r2.copy_from(&y);
 
-            // r2 = M⁻¹ * av
-            apply_precond_or_copy(precond, &av, &mut r2);
-
+            // 5. beta_{k+1}² = (A v_k) · (β_{k+1} v_{k+1})
+            //    (av_unmod · r2 = (A v_k) · (M⁻¹ A v_k - α v_k - β v_{k-1})
+            //     which equals β_{k+1}² by the M-orthogonality — see derivation)
             oldb = beta;
-            let beta_sq = dot_slice(av.as_slice(), r2.as_slice());
+            let beta_sq = dot_slice(av_unmod.as_slice(), r2.as_slice());
             beta = if beta_sq > T::zero() { beta_sq.sqrt() } else { T::zero() };
 
             // ── Paige–Saunders QR update ──────────────────────────────────────
