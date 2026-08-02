@@ -269,9 +269,13 @@ impl<T: Scalar> ConjugateGradient<T> {
             }
             // MFEM-compatible convergence: when a preconditioner is present,
             // use the preconditioned residual energy (B r, r) which decreases
-            // faster than the true residual (‖r‖/‖b‖).  See MFEM's CGSolver::Mult.
+            // faster than the true residual (‖r‖/‖b‖).  MFEM's CGSolver::Mult
+            // stops when (B r, r) ≤ (B r0, r0)·rel_tol² (solvers.cpp: nom ≤
+            // nom0*rel_tol*rel_tol) — note the SQUARE of the relative
+            // tolerance; using rtol itself stopped ~1e6× too early.
             let converged = if precond.is_some() {
-                rz_new.abs() / rz_initial.abs() < T::from_f64(params.rtol)
+                let rtol = T::from_f64(params.rtol);
+                rz_new.abs() / rz_initial.abs() < rtol * rtol
                     || workspace.r.norm2() < T::from_f64(params.atol)
             } else {
                 res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)
