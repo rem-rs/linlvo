@@ -145,6 +145,14 @@ impl<'p, T: Scalar> Lobpcg<'p, T> {
                 col.norm2()
             };
             if nrm > T::zero() { col.scale(T::one() / nrm); }
+            // Filter nullspace components from the initial iterate (cf. HYPRE
+            // AME: the divergence-free projector removes the curl-curl
+            // kernel).  Otherwise the Rayleigh quotient is polluted by λ=0.
+            if let Some(proj) = self.projector {
+                let mut sp = DenseVec::zeros(n);
+                proj.apply_precond(&col, &mut sp);
+                col = sp;
+            }
             x_cols.push(col);
         }
 
@@ -257,6 +265,17 @@ impl<'p, T: Scalar> Lobpcg<'p, T> {
             let s = if s.len() >= 2 * k {
                 let compressed = b_orthonormalise_basis(s.clone(), has_mass, &apply_b);
                 if compressed.len() >= k { compressed } else { s }
+            } else { s };
+            // Remove nullspace components from the whole search space before
+            // the Rayleigh-Ritz (cf. HYPRE AME: the divergence-free projector
+            // filters the curl-curl kernel).  Otherwise the Ritz values
+            // include λ=0 and LOBPCG stalls on the nullspace.
+            let s: Vec<DenseVec<T>> = if let Some(proj) = self.projector {
+                s.into_iter().map(|sv| {
+                    let mut sp = DenseVec::zeros(n);
+                    proj.apply_precond(&sv, &mut sp);
+                    sp
+                }).collect()
             } else { s };
 
             // A_S[i,j] = sᵢᵀ A sⱼ
