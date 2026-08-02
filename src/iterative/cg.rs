@@ -259,6 +259,9 @@ impl<T: Scalar> ConjugateGradient<T> {
                     ),
                 });
             }
+            if params.verbose == VerboseLevel::Iterations {
+                println!("    CG iter {:4}  (B r, r) = {:.9e}", k + 1, to_f64(rz_new));
+            }
 
             let res = workspace.r.norm2() / norm_b_f;
             let res_f = to_f64(res);
@@ -268,14 +271,12 @@ impl<T: Scalar> ConjugateGradient<T> {
                 println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
             }
             // MFEM-compatible convergence: when a preconditioner is present,
-            // use the preconditioned residual energy (B r, r) which decreases
-            // faster than the true residual (‖r‖/‖b‖).  MFEM's CGSolver::Mult
-            // stops when (B r, r) ≤ (B r0, r0)·rel_tol² (solvers.cpp: nom ≤
-            // nom0*rel_tol*rel_tol) — note the SQUARE of the relative
-            // tolerance; using rtol itself stopped ~1e6× too early.
+            // use the preconditioned residual energy (B r, r).  The legacy
+            // PCG() helper (solvers.cpp) sets rel_tol = sqrt(RTOLERANCE), so
+            // the energy ratio is compared against rtol itself (NOT rtol²):
+            // (B r, r)/(B r0, r0) < rtol  ⟺  sqrt ratio < sqrt(rtol).
             let converged = if precond.is_some() {
-                let rtol = T::from_f64(params.rtol);
-                rz_new.abs() / rz_initial.abs() < rtol * rtol
+                rz_new.abs() / rz_initial.abs() < T::from_f64(params.rtol)
                     || workspace.r.norm2() < T::from_f64(params.atol)
             } else {
                 res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)
