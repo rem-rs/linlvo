@@ -122,6 +122,15 @@ pub struct AmsConfig {
     /// Two-level cycle structure (additive Hiptmair-Xu or multiplicative
     /// V(1,1); HYPRE AMS default is the V(1,1) cycle).
     pub cycle: AmsCycle,
+    /// Enable the 3-D face (curl) auxiliary space `Pi = [Pi_x, Pi_y, Pi_z]`
+    /// (HYPRE AMS's `HYPRE_AMSSetInterpolations`).
+    ///
+    /// Requires vertex coordinates (via [`AmsPrecond::with_coords`]); when
+    /// enabled together with [`AmsCycle::MultiplicativeV11`] the cycle becomes
+    /// the full 9-step HYPRE AMS `cycle_type = 13` structure
+    /// `GS → Pi_x → Pi_y → Pi_z → nodal → Pi_z → Pi_y → Pi_x → GS`.
+    /// Default: `false` (two-space AMS, as before).
+    pub face_space: bool,
     /// Approximate solver for the nodal Laplacian `GᵀAG`.
     pub node_solver: AuxSpaceSolver,
     /// Regularization added to the diagonal of the nodal system `GᵀAG`.
@@ -141,6 +150,7 @@ impl Default for AmsConfig {
             smoother_sweeps: 1,
             edge_smoother: AmsEdgeSmoother::WeightedJacobi,
             cycle: AmsCycle::Additive,
+            face_space: false,
             node_solver: AuxSpaceSolver::default(),
             singularity_regularization: 0.0,
         }
@@ -191,6 +201,7 @@ impl AmsConfig {
             smoother_sweeps: 3,
             edge_smoother: AmsEdgeSmoother::WeightedJacobi,
             cycle: AmsCycle::Additive,
+            face_space: false,
             node_solver: AuxSpaceSolver::Amg(AmgConfig {
                 coarse_threshold: 64,
                 max_levels: 30,
@@ -271,6 +282,9 @@ pub struct AmsPrecond<T: ComplexScalar> {
     smoother_sweeps: usize,
     /// Approximate solver for the nodal coarse problem GᵀAG.
     node_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
+    /// Face (curl) auxiliary space: `(Pi_d, B_d)` for d = x, y, z, where
+    /// `B_d ≈ (Pi_dᵀ A Pi_d)⁻¹`.  Empty when `AmsConfig::face_space` is off.
+    face_blocks: Vec<(CsrMatrix<T>, Box<dyn Preconditioner<Vector = DenseVec<T>>>)>,
     /// Setup diagnostics for observability and tuning.
     profile: AmsProfile,
 }
@@ -297,6 +311,33 @@ impl<T: ComplexScalar> AmsPrecond<T> {
     pub fn new(
         a:      &CsrMatrix<T>,
         g:      &CsrMatrix<T>,
+        config: AmsConfig,
+    ) -> Result<Self, SolverError> {
+        Self::build(a, g, None, config)
+    }
+
+    /// Build the AMS preconditioner with the 3-D face (curl) auxiliary space.
+    ///
+    /// `coords` are the physical coordinates of the `n_nodes` H¹ vertices,
+    /// row-major `[x, y, z, ...]` (length `3·n_nodes`; 2-D layouts of length
+    /// `2·n_nodes` disable the face space).  With `AmsConfig::face_space` and
+    /// [`AmsCycle::MultiplicativeV11`] this reproduces HYPRE AMS's full
+    /// `cycle_type = 13` structure (three Pi blocks + nodal space).
+    ///
+    /// See [`Self::new`] for the common arguments and error conditions.
+    pub fn with_coords(
+        a:      &CsrMatrix<T>,
+        g:      &CsrMatrix<T>,
+        coords: &[f64],
+        config: AmsConfig,
+    ) -> Result<Self, SolverError> {
+        Self::build(a, g, Some(coords), config)
+    }
+
+    fn build(
+        a:      &CsrMatrix<T>,
+        g:      &CsrMatrix<T>,
+        coords: Option<&[f64]>,
         config: AmsConfig,
     ) -> Result<Self, SolverError> {
         let n_edges = a.nrows();
@@ -370,6 +411,53 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         let a_node_nnz = a_node.nnz();
         let (node_precond, node_solver_profile) = build_aux_solver(a_node, &config.node_solver)?;
 
+        // ── 5. Face (curl) auxiliary space: Pi = [Pi_x, Pi_y, Pi_z] ─────────
+        // HYPRE AMS: Pi_d(e, v) = 0.5·|G(e,v)|·(Gᵀx_d)[e], i.e. half the
+        // d-th component of edge e's vector, distributed over both vertices.
+        // Coarse operator per block: A_Pid = Pi_dᵀ·A·Pi_d (n_nodes × n_nodes).
+        let mut face_blocks: Vec<(CsrMatrix<T>, Box<dyn Preconditioner<Vector = DenseVec<T>>>)> =
+            Vec::new();
+        let dim = coords.map(|c| c.len() / n_nodes).unwrap_or(0);
+        if config.face_space {
+            let coords = coords.ok_or_else(|| SolverError::PrecondSetupFailed {
+                reason: "AMS: face_space requires vertex coordinates (AmsPrecond::with_coords)"
+                    .into(),
+            })?;
+            if !(dim == 3 && coords.len() == dim * n_nodes) {
+                return Err(SolverError::PrecondSetupFailed {
+                    reason: format!(
+                        "AMS: face_space needs 3-D coordinates, got {} entries for {n_nodes} nodes",
+                        coords.len()
+                    ),
+                });
+            }
+            let g_rp = g.row_ptr();
+            let g_ci = g.col_idx();
+            let g_vals = g.values();
+            for d in 0..3 {
+                // t_d[e] = (Gᵀ x_d)[e] = Σ_v G(e,v)·x_d(v)  (edge vector component);
+                // Pi_d[e, v] = 0.5·t_d[e] for both vertices v of edge e.
+                let mut coo = CooMatrix::new(n_edges, n_nodes);
+                for e in 0..n_edges {
+                    let mut t = T::zero();
+                    for p in g_rp[e]..g_rp[e + 1] {
+                        let v = g_ci[p] as usize;
+                        t += g_vals[p] * T::from_f64(coords[v * dim + d]);
+                    }
+                    let t_half = t * T::from_f64(0.5);
+                    for p in g_rp[e]..g_rp[e + 1] {
+                        let v = g_ci[p] as usize;
+                        coo.push(e, v, t_half);
+                    }
+                }
+                let pid = CsrMatrix::from_coo(&coo); // n_edges × n_nodes
+                let pid_t = pid.transpose_csr();
+                let a_pid = pid_t.matmat(&a.matmat(&pid)); // n_nodes × n_nodes
+                let (b_pid, _) = build_aux_solver(a_pid, &config.node_solver)?;
+                face_blocks.push((pid, b_pid));
+            }
+        }
+
         let profile = AmsProfile {
             n_edges,
             n_nodes,
@@ -389,6 +477,7 @@ impl<T: ComplexScalar> AmsPrecond<T> {
             g: g.clone(),
             smoother_sweeps: config.smoother_sweeps,
             node_precond,
+            face_blocks,
             profile,
         })
     }
@@ -418,36 +507,42 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
         }
 
         if matches!(self.cycle, AmsCycle::MultiplicativeV11) {
-            // ── Symmetric two-level V(1,1) cycle (HYPRE AMS cycle 13) ──────
+            // ── Symmetric multiplicative V(1,1) cycle (HYPRE AMS) ───────────
             let mut r = DenseVec::zeros(n_edges);
-            let mut t_node = DenseVec::zeros(n_nodes);
-            let mut s_node = DenseVec::zeros(n_nodes);
 
             // Pre-smoothing: y ← S⁻¹·x (one symmetric GS sweep from zero).
             self.edge_solve(x, y);
 
-            // Coarse correction: y += G·P_v⁻¹·Gᵀ·(x - A·y)
-            self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
-            {
-                let xs = x.as_slice();
-                let rs = r.as_mut_slice();
-                for i in 0..n_edges {
-                    rs[i] = xs[i] - rs[i];
+            if self.face_blocks.is_empty() {
+                // Two-space cycle: GS → nodal → GS.
+                self.residual_of(x, y, &mut r);
+                self.apply_coarse(&self.g, &*self.node_precond, &r, y);
+                self.residual_of(x, y, &mut r);
+                let mut post = DenseVec::zeros(n_edges);
+                self.edge_solve(&r, &mut post);
+                {
+                    let ps = post.as_slice();
+                    let ys = y.as_mut_slice();
+                    for i in 0..n_edges {
+                        ys[i] = ys[i] + ps[i];
+                    }
                 }
+                return;
             }
-            self.g.apply_transpose(&r, &mut t_node);
-            self.node_precond.apply_precond(&t_node, &mut s_node);
-            self.g.spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
 
-            // Post-smoothing: y += S⁻¹·(x - A·y)
-            self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
-            {
-                let xs = x.as_slice();
-                let rs = r.as_mut_slice();
-                for i in 0..n_edges {
-                    rs[i] = xs[i] - rs[i];
-                }
+            // Full HYPRE AMS cycle_type = 13 ("034515430"):
+            // GS → Pi_x → Pi_y → Pi_z → nodal → Pi_z → Pi_y → Pi_x → GS
+            for (pid, b) in &self.face_blocks {
+                self.residual_of(x, y, &mut r);
+                self.apply_coarse(pid, &**b, &r, y);
             }
+            self.residual_of(x, y, &mut r);
+            self.apply_coarse(&self.g, &*self.node_precond, &r, y);
+            for (pid, b) in self.face_blocks.iter().rev() {
+                self.residual_of(x, y, &mut r);
+                self.apply_coarse(pid, &**b, &r, y);
+            }
+            self.residual_of(x, y, &mut r);
             let mut post = DenseVec::zeros(n_edges);
             self.edge_solve(&r, &mut post);
             {
@@ -503,6 +598,33 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
 }
 
 impl<T: ComplexScalar> AmsPrecond<T> {
+    /// Compute `r = x - A·y` (edge residual).
+    fn residual_of(&self, x: &DenseVec<T>, y: &DenseVec<T>, r: &mut DenseVec<T>) {
+        let n_edges = self.n_edges;
+        self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
+        let xs = x.as_slice();
+        let rs = r.as_mut_slice();
+        for i in 0..n_edges {
+            rs[i] = xs[i] - rs[i];
+        }
+    }
+
+    /// Apply one coarse-space correction: `y += P·B⁻¹·Pᵀ·r`.
+    fn apply_coarse(
+        &self,
+        p: &CsrMatrix<T>,
+        b: &dyn Preconditioner<Vector = DenseVec<T>>,
+        r: &DenseVec<T>,
+        y: &mut DenseVec<T>,
+    ) {
+        let n_nodes = self.n_nodes;
+        let mut t_node = DenseVec::zeros(n_nodes);
+        let mut s_node = DenseVec::zeros(n_nodes);
+        p.apply_transpose(r, &mut t_node);
+        b.apply_precond(&t_node, &mut s_node);
+        p.spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
+    }
+
     /// Solve `b_out ≈ S⁻¹·b_in` with the configured edge smoother
     /// (weighted Jacobi or one symmetric GS sweep from zero).
     fn edge_solve(&self, b_in: &DenseVec<T>, b_out: &mut DenseVec<T>) {
@@ -666,5 +788,39 @@ mod tests {
         let mut y = DenseVec::zeros(n);
         p.apply_precond(&x, &mut y);
         assert!(y.as_slice().iter().any(|&v| v.abs() > 1e-15));
+    }
+
+    /// Face (curl) auxiliary space: rejects missing / non-3-D coordinates,
+    /// and applies cleanly when enabled with 3-D vertex coordinates.
+    #[test]
+    fn ams_face_space_coords_validation_and_apply() {
+        let (g, a) = chain_graph(6, 1e-3);
+
+        // face_space without coordinates → error.
+        let cfg_missing = AmsConfig { face_space: true, ..Default::default() };
+        assert!(AmsPrecond::new(&a, &g, cfg_missing).is_err());
+
+        // face_space with 2-D coordinates (wrong length) → error.
+        let coords2d: Vec<f64> = (0..g.ncols() * 2).map(|i| i as f64).collect();
+        let cfg = AmsConfig {
+            face_space: true,
+            cycle: AmsCycle::MultiplicativeV11,
+            edge_smoother: AmsEdgeSmoother::SymmetricGaussSeidel,
+            ..Default::default()
+        };
+        assert!(AmsPrecond::with_coords(&a, &g, &coords2d, cfg.clone()).is_err());
+
+        // 3-D coordinates along a line → builds and applies.
+        let coords3d: Vec<f64> = (0..g.ncols())
+            .flat_map(|i| vec![i as f64, 0.0, 0.0])
+            .collect();
+        let p = AmsPrecond::with_coords(&a, &g, &coords3d, cfg).unwrap();
+        let n = a.nrows();
+        let x = DenseVec::from_vec(vec![1.0f64; n]);
+        let mut y = DenseVec::zeros(n);
+        p.apply_precond(&x, &mut y);
+        let ys = y.as_slice();
+        assert!(ys.iter().any(|&v| v.abs() > 1e-15), "output should be non-zero");
+        assert!(ys.iter().all(|&v| v.is_finite()), "output should be finite");
     }
 }
