@@ -18,6 +18,7 @@
 
 use crate::amg::{setup::AmgHierarchy, smoother::{smooth_with_hint, SmootherType}};
 use crate::core::{operator::LinearOperator, scalar::{ComplexScalar, Scalar}, vector::{DenseVec, Vector}};
+use crate::direct::DirectSolver;
 use num_traits::Zero;
 
 struct LevelScratch<T: ComplexScalar> {
@@ -129,11 +130,18 @@ fn vcycle<T: ComplexScalar>(
     let lv = &hier.levels[level];
     let (scratch, child_workspace) = workspace.split_first_mut().expect("workspace must cover all AMG levels");
 
-    // Coarsest level: solve approximately with many sweeps.
-    // Use weighted Jacobi on the coarsest level regardless of the configured
-    // smoother -- polynomial smoothers like Chebyshev can diverge here because
-    // eigenvalue bounds may be very loose on small coarse operators.
+    // Coarsest level: solve exactly with sparse LU (Galerkin coarse operator
+    // is small).  MFEM BoomerAMG also solves the coarsest level directly
+    // (relaxation type 9 = GE); the previous 50-sweep smoothing diverges on
+    // near-singular coarse operators (ex35's K - ω²M has λ_min ≈ 1e-3).
+    // Fall back to weighted-Jacobi sweeps when the coarse operator is
+    // numerically singular (LU pivot breakdown).
     if lv.p.is_none() {
+        let mut lu = crate::direct::SparseLu::<T>::default();
+        if lu.factor(&lv.a).is_ok() {
+            lu.solve(b, x).expect("AMG coarsest LU solve");
+            return;
+        }
         let coarse_smoother = match &hier.config.smoother {
             SmootherType::Chebyshev { .. } => SmootherType::WeightedJacobi { omega: 0.667 },
             other => other.clone(),
