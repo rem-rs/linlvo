@@ -24,7 +24,7 @@ pub use ildlt::IldltPrecond;
 pub use spai::SpaiPrecond;
 pub use composite::{AdditivePrecond, MultiplicativePrecond};
 pub use block_jacobi::BlockJacobiPrecond;
-pub use ams::{AmsPrecond, AmsConfig, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile};
+pub use ams::{AmsPrecond, AmsConfig, AmsEdgeSmoother, AmsCycle, AmsProfile, AuxSpaceSolver, AuxSolverProfile, AuxAmgProfile};
 pub use ads::{AdsPrecond, AdsConfig, AdsProfile};
 pub use fieldsplit::{FieldSplitPrecond, SplitMode};
 

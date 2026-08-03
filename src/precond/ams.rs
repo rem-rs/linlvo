@@ -4,11 +4,12 @@
 //! H(curl) edge-element discretisations of Maxwell-type problems:
 //!
 //! ```text
-//! M_AMS⁻¹ x  ≈  ω D_A⁻¹ x  +  G · P_v⁻¹ · Gᵀ x
+//! M_AMS⁻¹ x  ≈  S_A⁻¹ x  +  G · P_v⁻¹ · Gᵀ x
 //! ```
 //!
 //! where
-//! - `D_A` is the diagonal of the edge stiffness matrix `A`,
+//! - `S_A⁻¹` is an approximate inverse of the edge stiffness matrix `A`
+//!   (weighted Jacobi `ω D_A⁻¹` or symmetric Gauss-Seidel),
 //! - `G`   is the discrete gradient matrix (nodes → edges, user-supplied),
 //! - `P_v` is an approximate solver for the nodal Laplacian `GᵀAG`.
 //!
@@ -115,6 +116,12 @@ pub struct AmsConfig {
     /// More sweeps improve h-independence at the cost of more SpMV calls.
     /// Default: 1 (one Jacobi step).  Recommended: 3–5 for strong scaling.
     pub smoother_sweeps: usize,
+    /// Edge-space smoother variant (MFEM HypreAMS uses symmetric
+    /// Gauss-Seidel with weight 1.0 by default).
+    pub edge_smoother: AmsEdgeSmoother,
+    /// Two-level cycle structure (additive Hiptmair-Xu or multiplicative
+    /// V(1,1); HYPRE AMS default is the V(1,1) cycle).
+    pub cycle: AmsCycle,
     /// Approximate solver for the nodal Laplacian `GᵀAG`.
     pub node_solver: AuxSpaceSolver,
     /// Regularization added to the diagonal of the nodal system `GᵀAG`.
@@ -132,9 +139,44 @@ impl Default for AmsConfig {
         AmsConfig {
             smoother_omega: 0.667,
             smoother_sweeps: 1,
+            edge_smoother: AmsEdgeSmoother::WeightedJacobi,
+            cycle: AmsCycle::Additive,
             node_solver: AuxSpaceSolver::default(),
             singularity_regularization: 0.0,
         }
+    }
+}
+
+/// Edge-space smoother for the AMS/ADS auxiliary-space preconditioner.
+#[derive(Debug, Clone)]
+pub enum AmsEdgeSmoother {
+    /// Weighted Jacobi `ω·D⁻¹` (classical Hiptmair-Xu form).
+    WeightedJacobi,
+    /// Symmetric Gauss-Seidel (forward + backward sweep) — the default of
+    /// HYPRE AMS (`rlx_type = 2`, `rlx_weight = 1.0`).
+    SymmetricGaussSeidel,
+}
+
+impl Default for AmsEdgeSmoother {
+    fn default() -> Self {
+        Self::WeightedJacobi
+    }
+}
+
+/// Two-level cycle structure for the AMS preconditioner.
+#[derive(Debug, Clone)]
+pub enum AmsCycle {
+    /// Additive Hiptmair-Xu form `S⁻¹ + G·P_v⁻¹·Gᵀ`, iterated `smoother_sweeps`
+    /// times (Richardson).
+    Additive,
+    /// Symmetric multiplicative V(1,1) cycle: pre-GS → nodal coarse
+    /// correction → post-GS (HYPRE AMS default `cycle_type = 13`).
+    MultiplicativeV11,
+}
+
+impl Default for AmsCycle {
+    fn default() -> Self {
+        Self::Additive
     }
 }
 
@@ -147,6 +189,8 @@ impl AmsConfig {
         AmsConfig {
             smoother_omega: 0.667,
             smoother_sweeps: 3,
+            edge_smoother: AmsEdgeSmoother::WeightedJacobi,
+            cycle: AmsCycle::Additive,
             node_solver: AuxSpaceSolver::Amg(AmgConfig {
                 coarse_threshold: 64,
                 max_levels: 30,
@@ -181,26 +225,44 @@ pub struct AmsProfile {
 /// Constructed via [`AmsPrecond::new`]; implements [`Preconditioner`] and can
 /// be passed directly to any [`KrylovSolver`](crate::KrylovSolver).
 ///
-/// # Multi-sweep smoothing
+/// # Multi-sweep smoothing (additive)
 ///
-/// When `smoother_sweeps > 1`, the preconditioner applies `smoother_sweeps`
-/// sweeps of a preconditioned Richardson iteration:
+/// With [`AmsCycle::Additive`] and `smoother_sweeps > 1`, the preconditioner
+/// applies `smoother_sweeps` sweeps of a preconditioned Richardson iteration:
 ///
 /// ```text
 /// y⁰ = 0
 /// for l = 1…K:
 ///   rˡ = x - A·yˡ⁻¹
-///   yˡ = yˡ⁻¹ + ω·D⁻¹·rˡ  +  G·P_v⁻¹·Gᵀ·rˡ
+///   yˡ = yˡ⁻¹ + S⁻¹·rˡ  +  G·P_v⁻¹·Gᵀ·rˡ
 /// y = yᵏ
 /// ```
 ///
 /// More sweeps improve h-independence and robustness for Maxwell eigenvalue
 /// problems at the cost of additional SpMV per preconditioner application.
+///
+/// # Multiplicative V(1,1) cycle
+///
+/// With [`AmsCycle::MultiplicativeV11`] the preconditioner applies the
+/// standard symmetric two-level cycle (pre-GS → nodal coarse correction →
+/// post-GS), matching HYPRE AMS's default `cycle_type = 13` structure:
+///
+/// ```text
+/// y ← S⁻¹·x                (one symmetric GS sweep from zero)
+/// r = x - A·y
+/// y += G·P_v⁻¹·Gᵀ·r
+/// r = x - A·y
+/// y += S⁻¹·r               (one symmetric GS sweep from zero)
+/// ```
 pub struct AmsPrecond<T: ComplexScalar> {
     n_edges: usize,
     n_nodes: usize,
     /// Edge stiffness matrix A (stored for multi-sweep residual).
     a: CsrMatrix<T>,
+    /// Edge-space smoother variant (Jacobi ω·D⁻¹ or symmetric GS).
+    edge_smoother: AmsEdgeSmoother,
+    /// Cycle structure (additive Hiptmair-Xu or multiplicative V(1,1)).
+    cycle: AmsCycle,
     /// Precomputed ω / d_i for each edge i (avoids division in apply).
     scaled_inv_diag: Vec<T>,
     /// Discrete gradient G: n_edges × n_nodes (column-sparse in practice).
@@ -321,6 +383,8 @@ impl<T: ComplexScalar> AmsPrecond<T> {
             n_edges,
             n_nodes,
             a: a.clone(),
+            edge_smoother: config.edge_smoother.clone(),
+            cycle: config.cycle.clone(),
             scaled_inv_diag,
             g: g.clone(),
             smoother_sweeps: config.smoother_sweeps,
@@ -338,12 +402,12 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
 
     /// Apply the AMS preconditioner.
     ///
-    /// When `smoother_sweeps == 1` this is the standard Hiptmair-Xu
-    /// preconditioner `M⁻¹ ≈ ω·D⁻¹ + G·P_v⁻¹·Gᵀ`.
+    /// With [`AmsCycle::Additive`] this is the standard Hiptmair-Xu
+    /// preconditioner `M⁻¹ ≈ S⁻¹ + G·P_v⁻¹·Gᵀ` (iterated `smoother_sweeps`
+    /// times via Richardson when `smoother_sweeps > 1`).
     ///
-    /// When `smoother_sweeps > 1`, multi-sweep Richardson is used (see
-    /// struct-level docs), which gives better h-independence and robustness
-    /// for Maxwell eigenvalue problems.
+    /// With [`AmsCycle::MultiplicativeV11`] the symmetric two-level V(1,1)
+    /// cycle of HYPRE AMS is applied: pre-GS → nodal correction → post-GS.
     fn apply_precond(&self, x: &DenseVec<T>, y: &mut DenseVec<T>) {
         let n_edges = self.n_edges;
         let n_nodes = self.n_nodes;
@@ -351,6 +415,49 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
         // y = 0
         for ys in y.as_mut_slice().iter_mut().take(n_edges) {
             *ys = T::zero();
+        }
+
+        if matches!(self.cycle, AmsCycle::MultiplicativeV11) {
+            // ── Symmetric two-level V(1,1) cycle (HYPRE AMS cycle 13) ──────
+            let mut r = DenseVec::zeros(n_edges);
+            let mut t_node = DenseVec::zeros(n_nodes);
+            let mut s_node = DenseVec::zeros(n_nodes);
+
+            // Pre-smoothing: y ← S⁻¹·x (one symmetric GS sweep from zero).
+            self.edge_solve(x, y);
+
+            // Coarse correction: y += G·P_v⁻¹·Gᵀ·(x - A·y)
+            self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
+            {
+                let xs = x.as_slice();
+                let rs = r.as_mut_slice();
+                for i in 0..n_edges {
+                    rs[i] = xs[i] - rs[i];
+                }
+            }
+            self.g.apply_transpose(&r, &mut t_node);
+            self.node_precond.apply_precond(&t_node, &mut s_node);
+            self.g.spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
+
+            // Post-smoothing: y += S⁻¹·(x - A·y)
+            self.a.spmv_add(T::one(), y.as_slice(), T::zero(), r.as_mut_slice());
+            {
+                let xs = x.as_slice();
+                let rs = r.as_mut_slice();
+                for i in 0..n_edges {
+                    rs[i] = xs[i] - rs[i];
+                }
+            }
+            let mut post = DenseVec::zeros(n_edges);
+            self.edge_solve(&r, &mut post);
+            {
+                let ps = post.as_slice();
+                let ys = y.as_mut_slice();
+                for i in 0..n_edges {
+                    ys[i] = ys[i] + ps[i];
+                }
+            }
+            return;
         }
 
         // Temporary vectors reused across sweeps.
@@ -370,14 +477,8 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
                 }
             }
 
-            // ── corr = ω·D⁻¹·r  (edge smoother) ────────────────────────────
-            {
-                let rs = r.as_slice();
-                let cs = corr.as_mut_slice();
-                for i in 0..n_edges {
-                    cs[i] = self.scaled_inv_diag[i] * rs[i];
-                }
-            }
+            // ── corr = smoother(A, r)  (edge smoother) ─────────────────────
+            self.edge_solve(&r, &mut corr);
 
             // ── corr += G·P_v⁻¹·Gᵀ·r  (coarse auxiliary-space correction) ─
             self.g.apply_transpose(&r, &mut t_node);
@@ -396,6 +497,38 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
                 for i in 0..n_edges {
                     ys[i] = ys[i] + cs[i];
                 }
+            }
+        }
+    }
+}
+
+impl<T: ComplexScalar> AmsPrecond<T> {
+    /// Solve `b_out ≈ S⁻¹·b_in` with the configured edge smoother
+    /// (weighted Jacobi or one symmetric GS sweep from zero).
+    fn edge_solve(&self, b_in: &DenseVec<T>, b_out: &mut DenseVec<T>) {
+        let n_edges = self.n_edges;
+        match &self.edge_smoother {
+            AmsEdgeSmoother::WeightedJacobi => {
+                let bs = b_in.as_slice();
+                let os = b_out.as_mut_slice();
+                for i in 0..n_edges {
+                    os[i] = self.scaled_inv_diag[i] * bs[i];
+                }
+            }
+            AmsEdgeSmoother::SymmetricGaussSeidel => {
+                // Symmetric GS solve of A·b_out = b_in (forward + backward),
+                // matching HYPRE AMS's default rlx_type = 2 smoother.
+                for c in b_out.as_mut_slice().iter_mut().take(n_edges) {
+                    *c = T::zero();
+                }
+                crate::amg::smoother::smooth_with_hint(
+                    &self.a,
+                    b_out,
+                    b_in,
+                    &crate::amg::smoother::SmootherType::SymmetricGaussSeidel,
+                    1,
+                    None,
+                );
             }
         }
     }
