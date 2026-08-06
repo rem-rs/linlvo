@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use linger::{
+use linlvo::{
     iterative::{CgWorkspace, ConjugateGradient},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, SolverParams, VerboseLevel,

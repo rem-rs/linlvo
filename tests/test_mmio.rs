@@ -5,7 +5,7 @@
 
 use std::{env, fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
-use linger::sparse::{
+use linlvo::sparse::{
     read_matrix_market, read_matrix_market_str, read_matrix_market_coo_str,
     write_matrix_market, write_matrix_market_str, MmioError,
 };
@@ -14,7 +14,7 @@ use linger::sparse::{
 
 /// Return the value at (row, col) in a CSR matrix, or None if the entry is not
 /// structurally present.
-fn get_val(a: &linger::sparse::CsrMatrix<f64>, row: usize, col: usize) -> Option<f64> {
+fn get_val(a: &linlvo::sparse::CsrMatrix<f64>, row: usize, col: usize) -> Option<f64> {
     let row_start = a.row_ptr()[row];
     let row_end   = a.row_ptr()[row + 1];
     for k in row_start..row_end {
@@ -382,7 +382,7 @@ fn write_roundtrip_general() {
 
 #[test]
 fn write_header_format() {
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
     let mut coo = CooMatrix::new(2, 2);
     coo.push(0, 0, 1.5);
     coo.push(1, 1, 2.5);
@@ -393,7 +393,7 @@ fn write_header_format() {
 
 #[test]
 fn write_1based_indices() {
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
     let mut coo = CooMatrix::new(3, 3);
     coo.push(2, 1, 7.0); // 0-based → should appear as "3 2 7.0" in file
     let a = CsrMatrix::from_coo(&coo);
@@ -404,7 +404,7 @@ fn write_1based_indices() {
 #[test]
 fn write_filters_structural_zeros() {
     // Build a matrix that has a stored 0 value.
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
     let mut coo = CooMatrix::new(2, 2);
     coo.push(0, 0, 0.0); // structural zero
     coo.push(1, 1, 5.0);
@@ -417,7 +417,7 @@ fn write_filters_structural_zeros() {
 
 #[test]
 fn write_empty_matrix() {
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
     let coo: CooMatrix<f64> = CooMatrix::new(0, 0);
     let a = CsrMatrix::from_coo(&coo);
     let s = write_matrix_market_str(&a).unwrap();
@@ -428,7 +428,7 @@ fn write_empty_matrix() {
 
 #[test]
 fn write_roundtrip_poisson_1d() {
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
     let n = 50;
     let mut coo = CooMatrix::new(n, n);
     for i in 0..n {
@@ -448,7 +448,7 @@ fn write_roundtrip_poisson_1d() {
 
 #[test]
 fn file_roundtrip_general_matrix() {
-    use linger::sparse::{CooMatrix, CsrMatrix};
+    use linlvo::sparse::{CooMatrix, CsrMatrix};
 
     let mut coo = CooMatrix::new(3, 3);
     coo.push(0, 0, 2.0);

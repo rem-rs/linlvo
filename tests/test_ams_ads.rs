@@ -6,7 +6,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::Gmres,
     precond::{AdsPrecond, AdsConfig, AmsPrecond, AmsConfig, AuxSolverProfile, AuxSpaceSolver},
     sparse::{CooMatrix, CsrMatrix},

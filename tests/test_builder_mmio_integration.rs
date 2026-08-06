@@ -1,12 +1,12 @@
 //! Integration tests: Matrix Market IO + SolverBuilder end-to-end flows.
 
-use linger::{
+use linlvo::{
     builder::{BuilderPrecondReport, SolveMethod, SolverBuilder},
     sparse::{read_matrix_market_str, write_matrix_market_str},
     DenseVec, LinearOperator,
 };
 
-fn relative_residual(a: &linger::sparse::CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
+fn relative_residual(a: &linlvo::sparse::CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
     let mut ax = DenseVec::zeros(a.nrows());
     a.apply(x, &mut ax);
     let num = ax
@@ -39,7 +39,7 @@ fn matrix_market_spd_direct_builder() {
     let b = DenseVec::from_vec(vec![1.0_f64; a.nrows()]);
 
     let x = SolverBuilder::new()
-        .method(SolveMethod::Direct(linger::builder::DirectBackend::Cholesky))
+        .method(SolveMethod::Direct(linlvo::builder::DirectBackend::Cholesky))
         .solve(&a, &b)
         .unwrap();
 
@@ -73,7 +73,7 @@ fn matrix_market_general_gmres_with_report() {
 
     let (x, report) = SolverBuilder::new()
         .method(SolveMethod::Gmres { restart: 20 })
-        .precond(linger::builder::PrecondChoice::Ilu0)
+        .precond(linlvo::builder::PrecondChoice::Ilu0)
         .rtol(1e-10)
         .max_iter(100)
         .solve_with_report(&a, &b)
@@ -119,7 +119,7 @@ fn matrix_market_roundtrip_then_builder_solve() {
     let rhs = DenseVec::from_vec(vec![1.0_f64; b.nrows()]);
     let x = SolverBuilder::new()
         .method(SolveMethod::Cg)
-        .precond(linger::builder::PrecondChoice::Jacobi)
+        .precond(linlvo::builder::PrecondChoice::Jacobi)
         .rtol(1e-10)
         .max_iter(200)
         .solve(&b, &rhs)

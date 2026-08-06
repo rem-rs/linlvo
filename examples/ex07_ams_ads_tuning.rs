@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use linger::{
+use linlvo::{
     amg::AmgConfig,
     builder::{BuilderPrecondReport, PrecondChoice, SolveMethod, SolverBuilder},
     sparse::{CooMatrix, CsrMatrix},
@@ -138,14 +138,15 @@ fn run_ams_sweep() {
     for &theta in &thetas {
         for &ct in &coarse_thresholds {
             for &restart in &restarts {
-                let cfg = linger::AmsConfig {
+                let cfg = linlvo::AmsConfig {
                     smoother_omega: 0.667,
-                    node_solver: linger::AuxSpaceSolver::Amg(AmgConfig {
+                    node_solver: linlvo::AuxSpaceSolver::Amg(AmgConfig {
                         theta,
                         coarse_threshold: ct,
                         max_levels: 30,
                         ..AmgConfig::default()
                     }),
+                    ..linlvo::AmsConfig::default()
                 };
 
                 let builder = SolverBuilder::new()
@@ -162,7 +163,7 @@ fn run_ams_sweep() {
                     Ok((_x, report)) => {
                         let (mut n_levels, mut op_cx, mut grid_cx) = (0usize, 0.0f64, 0.0f64);
                         if let BuilderPrecondReport::Ams(p) = report.precond {
-                            if let linger::AuxSolverProfile::Amg(amg) = p.node_solver {
+                            if let linlvo::AuxSolverProfile::Amg(amg) = p.node_solver {
                                 n_levels = amg.n_levels;
                                 op_cx = amg.operator_complexity;
                                 grid_cx = amg.grid_complexity;
@@ -213,10 +214,11 @@ fn run_ads_sweep() {
                     max_levels: 30,
                     ..AmgConfig::default()
                 };
-                let cfg = linger::AdsConfig {
+                let cfg = linlvo::AdsConfig {
                     smoother_omega: 0.667,
-                    edge_solver: linger::AuxSpaceSolver::Amg(amg.clone()),
-                    node_solver: linger::AuxSpaceSolver::Amg(amg),
+                    edge_solver: linlvo::AuxSpaceSolver::Amg(amg.clone()),
+                    node_solver: linlvo::AuxSpaceSolver::Amg(amg),
+                    ..linlvo::AdsConfig::default()
                 };
 
                 let builder = SolverBuilder::new()
@@ -238,12 +240,12 @@ fn run_ads_sweep() {
                         let (mut en, mut eop, mut egc) = (0usize, 0.0f64, 0.0f64);
                         let (mut nn, mut nop, mut ngc) = (0usize, 0.0f64, 0.0f64);
                         if let BuilderPrecondReport::Ads(p) = report.precond {
-                            if let linger::AuxSolverProfile::Amg(amg) = p.edge_solver {
+                            if let linlvo::AuxSolverProfile::Amg(amg) = p.edge_solver {
                                 en = amg.n_levels;
                                 eop = amg.operator_complexity;
                                 egc = amg.grid_complexity;
                             }
-                            if let linger::AuxSolverProfile::Amg(amg) = p.node_solver {
+                            if let linlvo::AuxSolverProfile::Amg(amg) = p.node_solver {
                                 nn = amg.n_levels;
                                 nop = amg.operator_complexity;
                                 ngc = amg.grid_complexity;

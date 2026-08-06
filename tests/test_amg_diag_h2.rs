@@ -1,6 +1,6 @@
 //! Integration tests for H2: AMG level diagnostics.
 
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, CoarsenStrategy},
     sparse::{CooMatrix, CsrMatrix},
 };

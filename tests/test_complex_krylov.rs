@@ -8,7 +8,7 @@
 //! 5. Hermitian adjoint of `CsrMatrix<Complex<f64>>`
 
 use num_complex::Complex;
-use linger::{
+use linlvo::{
     sparse::{CsrMatrix, CooMatrix},
     iterative::complex_gmres::{ComplexGmres, ComplexGmresWorkspace},
     core::{
@@ -57,7 +57,7 @@ fn complex_helmholtz_dense(n: usize, k: f64, sigma: f64) -> DenseMatrix<C64> {
 
 /// Compute `‖A x - b‖₂` for a dense operator.
 fn dense_residual(a: &DenseMatrix<C64>, x: &DenseVec<C64>, b: &DenseVec<C64>) -> f64 {
-    use linger::core::operator::LinearOperator;
+    use linlvo::core::operator::LinearOperator;
     let mut ax: DenseVec<C64> = vec![c(0.0, 0.0); b.len()].into();
     a.apply(x, &mut ax);
     let err: f64 = ax.as_slice().iter().zip(b.as_slice())
@@ -67,7 +67,7 @@ fn dense_residual(a: &DenseMatrix<C64>, x: &DenseVec<C64>, b: &DenseVec<C64>) ->
 
 /// Compute `‖A x - b‖₂` for a sparse operator.
 fn sparse_residual(a: &CsrMatrix<C64>, x: &DenseVec<C64>, b: &DenseVec<C64>) -> f64 {
-    use linger::core::operator::LinearOperator;
+    use linlvo::core::operator::LinearOperator;
     let mut ax: DenseVec<C64> = vec![c(0.0, 0.0); b.len()].into();
     a.apply(x, &mut ax);
     ax.as_slice().iter().zip(b.as_slice())
@@ -128,7 +128,7 @@ fn complex_gmres_workspace_reuse() {
 
 #[test]
 fn complex_csr_linear_operator_apply() {
-    use linger::core::operator::LinearOperator;
+    use linlvo::core::operator::LinearOperator;
     // 3×3 diagonal complex matrix: A = diag(1+i, 2-i, 3)
     let mut coo: CooMatrix<C64> = CooMatrix::new_complex(3, 3);
     coo.push_complex(0, 0, c(1.0, 1.0));
@@ -151,7 +151,7 @@ fn complex_csr_linear_operator_apply() {
 
 #[test]
 fn complex_csr_transpose_apply() {
-    use linger::core::operator::{LinearOperator, TransposeOperator};
+    use linlvo::core::operator::{LinearOperator, TransposeOperator};
     // Off-diagonal: A = [[0, 1+i], [2-i, 0]]
     let mut coo: CooMatrix<C64> = CooMatrix::new_complex(2, 2);
     coo.push_complex(0, 1, c(1.0, 1.0));

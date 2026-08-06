@@ -4,7 +4,7 @@
 //! verified analytically.  Tolerances are set relative to the eigenvalue
 //! magnitude so the suite is numerically robust.
 
-use linger::{
+use linlvo::{
     eigen::{EigenParams, EigenSolver, EigenWhich, InverseIter, PowerIter, RayleighQuotientIter, SubspaceIter},
     sparse::{CooMatrix, CsrMatrix},
 };

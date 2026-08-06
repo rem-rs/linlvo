@@ -1,6 +1,6 @@
 //! ex14 - custom matrix-free LinearOperator with eigen solvers.
 
-use linger::{
+use linlvo::{
     core::operator::LinearOperator,
     DenseVec, EigenParams, EigenSolver, EigenWhich, InverseIter, PowerIter,
 };

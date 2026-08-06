@@ -1,6 +1,6 @@
 //! Integration tests for D1: BLR-compressed MultifrontalLu.
 
-use linger::{
+use linlvo::{
     direct::{
         DirectSolver, DirectOptions, DirectSolverPrecond,
         MultifrontalLu, MultifrontalOptions,

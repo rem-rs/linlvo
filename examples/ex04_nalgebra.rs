@@ -3,7 +3,7 @@
 //! **Purpose**: Verify that a matrix assembled with `nalgebra_sparse` gives
 //! identical SpMV results to linger's own `CsrMatrix`, without a wrapper type.
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix as LingerCoo, CsrMatrix as LingerCsr},
     DenseVec, LinearOperator,
 };

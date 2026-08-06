@@ -1,6 +1,6 @@
 //! Diagnostic tool to check SIMD feature detection and basic performance.
 
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 
 fn main() {
     println!("=== SIMD SpMV Diagnostics ===\n");

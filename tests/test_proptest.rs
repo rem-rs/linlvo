@@ -12,7 +12,7 @@
 //!  E. BLR compression   (compress_block reconstruction bound)
 
 use proptest::prelude::*;
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, SparseLu, SparseCholesky, SparseLdlt,
              compress_block},
     iterative::ConjugateGradient,

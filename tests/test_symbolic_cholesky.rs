@@ -4,7 +4,7 @@
 //! pattern as the numeric `SparseCholesky` factorization.
 #![allow(clippy::needless_range_loop)]
 
-use linger::{
+use linlvo::{
     direct::{
         DirectSolver, DirectOptions, SparseCholesky,
         symbolic_cholesky,
@@ -256,7 +256,7 @@ fn symbolic_cholesky_single_node() {
 #[test]
 fn symbolic_col_counts_match_etree_col_counts() {
     // symbolic_cholesky col_count should match etree::col_counts exactly.
-    use linger::direct::etree::col_counts;
+    use linlvo::direct::etree::col_counts;
     for n in [5, 10, 20] {
         let a = laplacian_1d(n);
         let parent = elimination_tree(&a);
@@ -269,7 +269,7 @@ fn symbolic_col_counts_match_etree_col_counts() {
 
 #[test]
 fn symbolic_col_counts_match_etree_2d() {
-    use linger::direct::etree::col_counts;
+    use linlvo::direct::etree::col_counts;
     let a = laplacian_2d(3);
     let parent = elimination_tree(&a);
     let sym = symbolic_cholesky(&a, &parent);

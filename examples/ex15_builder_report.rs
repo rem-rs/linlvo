@@ -1,6 +1,6 @@
 //! ex15 - SolverBuilder solve_with_report diagnostics.
 
-use linger::{
+use linlvo::{
     builder::{BuilderPrecondReport, SolveMethod, SolverBuilder},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,
@@ -57,6 +57,15 @@ fn precond_name(p: &BuilderPrecondReport) -> &'static str {
         BuilderPrecondReport::DirectLu { .. } => "direct-lu",
         BuilderPrecondReport::Ams(_) => "ams",
         BuilderPrecondReport::Ads(_) => "ads",
+        BuilderPrecondReport::Sor { .. } => "sor",
+        BuilderPrecondReport::Ssor { .. } => "ssor",
+        BuilderPrecondReport::Iluk { .. } => "iluk",
+        BuilderPrecondReport::Ilut { .. } => "ilut",
+        BuilderPrecondReport::Ildlt => "ildlt",
+        BuilderPrecondReport::Spai => "spai",
+        BuilderPrecondReport::BlockJacobi { .. } => "block-jacobi",
+        BuilderPrecondReport::Additive { .. } => "additive",
+        BuilderPrecondReport::Multiplicative { .. } => "multiplicative",
         BuilderPrecondReport::FieldSplit { .. } => "fieldsplit",
     }
 }
@@ -68,7 +77,7 @@ fn main() {
     let b_spd = DenseVec::from_vec(vec![1.0_f64; a_spd.nrows()]);
     let (x_spd, report_spd) = SolverBuilder::new()
         .method(SolveMethod::Cg)
-        .precond(linger::builder::PrecondChoice::Jacobi)
+        .precond(linlvo::builder::PrecondChoice::Jacobi)
         .rtol(1e-10)
         .max_iter(300)
         .solve_with_report(&a_spd, &b_spd)
@@ -84,7 +93,7 @@ fn main() {
     let b_ns = DenseVec::from_vec((1..=a_ns.nrows()).map(|i| i as f64).collect());
     let (x_ns, report_ns) = SolverBuilder::new()
         .method(SolveMethod::Gmres { restart: 20 })
-        .precond(linger::builder::PrecondChoice::Ilu0)
+        .precond(linlvo::builder::PrecondChoice::Ilu0)
         .rtol(1e-10)
         .max_iter(120)
         .solve_with_report(&a_ns, &b_ns)

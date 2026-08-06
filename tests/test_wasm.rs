@@ -39,7 +39,7 @@ fn laplacian_1d_coo(n: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
 #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
 mod wasm_tests {
     use super::*;
-    use linger::wasm::{WasmCsrMatrix, WasmCgSolver, WasmGmresSolver,
+    use linlvo::wasm::{WasmCsrMatrix, WasmCgSolver, WasmGmresSolver,
                        WasmLuSolver, WasmCholeskySolver, WasmMultifrontalSolver};
 
     #[wasm_bindgen_test]

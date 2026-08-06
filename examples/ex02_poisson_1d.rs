@@ -19,7 +19,7 @@
 
 use std::time::Instant;
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     LinearOperator,
 };
@@ -127,8 +127,8 @@ fn main() {
         println!("  SpMV×{reps}: avg {t_spmv:.2?}  ({gflops:.2} GFLOP/s)");
 
         // Also validate via LinearOperator trait
-        let xv = linger::DenseVec::from_vec(x_exact.clone());
-        let mut yv = linger::DenseVec::zeros(n);
+        let xv = linlvo::DenseVec::from_vec(x_exact.clone());
+        let mut yv = linlvo::DenseVec::zeros(n);
         a.apply(&xv, &mut yv);
         let diff: f64 = yv.as_slice().iter().zip(&b)
             .map(|(&yi, &bi)| (yi - bi).powi(2)).sum::<f64>().sqrt();

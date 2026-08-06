@@ -1,6 +1,6 @@
 //! ex08 - sparse direct solvers and direct-solver preconditioning.
 
-use linger::{
+use linlvo::{
     direct::{DirectOptions, DirectSolver, DirectSolverPrecond, SparseCholesky, SparseLu, ordering::OrderingMethod},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, Gmres, KrylovSolver, LinearOperator, SolverParams, VerboseLevel,

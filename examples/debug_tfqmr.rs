@@ -1,6 +1,6 @@
 // Debug TFQMR - Kelley 1995 "Iterative Methods" Algorithm B.4 TFQMR
 // This is the template book version (templates for solution of linear systems)
-use linger::{sparse::{CooMatrix, CsrMatrix}, DenseVec, LinearOperator};
+use linlvo::{sparse::{CooMatrix, CsrMatrix}, DenseVec, LinearOperator};
 
 fn mv(a: &CsrMatrix<f64>, v: &[f64]) -> Vec<f64> {
     let vd = DenseVec::from_vec(v.to_vec());

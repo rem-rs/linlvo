@@ -2,7 +2,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::{ConjugateGradient, Fgmres, Gmres, Lgmres},
     precond::{
         AdditivePrecond, Icc0Precond, IlukPrecond, IlutPrecond, JacobiPrecond,
@@ -74,7 +74,7 @@ fn iluk_k1_no_more_iters_than_ilu0() {
     let params = default_params(1e-10, 500);
     let cg = ConjugateGradient::<f64>::default();
 
-    let ilu0 = linger::Ilu0Precond::<f64>::from_csr(&a).unwrap();
+    let ilu0 = linlvo::Ilu0Precond::<f64>::from_csr(&a).unwrap();
     let mut x0 = DenseVec::zeros(n);
     let r0 = cg.solve(&a, Some(&ilu0), &b_vec, &mut x0, &params).unwrap();
 
@@ -244,7 +244,7 @@ fn multiplicative_precond_converges() {
     let n = 50;
     let (a, x_exact, b) = common::make_poisson_1d::<f64>(n);
     let jac = JacobiPrecond::<f64>::from_csr(&a).unwrap();
-    let ilu = linger::Ilu0Precond::<f64>::from_csr(&a).unwrap();
+    let ilu = linlvo::Ilu0Precond::<f64>::from_csr(&a).unwrap();
     let multi = MultiplicativePrecond::<f64>::new(vec![Box::new(jac), Box::new(ilu)]);
     let b_vec = DenseVec::from_vec(b);
     let mut x = DenseVec::zeros(n);

@@ -1,6 +1,6 @@
 //! Integration tests for SparseLdlt — sparse LDLᵀ factorisation (E1).
 
-use linger::{
+use linlvo::{
     direct::{DirectOptions, DirectSolver, SparseLdlt},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, OrderingMethod,
@@ -170,13 +170,13 @@ fn ldlt_reuse_symbolic() {
 
 #[test]
 fn ldlt_as_precond_cg() {
-    use linger::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
+    use linlvo::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
     let n = 30;
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
 
     // Factorize A and use as direct preconditioner (M⁻¹ = A⁻¹).
-    use linger::direct::DirectSolverPrecond;
+    use linlvo::direct::DirectSolverPrecond;
     let ldlt_precond = DirectSolverPrecond::new(SparseLdlt::<f64>::default(), &a).unwrap();
 
     let cg = ConjugateGradient::<f64>::default();

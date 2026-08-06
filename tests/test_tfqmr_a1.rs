@@ -1,6 +1,6 @@
 //! Integration tests for A1: TFQMR Krylov solver.
 
-use linger::{
+use linlvo::{
     iterative::Tfqmr,
     precond::{JacobiPrecond, Ilu0Precond},
     sparse::{CooMatrix, CsrMatrix},
@@ -28,7 +28,7 @@ fn nonsymmetric_tridiag(n: usize) -> CsrMatrix<f64> {
 }
 
 fn rel_res(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
-    use linger::LinearOperator;
+    use linlvo::LinearOperator;
     let n = a.nrows();
     let mut ax = DenseVec::zeros(n);
     a.apply(x, &mut ax);
@@ -102,7 +102,7 @@ fn tfqmr_ilu0_precond() {
 /// 5. Dimension mismatch returns an error.
 #[test]
 fn tfqmr_dimension_mismatch() {
-    use linger::SolverError;
+    use linlvo::SolverError;
     let n = 10;
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n + 1]);

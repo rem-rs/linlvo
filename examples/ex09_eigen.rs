@@ -1,6 +1,6 @@
 //! ex09 - eigenvalue solvers on the 1-D Laplacian spectrum.
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     EigenParams, EigenSolver, EigenWhich, Lobpcg, PowerIter,
 };

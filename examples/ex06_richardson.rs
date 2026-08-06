@@ -23,7 +23,7 @@
 //! The Richardson solver here is intentionally minimal — it exists only to
 //! exercise the trait infrastructure, not to be numerically efficient.
 
-use linger::{
+use linlvo::{
     core::{
         operator::LinearOperator,
         preconditioner::Preconditioner,

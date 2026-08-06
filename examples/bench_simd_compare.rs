@@ -3,7 +3,7 @@
 //! This example shows the performance difference between SIMD-accelerated
 //! and scalar SpMV implementations.
 
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 use std::time::Instant;
 
 fn make_poisson_1d(n: usize) -> CsrMatrix<f64> {

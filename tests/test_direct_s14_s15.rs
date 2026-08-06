@@ -4,7 +4,7 @@
 //! Sprint 15: MultifrontalLu correctness + BLR-mode preconditioner tests.
 #![allow(clippy::needless_range_loop)]
 
-use linger::{
+use linlvo::{
     direct::{
         DirectSolver, DirectOptions, DirectSolverPrecond,
         SparseCholesky, MultifrontalLu, MultifrontalOptions,
@@ -51,7 +51,7 @@ fn relative_residual(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -
 
 #[test]
 fn etree_tridiagonal_chain() {
-    use linger::direct::etree::elimination_tree;
+    use linlvo::direct::etree::elimination_tree;
     let n = 8;
     let a = laplacian_1d(n);
     let parent = elimination_tree(&a);
@@ -65,7 +65,7 @@ fn etree_tridiagonal_chain() {
 
 #[test]
 fn etree_post_order_covers_all() {
-    use linger::direct::etree::{elimination_tree, post_order};
+    use linlvo::direct::etree::{elimination_tree, post_order};
     let n = 10;
     let a = laplacian_1d(n);
     let parent = elimination_tree(&a);

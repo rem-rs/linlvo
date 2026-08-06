@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use linger::{
+use linlvo::{
     builder::{BuilderPrecondReport, SolverBuilder},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,

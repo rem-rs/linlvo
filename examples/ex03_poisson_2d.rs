@@ -19,7 +19,7 @@
 
 use std::time::Instant;
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     LinearOperator,
 };
@@ -150,7 +150,7 @@ fn main() {
         println!("  SpMV×{reps}: avg {t_avg:.2?}  ({gflops:.2} GFLOP/s)");
 
         // LinearOperator trait path
-        use linger::DenseVec;
+        use linlvo::DenseVec;
         let xv = DenseVec::from_vec(x_exact.clone());
         let mut yv = DenseVec::zeros(n);
         a.apply(&xv, &mut yv);

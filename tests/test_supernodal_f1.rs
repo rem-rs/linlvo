@@ -1,6 +1,6 @@
 //! Integration tests for F1: SupernodalSparseLu.
 
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, SupernodalSparseLu, SparseLu, ordering::OrderingMethod},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec,

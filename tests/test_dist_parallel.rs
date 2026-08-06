@@ -16,14 +16,14 @@
 //! 9. `HaloPlan` — validates duplicate-rank check.
 //! 10. `dist_cg` on larger 1D problem (n=128).
 
-use linger::parallel_dist::{
+use linlvo::parallel_dist::{
     block_partition, PartitionLayout,
     DistCsrMatrix, LocalHaloExchange,
     dist_cg, DistCgParams,
     LocalReduce,
     HaloExchange, HaloPlan, NeighborHaloPlan,
 };
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

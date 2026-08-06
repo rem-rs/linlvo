@@ -1,6 +1,6 @@
 //! Integration tests for F2: ILDLᵀ(0) preconditioner.
 
-use linger::{
+use linlvo::{
     IldltPrecond, Preconditioner,
     iterative::ConjugateGradient,
     sparse::{CooMatrix, CsrMatrix},

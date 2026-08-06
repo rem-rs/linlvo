@@ -5,7 +5,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     precond::{Ilu0Precond, JacobiPrecond, SorPrecond, SsorPrecond},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, Preconditioner,

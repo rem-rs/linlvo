@@ -4,7 +4,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::{BiCgStab, CgWorkspace, ConjugateGradient, Gmres, GmresWorkspace, Minres},
     precond::{Ilu0Precond, JacobiPrecond, SsorPrecond},
     sparse::{CooMatrix, CsrMatrix},

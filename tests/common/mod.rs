@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     Scalar,
 };

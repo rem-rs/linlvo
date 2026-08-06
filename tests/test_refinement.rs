@@ -3,7 +3,7 @@
 //! Verifies that `refine_steps > 0` improves solution accuracy, especially
 //! for ill-conditioned systems.
 
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, SparseLu, SparseCholesky},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec,

@@ -14,8 +14,8 @@ fn main() {
     let n_global: usize = 8 * nranks;
     let (row_ptr, col_ind, values) = build_poisson_1d(n_global);
 
-    use linger::sparse::CsrMatrix;
-    use linger::parallel_dist::{
+    use linlvo::sparse::CsrMatrix;
+    use linlvo::parallel_dist::{
         DistCsrMatrix, dist_cg, DistCgParams,
         mpi_halo::{MpiHaloExchange, MpiReduce},
     };

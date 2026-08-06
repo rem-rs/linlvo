@@ -11,7 +11,7 @@
 //!   `MatCreate` / `MatSetType(MATAIJ)` / `MatSetValues` / `MatAssemblyBegin`
 //!   `MatMult`                            (mat/impls/aij/seq/aij.c)
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     LinearOperator,
 };
@@ -74,7 +74,7 @@ fn main() {
 
     // ── 3. Via LinearOperator trait (DenseVec path) ───────────────────────────
     println!("\n  LinearOperator::apply  (DenseVec path)");
-    use linger::DenseVec;
+    use linlvo::DenseVec;
     let xv = DenseVec::from_vec(vec![0.0f64, 0.0, 1.0, 0.0, 0.0]); // e₂ (0-indexed)
     let mut yv = DenseVec::zeros(n);
     a.apply(&xv, &mut yv);  // A·e₂ = [0, -1, 2, -1, 0]ᵀ

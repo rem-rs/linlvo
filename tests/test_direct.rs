@@ -6,7 +6,7 @@
 //! - `DirectSolverPrecond`: direct solver as Krylov preconditioner
 //! - Ordering: RCM and COLAMD are valid permutations
 
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, DirectSolverPrecond, SparseLu, SparseCholesky,
              ordering::{OrderingMethod, rcm, colamd, permute_symmetric}},
     sparse::{CooMatrix, CsrMatrix},

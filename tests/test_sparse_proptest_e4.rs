@@ -1,6 +1,6 @@
 //! E4: Property-based tests for sparse format round-trips and SpMV linearity.
 
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 use proptest::prelude::*;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -83,10 +83,10 @@ proptest! {
         prop_assert_eq!(a.nnz(), att.nnz());
         // Compare SpMV: A*x == Aᵀᵀ*x for random x=[1,2,...,n].
         let x_vec: Vec<f64> = (1..=n).map(|i| i as f64).collect();
-        let xd = linger::DenseVec::from_vec(x_vec.clone());
-        let mut ax  = linger::DenseVec::zeros(n);
-        let mut attx = linger::DenseVec::zeros(n);
-        use linger::LinearOperator;
+        let xd = linlvo::DenseVec::from_vec(x_vec.clone());
+        let mut ax  = linlvo::DenseVec::zeros(n);
+        let mut attx = linlvo::DenseVec::zeros(n);
+        use linlvo::LinearOperator;
         a.apply(&xd, &mut ax);
         att.apply(&xd, &mut attx);
         let diff = norm2(&ax.as_slice().iter().zip(attx.as_slice()).map(|(a, b)| a - b).collect::<Vec<_>>());
@@ -124,15 +124,15 @@ proptest! {
         for &(r, c, v) in &entries { coo.push(r, c, v); }
         let a = CsrMatrix::from_coo(&coo);
 
-        use linger::LinearOperator;
-        let xd = linger::DenseVec::from_vec(x_vals.clone());
-        let yd = linger::DenseVec::from_vec(y_vals.clone());
+        use linlvo::LinearOperator;
+        let xd = linlvo::DenseVec::from_vec(x_vals.clone());
+        let yd = linlvo::DenseVec::from_vec(y_vals.clone());
         let xy: Vec<f64> = x_vals.iter().zip(&y_vals).map(|(x, y)| x + y).collect();
-        let xyd = linger::DenseVec::from_vec(xy);
+        let xyd = linlvo::DenseVec::from_vec(xy);
 
-        let mut ax  = linger::DenseVec::zeros(n);
-        let mut ay  = linger::DenseVec::zeros(n);
-        let mut axy = linger::DenseVec::zeros(n);
+        let mut ax  = linlvo::DenseVec::zeros(n);
+        let mut ay  = linlvo::DenseVec::zeros(n);
+        let mut axy = linlvo::DenseVec::zeros(n);
         a.apply(&xd,  &mut ax);
         a.apply(&yd,  &mut ay);
         a.apply(&xyd, &mut axy);
@@ -157,7 +157,7 @@ proptest! {
         x_vals in proptest::collection::vec(-5.0f64..=5.0f64, 6usize..=6),
     ) {
         let n = 6usize;
-        use linger::LinearOperator;
+        use linlvo::LinearOperator;
 
         let mut coo_a = CooMatrix::<f64>::new(n, n);
         for &(r, c, v) in &entries { coo_a.push(r, c, v); }
@@ -174,10 +174,10 @@ proptest! {
         for (r, c, v) in d_mat.triplets() { coo_sum.push(r, c, v); }
         let apd = CsrMatrix::from_coo(&coo_sum);
 
-        let xd = linger::DenseVec::from_vec(x_vals.clone());
-        let mut ax   = linger::DenseVec::zeros(n);
-        let mut dx   = linger::DenseVec::zeros(n);
-        let mut apdx = linger::DenseVec::zeros(n);
+        let xd = linlvo::DenseVec::from_vec(x_vals.clone());
+        let mut ax   = linlvo::DenseVec::zeros(n);
+        let mut dx   = linlvo::DenseVec::zeros(n);
+        let mut apdx = linlvo::DenseVec::zeros(n);
         a.apply(&xd,   &mut ax);
         d_mat.apply(&xd,   &mut dx);
         apd.apply(&xd, &mut apdx);

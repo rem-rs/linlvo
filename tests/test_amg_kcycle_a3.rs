@@ -3,7 +3,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond, CycleType},
     iterative::ConjugateGradient,
     sparse::CsrMatrix,

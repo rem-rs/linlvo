@@ -2,12 +2,12 @@
 
 use std::{env, fs};
 
-use linger::{
+use linlvo::{
     sparse::{read_matrix_market, read_matrix_market_coo_str, read_matrix_market_str, write_matrix_market, write_matrix_market_str},
     ConjugateGradient, DenseVec, KrylovSolver, SolverParams, VerboseLevel,
 };
 
-fn rel_residual(a: &linger::sparse::CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
+fn rel_residual(a: &linlvo::sparse::CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
     let mut ax = vec![0.0_f64; a.nrows()];
     a.spmv(x.as_slice(), &mut ax);
     let num = ax

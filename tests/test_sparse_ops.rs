@@ -5,7 +5,7 @@
 
 mod common;
 
-use linger::sparse::{CooMatrix, CscMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CscMatrix, CsrMatrix};
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -450,7 +450,7 @@ fn csr_validate_empty_rows_ok() {
 /// A manually constructed CSR with out-of-bounds col_idx fails.
 #[test]
 fn csr_validate_out_of_bounds_col_fails() {
-    use linger::sparse::CsrMatrix;
+    use linlvo::sparse::CsrMatrix;
     // Build a 3×3 matrix via COO then mutate col_idx using unsafe-free approach.
     // We use from_raw to inject bad data.
     let mut coo = CooMatrix::<f64>::new(3, 3);

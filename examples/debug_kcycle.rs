@@ -1,9 +1,9 @@
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, CycleType},
     sparse::CsrMatrix,
     DenseVec, LinearOperator, Vector,
 };
-use linger::sparse::CooMatrix;
+use linlvo::sparse::CooMatrix;
 
 fn make_poisson_1d(n: usize) -> CsrMatrix<f64> {
     let mut coo = CooMatrix::new(n, n);
@@ -28,7 +28,7 @@ fn main() {
     let n = 100;
     let a = make_poisson_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
-    let config = linger::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
+    let config = linlvo::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
     let hier = AmgHierarchy::build(a.clone(), config.clone());
 
     println!("n_levels = {}", hier.n_levels());
@@ -56,7 +56,7 @@ fn test_inner() {
     let n = 10;
     let a = make_poisson_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
-    let config = linger::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
+    let config = linlvo::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
     let hier = AmgHierarchy::build(a.clone(), config);
     println!("inner test n_levels={}", hier.n_levels());
     for (i,lv) in hier.levels.iter().enumerate() { println!("  lv{i} nrows={}", lv.a.nrows()); }
@@ -65,7 +65,7 @@ fn test_inner() {
     hier.apply_cycle(&b, &mut xv, CycleType::V);
     println!("V-1 rr={:.4e}", rel_res(&a, &xv, &b));
     // One K-cycle
-    let config2 = linger::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
+    let config2 = linlvo::amg::AmgConfig { coarse_threshold: 4, ..Default::default() };
     let hier2 = AmgHierarchy::build(a.clone(), config2);
     let mut xk = DenseVec::zeros(n);
     hier2.apply_cycle(&b, &mut xk, CycleType::K { inner_iters: 1 });

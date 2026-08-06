@@ -1,6 +1,6 @@
 //! ex13 - compare fill-reducing orderings for direct solvers.
 
-use linger::{
+use linlvo::{
     direct::{ordering::{colamd, nd, permute_symmetric, rcm}, DirectOptions, DirectSolver, SparseCholesky},
     OrderingMethod,
     sparse::{CooMatrix, CsrMatrix},

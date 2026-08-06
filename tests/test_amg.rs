@@ -6,7 +6,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType, SmootherType},
     iterative::{ConjugateGradient, Gmres},
     sparse::CsrMatrix,
@@ -28,7 +28,7 @@ fn solution_error(x: &[f64], x_exact: &[f64]) -> f64 {
 fn rel_residual(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
     let n = b.len();
     let mut ax = DenseVec::zeros(n);
-    use linger::core::operator::LinearOperator;
+    use linlvo::core::operator::LinearOperator;
     a.apply(x, &mut ax);
     let r: f64 = ax.as_slice().iter().zip(b.as_slice()).map(|(&ai, &bi)| (ai - bi).powi(2)).sum::<f64>().sqrt();
     let nb: f64 = b.as_slice().iter().map(|&v| v * v).sum::<f64>().sqrt();
@@ -100,7 +100,7 @@ fn vcycle_converges_standalone() {
         // Correction cycle: apply to residual, add to x.
         let nn = b.len();
         let mut ax = DenseVec::zeros(nn);
-        use linger::core::operator::LinearOperator;
+        use linlvo::core::operator::LinearOperator;
         a.apply(&x, &mut ax);
         let mut res = DenseVec::zeros(nn);
         let rs = res.as_mut_slice();

@@ -4,9 +4,9 @@
 //! on identically-sized matrices skip the ordering/compute step and reuse the
 //! cached permutation.
 
-use linger::direct::{DirectSolver, DirectOptions, SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, ordering::OrderingMethod};
-use linger::sparse::{CooMatrix, CsrMatrix, ops::spmv_csr};
-use linger::{DenseVec, Vector};
+use linlvo::direct::{DirectSolver, DirectOptions, SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions, ordering::OrderingMethod};
+use linlvo::sparse::{CooMatrix, CsrMatrix, ops::spmv_csr};
+use linlvo::{DenseVec, Vector};
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

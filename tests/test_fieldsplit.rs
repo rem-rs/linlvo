@@ -6,7 +6,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::{ConjugateGradient, Gmres},
     precond::{FieldSplitPrecond, Ilu0Precond, JacobiPrecond, SplitMode},
     sparse::{CooMatrix, CsrMatrix},

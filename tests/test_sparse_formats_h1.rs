@@ -1,7 +1,7 @@
 //! Integration tests for ELL and DIA sparse matrix formats (H1).
 
-use linger::{DiaMatrix, EllMatrix};
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::{DiaMatrix, EllMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

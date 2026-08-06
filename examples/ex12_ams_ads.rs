@@ -1,6 +1,6 @@
 //! ex12 - AMS and ADS auxiliary-space preconditioners.
 
-use linger::{
+use linlvo::{
     iterative::Gmres,
     precond::{AdsConfig, AdsPrecond, AmsConfig, AmsPrecond},
     sparse::{CooMatrix, CsrMatrix},

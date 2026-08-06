@@ -1,6 +1,6 @@
 //! Integration tests for F3: SupernodalSparseCholesky.
 
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, SupernodalSparseCholesky},
     direct::ordering::OrderingMethod,
     sparse::{CooMatrix, CsrMatrix},
@@ -103,7 +103,7 @@ fn sn_chol_laplacian_1d_n100() {
 /// 4. Matches SparseCholesky on a 1D Laplacian.
 #[test]
 fn sn_chol_matches_scalar_cholesky() {
-    use linger::direct::SparseCholesky;
+    use linlvo::direct::SparseCholesky;
     let n = 20;
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec((1..=n).map(|i| i as f64).collect::<Vec<_>>());
@@ -129,7 +129,7 @@ fn sn_chol_matches_scalar_cholesky() {
 /// 5. Non-SPD matrix → SingularMatrix error.
 #[test]
 fn sn_chol_not_spd_returns_error() {
-    use linger::SolverError;
+    use linlvo::SolverError;
     let mut coo = CooMatrix::<f64>::new(2, 2);
     coo.push(0, 0, -1.0); coo.push(1, 1, 2.0); // negative diagonal
     let a = CsrMatrix::from_coo(&coo);
@@ -141,7 +141,7 @@ fn sn_chol_not_spd_returns_error() {
 /// 6. sn_target=1 matches scalar left-looking Cholesky exactly.
 #[test]
 fn sn_chol_sn1_matches_scalar() {
-    use linger::direct::SparseCholesky;
+    use linlvo::direct::SparseCholesky;
     let n = 30;
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
@@ -205,8 +205,8 @@ fn sn_chol_rcm_ordering() {
 fn sn_chol_snode_count_chain() {
     // Tridiagonal 1D Laplacian (n=32) with sn_target=8 and Natural ordering:
     // e-tree is a chain (parent[j]=j+1), so we get 32/8 = 4 supernodes.
-    use linger::direct::etree::elimination_tree;
-    use linger::direct::ordering::permute_symmetric;
+    use linlvo::direct::etree::elimination_tree;
+    use linlvo::direct::ordering::permute_symmetric;
     let n = 32;
     let a = laplacian_1d(n);
     let perm: Vec<usize> = (0..n).collect(); // Natural

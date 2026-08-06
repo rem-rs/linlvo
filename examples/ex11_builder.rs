@@ -1,6 +1,6 @@
 //! ex11 - high-level SolverBuilder workflows.
 
-use linger::{
+use linlvo::{
     builder::{solve_auto, DirectBackend, Ordering, PrecondChoice, SolveMethod, SolverBuilder},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,

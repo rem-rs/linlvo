@@ -4,7 +4,7 @@
 //! - S11: ComplexScalar trait, LanczosSvd
 //! - S12: QuadraticEigen (QEP), NepNewton
 
-use linger::{
+use linlvo::{
     Complex,
     LanczosSvd,
     QuadraticEigen,
@@ -40,7 +40,7 @@ fn laplacian_1d(n: usize) -> CsrMatrix<f64> {
 
 #[test]
 fn complex_scalar_ops() {
-    use linger::ComplexScalar;
+    use linlvo::ComplexScalar;
     let z: Complex<f64> = Complex::new(3.0, 4.0);
     // |z| = 5
     assert!((ComplexScalar::abs(z) - 5.0).abs() < 1e-12, "abs");

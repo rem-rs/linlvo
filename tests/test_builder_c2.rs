@@ -5,7 +5,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     builder::{BuilderPrecondReport, SolverBuilder, SolveMethod, DirectBackend, PrecondChoice, Ordering, solve_auto},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec,
@@ -34,7 +34,7 @@ fn nonsymmetric_tridiag(n: usize) -> CsrMatrix<f64> {
 }
 
 fn relative_residual(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
-    use linger::core::operator::LinearOperator;
+    use linlvo::core::operator::LinearOperator;
     let mut ax = DenseVec::zeros(a.nrows());
     a.apply(x, &mut ax);
     let r: f64  = ax.as_slice().iter().zip(b.as_slice()).map(|(a,b)| (a-b).powi(2)).sum::<f64>().sqrt();

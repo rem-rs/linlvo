@@ -7,7 +7,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::{ConjugateGradient, PipeCg},
     precond::{Ilu0Precond, JacobiPrecond},
     sparse::{CooMatrix, CsrMatrix},
@@ -123,7 +123,7 @@ fn pipecg_already_converged_zero_iters() {
     let (a, x_exact, _b_vec) = common::make_poisson_1d::<f64>(10);
     let b = {
         let mut bv = DenseVec::zeros(10);
-        use linger::core::operator::LinearOperator;
+        use linlvo::core::operator::LinearOperator;
         a.apply(&DenseVec::from_vec(x_exact.clone()), &mut bv);
         bv
     };

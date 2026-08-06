@@ -5,7 +5,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy},
     sparse::{CooMatrix, CsrMatrix},
     IlukPrecond, DenseVec,
@@ -13,7 +13,7 @@ use linger::{
 
 // Re-import the internal AMG functions we want to test directly.
 // They are `pub` within the `amg` module.
-use linger::amg::{CoarsenStrategy};
+use linlvo::amg::{CoarsenStrategy};
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ fn poisson_1d(n: usize) -> CsrMatrix<f64> {
 // We test through the public AMG hierarchy interface by observing what the
 // setup phase produces, and also directly via the re-exported function.
 
-use linger::amg::strength::strong_connections;
+use linlvo::amg::strength::strong_connections;
 
 #[test]
 fn strong_connections_all_offdiag_for_poisson() {
@@ -96,7 +96,7 @@ fn strong_connections_dimensions_match_input() {
 
 // ─── RS coarsening ────────────────────────────────────────────────────────────
 
-use linger::amg::coarsen_rs::{NodeType, coarse_index_map, rs_coarsen};
+use linlvo::amg::coarsen_rs::{NodeType, coarse_index_map, rs_coarsen};
 
 #[test]
 fn rs_coarsen_all_nodes_decided() {
@@ -162,7 +162,7 @@ fn coarse_index_map_all_fine() {
 
 // ─── SA aggregation ───────────────────────────────────────────────────────────
 
-use linger::amg::coarsen_agg::{build_aggregates, tentative_prolongation};
+use linlvo::amg::coarsen_agg::{build_aggregates, tentative_prolongation};
 
 #[test]
 fn build_aggregates_covers_all_nodes() {
@@ -312,7 +312,7 @@ fn amg_hierarchy_coarsest_level_below_threshold() {
 
 #[test]
 fn iluk_k2_converges_on_poisson_1d() {
-    use linger::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
+    use linlvo::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
     let n = 50;
     let (a, _, _) = common::make_poisson_1d::<f64>(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
@@ -329,7 +329,7 @@ fn iluk_k2_converges_on_poisson_1d() {
 #[test]
 fn iluk_k2_no_more_iters_than_k1() {
     // ILU(2) has more fill than ILU(1), so it should converge in ≤ iterations.
-    use linger::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
+    use linlvo::{ConjugateGradient, KrylovSolver, SolverParams, VerboseLevel};
     let n = 40;
     let (a, _, _) = common::make_poisson_1d::<f64>(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);
@@ -352,7 +352,7 @@ fn iluk_k2_no_more_iters_than_k1() {
 #[test]
 fn iluk_k0_identical_to_ilu0_on_poisson() {
     // ILU(k=0) should give the same preconditioner as ILU(0).
-    use linger::{ConjugateGradient, Ilu0Precond, KrylovSolver, SolverParams, VerboseLevel};
+    use linlvo::{ConjugateGradient, Ilu0Precond, KrylovSolver, SolverParams, VerboseLevel};
     let n = 20;
     let (a, _, _) = common::make_poisson_1d::<f64>(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);

@@ -1,6 +1,6 @@
 //! ex07 - AMG-preconditioned CG on a 2-D Poisson problem.
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, ConjugateGradient,
     DenseVec, KrylovSolver, SolverParams, VerboseLevel,

@@ -1,6 +1,6 @@
 //! Integration tests for A4: Block Jacobi preconditioner.
 
-use linger::{
+use linlvo::{
     precond::{JacobiPrecond, BlockJacobiPrecond},
     iterative::{Idrs, BiCgStab},
     sparse::{CooMatrix, CsrMatrix},
@@ -48,7 +48,7 @@ fn block3_system(n_blocks: usize) -> CsrMatrix<f64> {
 }
 
 fn rel_res(a: &CsrMatrix<f64>, x: &DenseVec<f64>, b: &DenseVec<f64>) -> f64 {
-    use linger::LinearOperator;
+    use linlvo::LinearOperator;
     let n = a.nrows();
     let mut ax = DenseVec::zeros(n);
     a.apply(x, &mut ax);
@@ -142,7 +142,7 @@ fn block_jacobi_4x4_blocks() {
 /// 4. Non-divisible n returns SolverError.
 #[test]
 fn block_jacobi_non_divisible_n_error() {
-    use linger::SolverError;
+    use linlvo::SolverError;
     let a = laplacian_1d(10);  // n=10
     // block_size=3 → 10 not divisible by 3
     let result = BlockJacobiPrecond::<f64>::from_csr(&a, 3);
@@ -180,7 +180,7 @@ fn block_jacobi_with_bicgstab() {
 /// 7. Singular block returns SolverError::SingularMatrix.
 #[test]
 fn block_jacobi_singular_block_error() {
-    use linger::SolverError;
+    use linlvo::SolverError;
     // Build a 4×4 matrix with a singular 2×2 block in the top-left.
     let n = 4;
     let mut coo = CooMatrix::<f64>::new(n, n);

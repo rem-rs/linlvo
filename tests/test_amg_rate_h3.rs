@@ -1,6 +1,6 @@
 //! Integration tests for H3: AMG per-cycle convergence rate.
 
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, CoarsenStrategy, CycleType},
     sparse::{CooMatrix, CsrMatrix},
     DenseVec, LinearOperator,

@@ -5,7 +5,7 @@
 //!
 //! All matrices have known eigenvalues so results are verified analytically.
 
-use linger::{
+use linlvo::{
     eigen::{
         EigenParams, EigenSolver, EigenWhich,
         LanczosIter, ArnoldiIter,

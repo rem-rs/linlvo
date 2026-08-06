@@ -3,9 +3,9 @@
 //! Compares optimized horizontal sum, AXPY/AXPBY, and Jacobi smoother
 //! with scalar implementations.
 
-use linger::sparse::{CooMatrix, CsrMatrix};
-use linger::core::vector::DenseVec;
-use linger::simd::{simd_axpy, simd_axpby};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
+use linlvo::core::vector::DenseVec;
+use linlvo::simd::{simd_axpy, simd_axpby};
 use std::time::Instant;
 
 fn make_poisson_1d(n: usize) -> CsrMatrix<f64> {

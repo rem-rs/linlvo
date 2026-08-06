@@ -3,7 +3,7 @@
 //! Tests nd() permutation validity, correctness with all direct solvers,
 //! and fill quality on structured grids.
 
-use linger::{
+use linlvo::{
     direct::{DirectSolver, DirectOptions, SparseLu, SparseCholesky, MultifrontalLu, MultifrontalOptions},
     direct::ordering::{OrderingMethod, nd, permute_symmetric},
     sparse::{CooMatrix, CsrMatrix},
@@ -77,7 +77,7 @@ fn nnz_lower_cholesky(a: &CsrMatrix<f64>, ordering: OrderingMethod) -> usize {
     solver.solve(&b, &mut x).unwrap();
     // Approximate nnz(L) as the number of non-zeros we can measure by counting
     // in the permuted matrix's lower triangle. Use the permuted matrix directly.
-    let perm = linger::direct::ordering::nd(a);
+    let perm = linlvo::direct::ordering::nd(a);
     let pa = permute_symmetric(a, &perm);
     let mut count = 0usize;
     for i in 0..pa.nrows() {
@@ -264,7 +264,7 @@ fn nd_fill_not_worse_than_natural_on_grid() {
 
 #[test]
 fn builder_nd_ordering_direct_solve() {
-    use linger::builder::{SolverBuilder, SolveMethod, DirectBackend, Ordering};
+    use linlvo::builder::{SolverBuilder, SolveMethod, DirectBackend, Ordering};
     let n = 10;
     let a = laplacian_1d(n);
     let b = DenseVec::from_vec(vec![1.0f64; n]);

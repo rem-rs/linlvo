@@ -1,6 +1,6 @@
 mod common;
 
-use linger::{
+use linlvo::{
     iterative::{CgWorkspace, ConjugateGradient, Gmres, GmresWorkspace},
     DenseVec,
 };

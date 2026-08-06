@@ -1,4 +1,4 @@
-use linger::{iterative::Idrs, sparse::{CooMatrix, CsrMatrix}, DenseVec, KrylovSolver, SolverParams, VerboseLevel};
+use linlvo::{iterative::Idrs, sparse::{CooMatrix, CsrMatrix}, DenseVec, KrylovSolver, SolverParams, VerboseLevel};
 fn main() {
     for n in [190, 195, 199, 200, 201, 205, 210] {
         let mut coo = CooMatrix::<f64>::new(n, n);

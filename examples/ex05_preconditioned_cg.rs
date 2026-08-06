@@ -1,6 +1,6 @@
 //! ex05 - preconditioners and preconditioned CG on a 1-D Poisson system.
 
-use linger::{
+use linlvo::{
     sparse::{CooMatrix, CsrMatrix},
     ConjugateGradient, DenseVec, Ilu0Precond, JacobiPrecond, KrylovSolver,
     Preconditioner, SolverParams, VerboseLevel,

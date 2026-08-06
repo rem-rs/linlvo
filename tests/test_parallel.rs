@@ -2,7 +2,7 @@
 
 mod common;
 
-use linger::{
+use linlvo::{
     parallel::{parallel_axpy, parallel_axpby, parallel_dot, parallel_norm2, parallel_spmv, parallel_spmv_add},
     sparse::{BsrBuilder, CsrMatrix},
 };
@@ -256,7 +256,7 @@ fn bsr_builder_merges_duplicate_blocks() {
 // wrapper without wasm-bindgen.
 #[test]
 fn wasm_api_smoke_test_via_native_types() {
-    use linger::{iterative::ConjugateGradient, DenseVec, KrylovSolver, SolverParams, VerboseLevel};
+    use linlvo::{iterative::ConjugateGradient, DenseVec, KrylovSolver, SolverParams, VerboseLevel};
 
     let n = 10;
     let a = make_poisson_1d(n);
