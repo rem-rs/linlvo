@@ -49,6 +49,9 @@ pub struct AmgConfig {
     pub max_levels: usize,
     /// Smoothed-aggregation damping factor (fraction of 4/3·ω).
     pub sa_omega: f64,
+    /// Nodal (system) AMG: number of DOFs per physical node for byNODES
+    /// vector problems (hypre `SetNodal(1)` style).  `None` = scalar AMG.
+    pub nodal_dofs: Option<usize>,
 }
 
 impl Default for AmgConfig {
@@ -62,6 +65,7 @@ impl Default for AmgConfig {
             coarse_threshold: 10,
             max_levels:       20,
             sa_omega:         0.667,
+            nodal_dofs:       None,
         }
     }
 }
@@ -134,8 +138,24 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
             // Build prolongation P and (optionally) custom restriction R.
             let (p, r_custom) = match &config.strategy {
                 CoarsenStrategy::RugeStüben => {
-                    let status = rs_coarsen::<T>(&s);
-                    (rs_interpolation(&a_now, &status), None)
+                    if let Some(dim) = config.nodal_dofs {
+                        // Nodal (system) AMG: coarsen the nodal strength graph,
+                        // interpolate block-diagonally per component.
+                        if n % dim == 0 && n / dim > 1 {
+                            let s_node = super::nodal::nodal_strong_connections(&a_now, dim, config.theta);
+                            let status = super::coarsen_rs::rs_coarsen::<T>(&s_node);
+                            let p = super::nodal::nodal_rs_interpolation(&a_now, &status, dim);
+                            (p, None)
+                        } else {
+                            // Fallback: plain scalar RS (should not trigger for
+                            // well-formed byNODES layouts).
+                            let status = rs_coarsen::<T>(&s);
+                            (rs_interpolation(&a_now, &status), None)
+                        }
+                    } else {
+                        let status = rs_coarsen::<T>(&s);
+                        (rs_interpolation(&a_now, &status), None)
+                    }
                 }
                 CoarsenStrategy::SmoothedAggregation => {
                     let agg_id   = build_aggregates::<T>(&s);

@@ -277,3 +277,135 @@ fn amg_air_gmres_nonsymmetric_convdiff_1d() {
         res.iterations, res.final_residual);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-6);
 }
+
+// ─── Nodal (system) AMG ──────────────────────────────────────────────────────
+
+/// Build a 2-component byNODES block matrix: vector Laplacian-like operator
+/// `A = [[L + M, c*L], [c*L, L + M]]` (each block n_s×n_s), stored in byNODES
+/// layout (dof = c*n_s + i).
+fn make_block_2comp(n_s: usize, c: f64) -> CsrMatrix<f64> {
+    let n = 2 * n_s;
+    let mut entries: Vec<(usize, usize, f64)> = Vec::new();
+    for i in 0..n_s {
+        // 1D Laplacian block
+        let lap = |row: usize, col: usize| -> f64 {
+            if row == col { 2.0 } else if row.abs_diff(col) == 1 { -1.0 } else { 0.0 }
+        };
+        for a in 0..2 {
+            for b in 0..2 {
+                for i2 in 0..n_s {
+                    for j2 in 0..n_s {
+                        let l = lap(i2, j2);
+                        let val = if a == b { l + if i2 == j2 { 1.0 } else { 0.0 } }
+                                  else { c * l };
+                        if val != 0.0 {
+                            entries.push((a * n_s + i2, b * n_s + j2, val));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // merge duplicates per row (shouldn't be any, but keep sorted order)
+    let mut rows: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    for (i, j, v) in entries {
+        rows[i].push((j, v));
+    }
+    let mut rp = vec![0usize; n + 1];
+    let mut ci = Vec::new();
+    let mut va = Vec::new();
+    for i in 0..n {
+        rows[i].sort_unstable_by_key(|&(j, _)| j);
+        rows[i].dedup_by(|a, b| a.0 == b.0);
+        rp[i + 1] = rp[i] + rows[i].len();
+        for &(j, v) in &rows[i] {
+            ci.push(j);
+            va.push(v);
+        }
+    }
+    CsrMatrix::from_raw(n, n, rp, ci, va)
+}
+
+#[test]
+fn nodal_amg_preconditioned_cg_converges_on_block_elasticity() {
+    let n_s = 90;
+    let a = make_block_2comp(n_s, 0.2);
+    let n = 2 * n_s;
+
+    // RHS and exact solution
+    let x_exact: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.13).sin() + 1.0).collect();
+    let mut b = DenseVec::zeros(n);
+    a.spmv(&x_exact, &mut b.as_mut_slice());
+
+    // Nodal AMG preconditioner
+    let config = AmgConfig {
+        strategy: CoarsenStrategy::RugeStüben,
+        nodal_dofs: Some(2),
+        coarse_threshold: 6,
+        pre_sweeps: 2,
+        post_sweeps: 2,
+        ..Default::default()
+    };
+    let hier = AmgHierarchy::build(a.clone(), config);
+    let precond = AmgPrecond::new(hier).with_cycle(CycleType::W);
+
+    let mut x = DenseVec::zeros(n);
+    let solver = ConjugateGradient::<f64>::new(20);
+    let res = solver
+        .solve(&a, Some(&precond), &b, &mut x, &default_params(1e-8, 200))
+        .expect("cg");
+
+    assert!(res.converged,
+        "nodal AMG PCG didn't converge; iters={}, rel={:.3e}",
+        res.iterations, res.final_residual);
+    let err = solution_error(x.as_slice(), &x_exact);
+    eprintln!("nodal PCG: iters={} rel={:.3e} sol_err={:.3e}", res.iterations, res.final_residual, err);
+    assert!(err < 1e-3,
+        "nodal AMG PCG solution error too large: {err:.3e}");
+}
+
+#[test]
+fn nodal_amg_hierarchy_is_symmetric_and_spd() {
+    let n_s = 60;
+    let a = make_block_2comp(n_s, 0.2);
+    let n = 2 * n_s;
+
+    let config = AmgConfig {
+        strategy: CoarsenStrategy::RugeStüben,
+        nodal_dofs: Some(2),
+        coarse_threshold: 6,
+        pre_sweeps: 2,
+        post_sweeps: 2,
+        ..Default::default()
+    };
+    let hier = AmgHierarchy::build(a, config);
+
+    // Symmetry of the preconditioner: (u, B v) == (v, B u)
+    let mut u = DenseVec::zeros(n);
+    let mut v = DenseVec::zeros(n);
+    for i in 0..n {
+        u.as_mut_slice()[i] = ((i as f64) * 1.7).sin();
+        v.as_mut_slice()[i] = ((i as f64) * 2.3).cos();
+    }
+    let mut bu = DenseVec::zeros(n);
+    let mut bv = DenseVec::zeros(n);
+    hier.apply_cycle(&u, &mut bu, CycleType::W);
+    hier.apply_cycle(&v, &mut bv, CycleType::W);
+
+    let u_bv: f64 = u.as_slice().iter().zip(bv.as_slice()).map(|(x, y)| x * y).sum();
+    let v_bu: f64 = v.as_slice().iter().zip(bu.as_slice()).map(|(x, y)| x * y).sum();
+    let rel = (u_bv - v_bu).abs() / u_bv.abs().max(1e-300);
+    assert!(rel < 1e-10, "nodal AMG preconditioner not symmetric: rel_diff={rel:.3e}");
+
+    // Positive definiteness on a few vectors
+    for probe in 0..8 {
+        let mut r = DenseVec::zeros(n);
+        for i in 0..n {
+            r.as_mut_slice()[i] = if (i + probe) % 7 == 0 { 1.0 } else { 0.0 };
+        }
+        let mut br = DenseVec::zeros(n);
+        hier.apply_cycle(&r, &mut br, CycleType::W);
+        let rbr: f64 = r.as_slice().iter().zip(br.as_slice()).map(|(x, y)| x * y).sum();
+        assert!(rbr > 0.0, "nodal AMG preconditioner not positive definite on probe {probe}: (r,Br)={rbr:.3e}");
+    }
+}
