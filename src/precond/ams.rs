@@ -386,23 +386,26 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         let ag     = a.matmat(g);         // n_edges × n_nodes
         let mut a_node = g_t.matmat(&ag);     // n_nodes × n_nodes
 
-        // When `singularity_regularization > 0`, add ε·GᵀG to the nodal
-        // system to shift nullspace eigenvalues away from zero, preventing NaN
-        // in AMG/ILU(0) coarse solves for singular problems (e.g. curl-curl
-        // eigenvalue problems).
+        // When `singularity_regularization > 0`, add ε·I to the nodal
+        // system to shift *all* eigenvalues away from zero — in particular
+        // the exact nullspace of GᵀAG (the constant vector, since G·1 = 0,
+        // and curl-curl vanishes on gradients so GᵀAG ≈ δ·GᵀMG there).
+        // Note that adding ε·GᵀG (the previous implementation) does *not*
+        // regularize that mode because GᵀG·1 = 0 as well; the singular
+        // nodal AMG then amplifies any nullspace component of Gᵀr into a
+        // huge coarse correction (observed on one rank of pex34 np2 -hex).
+        // The constant component of the coarse solution is harmless: it is
+        // annihilated by the left multiplication with G in the correction.
         let eps_f64 = config.singularity_regularization;
         if eps_f64 > 0.0 {
             let eps = T::from_f64(eps_f64);
-            // GᵀG has the same dimensions as GᵀAG: n_nodes × n_nodes.
-            // The `g_t` transpose from step 3.1 is still live.
-            let gtg = g_t.matmat(g);       // n_nodes × n_nodes
-            // Merge a_node + ε·GᵀG via COO (CooMatrix handles duplicate summing).
+            // Merge a_node + ε·I via COO (diagonal entries sum up).
             let mut coo = CooMatrix::new(n_nodes, n_nodes);
             for (r, c, v) in a_node.triplets() {
                 coo.push(r, c, v);
             }
-            for (r, c, v) in gtg.triplets() {
-                coo.push(r, c, eps * v);
+            for d in 0..n_nodes {
+                coo.push(d, d, eps);
             }
             a_node = CsrMatrix::from_coo(&coo);
         }
