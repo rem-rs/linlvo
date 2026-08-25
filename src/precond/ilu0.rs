@@ -46,8 +46,30 @@ impl<T: ComplexScalar> Ilu0Precond<T> {
         }
 
         let row_ptr = mat.row_ptr().to_vec();
-        let col_idx = mat.col_idx().to_vec();
+        let mut col_idx = mat.col_idx().to_vec();
         let mut lu_val = mat.values().to_vec();
+
+        // Normalise each row to ascending column order.  Callers (fem-rs)
+        // may supply MFEM-style insertion-ordered columns; the factorisation
+        // below assumes sorted columns.  Reordering does not change the
+        // ILU(0) factor — only the iteration order over the fixed pattern.
+        let mut perm: Vec<usize> = Vec::new();
+        for i in 0..n {
+            let lo = row_ptr[i];
+            let hi = row_ptr[i + 1];
+            if hi - lo <= 1 {
+                continue;
+            }
+            perm.clear();
+            perm.extend(lo..hi);
+            perm.sort_unstable_by(|&a, &b| col_idx[a].cmp(&col_idx[b]));
+            let cols = col_idx[lo..hi].to_vec();
+            let vals = lu_val[lo..hi].to_vec();
+            for (k, &p) in perm.iter().enumerate() {
+                col_idx[lo + k] = cols[p - lo];
+                lu_val[lo + k] = vals[p - lo];
+            }
+        }
 
         // Locate diagonal position for each row.
         let mut diag_pos = vec![0usize; n];

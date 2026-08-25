@@ -76,18 +76,18 @@ impl DenseLu {
     #[cfg(not(feature = "blas"))]
     pub fn factorize(a: Vec<Complex64>, n: usize) -> Result<Self, String> {
         use nalgebra::DMatrix;
+        // Store the *original* matrix; `solve` re-factorises via nalgebra.
+        // (Storing the LU factors here and re-factorising them in `solve`
+        // performed a double decomposition and returned wrong results.)
         let matrix = DMatrix::<Complex64>::from_column_slice(n, n, &a);
-        let lu = matrix.clone().lu();
-        let lu_matrix = lu.lu_internal();
+        if !matrix.clone().lu().is_invertible() {
+            return Err(format!("DenseLu: singular matrix (n={n})"));
+        }
         let mut ipiv = vec![0i32; n];
         for i in 0..n {
             ipiv[i] = (i + 1) as i32; // identity permutation (no actual pivot info from nalgebra)
         }
-        Ok(DenseLu {
-            a: lu_matrix.as_slice().to_vec(),
-            ipiv,
-            n,
-        })
+        Ok(DenseLu { a, ipiv, n })
     }
 
     #[cfg(not(feature = "blas"))]
@@ -144,7 +144,9 @@ mod tests {
         let lu = DenseLu::factorize(a, n).unwrap();
         let b = vec![Complex64::new(5.0, 0.0), Complex64::new(10.0, 0.0)];
         let x = lu.solve(&b);
-        assert!((x[0].re - 0.5).abs() < 1e-10);
-        assert!((x[1].re - 3.0).abs() < 1e-10);
+        // Column-major (LAPACK) convention: a = [4,2,1,3] is [[4,1],[2,3]],
+        // so the system is 4x+y=5, 2x+3y=10  ⇒  x=0.5, y=3.0.
+        assert!((x[0].re - 0.5).abs() < 1e-10, "x[0] = {}", x[0].re);
+        assert!((x[1].re - 3.0).abs() < 1e-10, "x[1] = {}", x[1].re);
     }
 }

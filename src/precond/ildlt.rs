@@ -90,9 +90,31 @@ impl<T: ComplexScalar> IldltPrecond<T> {
             });
         }
 
-        let rp_orig = mat.row_ptr();
-        let ci_orig = mat.col_idx();
-        let vs_orig = mat.values();
+        let rp_orig = mat.row_ptr().to_vec();
+        let mut ci_orig = mat.col_idx().to_vec();
+        let mut vs_orig = mat.values().to_vec();
+
+        // Normalise each row to ascending column order.  Callers (fem-rs)
+        // may supply MFEM-style insertion-ordered columns; the factorisation
+        // below assumes sorted columns.  Reordering does not change the
+        // ILDLᵀ(0) factor — only the iteration order over the fixed pattern.
+        let mut perm: Vec<usize> = Vec::new();
+        for i in 0..n {
+            let lo = rp_orig[i];
+            let hi = rp_orig[i + 1];
+            if hi - lo <= 1 {
+                continue;
+            }
+            perm.clear();
+            perm.extend(lo..hi);
+            perm.sort_unstable_by(|&a, &b| ci_orig[a].cmp(&ci_orig[b]));
+            let cols = ci_orig[lo..hi].to_vec();
+            let vals = vs_orig[lo..hi].to_vec();
+            for (k, &p) in perm.iter().enumerate() {
+                ci_orig[lo + k] = cols[p - lo];
+                vs_orig[lo + k] = vals[p - lo];
+            }
+        }
 
         // ── Extract lower-triangular pattern and values ───────────────────────
         // rp / ci / l_val will hold L (unit lower-tri, diagonal not stored).

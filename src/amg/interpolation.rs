@@ -52,6 +52,7 @@ pub fn rs_interpolation<T: ComplexScalar>(
             NodeType::Fine | NodeType::Undecided => {
                 let mut a_ii      = T::zero();
                 let mut f_sum     = T::zero();
+                let mut c_sum     = T::zero();
                 let mut c_entries: Vec<(usize, T)> = Vec::new();
 
                 for k in rp[i]..rp[i + 1] {
@@ -59,13 +60,33 @@ pub fn rs_interpolation<T: ComplexScalar>(
                     if j == i {
                         a_ii = vs[k];
                     } else if status[j] == NodeType::Coarse {
+                        c_sum += vs[k];
                         c_entries.push((c_map[j], vs[k]));
                     } else {
                         f_sum += vs[k];
                     }
                 }
 
-                let denom = a_ii + f_sum;
+                // Classical RS denominator: denom = a_ii + Σ_{f∈F} a_if.
+                // For convection-diffusion (row sum ≈ 0) this cancels to
+                // machine precision and the interpolation coefficients blow
+                // up (observed: |P| ~ 1e15 → coarse operator ~ 1e17).
+                // Since a_ii + Σ_F = -(Σ_C a_ic) when the row sum is zero,
+                // fall back to the (numerically stable) coarse-point sum
+                // whenever the direct denominator is dominated by roundoff.
+                let scale = a_ii.abs() + f_sum.abs() + c_sum.abs();
+                let denom = if scale > T::Real::zero() {
+                    let direct = a_ii + f_sum;
+                    let eps = T::machine_epsilon() * scale;
+                    if direct.abs() < eps && c_sum.abs() > eps {
+                        T::zero() - c_sum
+                    } else {
+                        direct
+                    }
+                } else {
+                    T::zero()
+                };
+
                 if denom.abs() < T::machine_epsilon() || c_entries.is_empty() {
                     return Vec::new();
                 }
