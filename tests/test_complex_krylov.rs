@@ -36,7 +36,7 @@ fn complex_helmholtz_csr(n: usize, k: f64, sigma: f64) -> CsrMatrix<C64> {
         if i > 0     { coo.push_complex(i, i - 1, c(-1.0, 0.0)); }
         if i + 1 < n { coo.push_complex(i, i + 1, c(-1.0, 0.0)); }
     }
-    CsrMatrix::from_complex_coo(&coo)
+    CsrMatrix::from_coo(&coo)
 }
 
 /// Build the same system as a `DenseMatrix<C64>`.
@@ -84,7 +84,7 @@ fn complex_gmres_dense_helmholtz() {
     let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
 
     let solver = ComplexGmres::<f64>::new(30);
-    let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 1000).unwrap();
+    let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 1000).unwrap();
     assert!(res.converged, "dense Helmholtz: {:?}", res);
     assert!(dense_residual(&a, &x, &b) < 1e-8, "dense residual too large");
 }
@@ -99,7 +99,7 @@ fn complex_gmres_sparse_helmholtz() {
     let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
 
     let solver = ComplexGmres::<f64>::new(40);
-    let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 1000).unwrap();
+    let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 1000).unwrap();
     assert!(res.converged, "sparse Helmholtz: {:?}", res);
     assert!(sparse_residual(&a, &x, &b) < 1e-8, "sparse residual too large");
 }
@@ -118,7 +118,7 @@ fn complex_gmres_workspace_reuse() {
             .map(|i| c((i + rhs_idx) as f64, -(i as f64)))
             .collect::<Vec<_>>().into();
         let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
-        let res = solver.solve_with_workspace(&a, &b, &mut x, 1e-10, 0.0, 500, &mut ws).unwrap();
+        let res = solver.solve_with_workspace(&a, None, &b, &mut x, 1e-10, 0.0, 500, &mut ws).unwrap();
         assert!(res.converged, "workspace reuse iter {rhs_idx}: {:?}", res);
         assert!(sparse_residual(&a, &x, &b) < 1e-8, "iter {rhs_idx} residual too large");
     }
@@ -134,7 +134,7 @@ fn complex_csr_linear_operator_apply() {
     coo.push_complex(0, 0, c(1.0, 1.0));
     coo.push_complex(1, 1, c(2.0, -1.0));
     coo.push_complex(2, 2, c(3.0, 0.0));
-    let a = CsrMatrix::from_complex_coo(&coo);
+    let a = CsrMatrix::from_coo(&coo);
 
     let x: DenseVec<C64> = vec![c(1.0, 0.0), c(0.0, 1.0), c(1.0, -1.0)].into();
     let mut y: DenseVec<C64> = vec![c(0.0, 0.0); 3].into();
@@ -156,7 +156,7 @@ fn complex_csr_transpose_apply() {
     let mut coo: CooMatrix<C64> = CooMatrix::new_complex(2, 2);
     coo.push_complex(0, 1, c(1.0, 1.0));
     coo.push_complex(1, 0, c(2.0, -1.0));
-    let a = CsrMatrix::from_complex_coo(&coo);
+    let a = CsrMatrix::from_coo(&coo);
 
     let x: DenseVec<C64> = vec![c(1.0, 2.0), c(-1.0, 0.5)].into();
     let mut y: DenseVec<C64> = vec![c(0.0, 0.0); 2].into();
@@ -185,7 +185,7 @@ fn complex_gmres_pure_imaginary_rhs() {
     let b: DenseVec<C64> = vec![c(0.0, 1.0); n].into();
     let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
     let solver = ComplexGmres::<f64>::new(15);
-    let res = solver.solve(&a_real, &b, &mut x, 1e-10, 0.0, 500).unwrap();
+    let res = solver.solve(&a_real, None, &b, &mut x, 1e-10, 0.0, 500).unwrap();
     assert!(res.converged, "pure imaginary RHS: {:?}", res);
     // Real part of solution must be ≈ 0
     for xi in x.as_slice() {
@@ -203,7 +203,7 @@ fn complex_gmres_restart_converges() {
     let mut x: DenseVec<C64> = vec![c(0.0, 0.0); n].into();
     // Use small restart=10 to force multiple outer restarts.
     let solver = ComplexGmres::<f64>::new(10);
-    let res = solver.solve(&a, &b, &mut x, 1e-10, 0.0, 2000).unwrap();
+    let res = solver.solve(&a, None, &b, &mut x, 1e-10, 0.0, 2000).unwrap();
     assert!(res.converged, "restart (m=10): {:?}", res);
     assert!(sparse_residual(&a, &x, &b) < 1e-8, "restart residual too large");
 }
