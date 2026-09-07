@@ -148,11 +148,21 @@ impl Default for AmsConfig {
         AmsConfig {
             smoother_omega: 0.667,
             smoother_sweeps: 1,
-            edge_smoother: AmsEdgeSmoother::WeightedJacobi,
-            cycle: AmsCycle::Additive,
+            // HYPRE AMS default `rlx_type = 2` (symmetric Gauss-Seidel,
+            // `rlx_weight = 1.0`).  Weighted Jacobi with ω = 2/3 diverges on
+            // curl-curl operators (ρ(D⁻¹A) ≫ 3), which makes the additive /
+            // V(1,1) cycle indefinite and breaks preconditioned CG.
+            edge_smoother: AmsEdgeSmoother::SymmetricGaussSeidel,
+            // HYPRE AMS default `cycle_type = 13` (symmetric multiplicative
+            // V(1,1) cycle: GS → nodal → GS).
+            cycle: AmsCycle::MultiplicativeV11,
             face_space: false,
             node_solver: AuxSpaceSolver::default(),
-            singularity_regularization: 0.0,
+            // Shift the nodal operator GᵀAG away from singularity: with
+            // Dirichlet-type BCs the boundary-node rows of GᵀAG are (nearly)
+            // zero, and the AMG ω·D⁻¹ smoother then amplifies the nullspace
+            // into an indefinite coarse correction, breaking PCG.
+            singularity_regularization: 1e-6,
         }
     }
 }
