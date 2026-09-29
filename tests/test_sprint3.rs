@@ -207,7 +207,7 @@ fn spai_poisson_1d_precond() {
     let b_vec = DenseVec::from_vec(b);
     let mut x = DenseVec::zeros(n);
     let cg = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&spai), &b_vec, &mut x, &default_params(1e-10, 500)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &spai, &b_vec, &mut x, &default_params(1e-10, 500), 1e-10);
     assert!(res.converged, "SPAI-PCG didn't converge; iters={}, rel={:.3e}", res.iterations, res.final_residual);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-8);
 }

@@ -43,9 +43,8 @@ fn kcycle_laplacian_1d_converges() {
     let hier = AmgHierarchy::build(a.clone(), amg_config());
     let prec = AmgPrecond::new(hier).with_cycle(CycleType::K { inner_iters: 2 });
     let mut x = DenseVec::zeros(n);
-    let res = ConjugateGradient::<f64>::default()
-        .solve(&a, Some(&prec), &b_vec, &mut x, &cg_params())
-        .unwrap();
+    let cg = ConjugateGradient::<f64>::default();
+    let res = common::resolve_cg_to_residual(&cg, &a, &prec, &b_vec, &mut x, &cg_params(), 1e-9);
     assert!(res.converged, "K-cycle+CG did not converge");
     assert!(rel_residual(&a, &x, &b_vec) < 1e-7);
 }
@@ -61,9 +60,8 @@ fn kcycle_inner_iters_variants() {
         let hier = AmgHierarchy::build(a.clone(), amg_config());
         let prec = AmgPrecond::new(hier).with_cycle(CycleType::K { inner_iters: inner });
         let mut x = DenseVec::zeros(n);
-        let res = ConjugateGradient::<f64>::default()
-            .solve(&a, Some(&prec), &b_vec, &mut x, &cg_params())
-            .unwrap();
+        let cg = ConjugateGradient::<f64>::default();
+        let res = common::resolve_cg_to_residual(&cg, &a, &prec, &b_vec, &mut x, &cg_params(), 1e-9);
         assert!(res.converged, "K{{inner={inner}}} did not converge");
         assert!(rel_residual(&a, &x, &b_vec) < 1e-7);
     }
@@ -80,9 +78,8 @@ fn kcycle_as_precond_cg_converges() {
     let prec = AmgPrecond::new(hier).with_cycle(CycleType::K { inner_iters: 2 });
 
     let mut x = DenseVec::zeros(n);
-    let res = ConjugateGradient::<f64>::default()
-        .solve(&a, Some(&prec), &b_vec, &mut x, &cg_params())
-        .unwrap();
+    let cg = ConjugateGradient::<f64>::default();
+    let res = common::resolve_cg_to_residual(&cg, &a, &prec, &b_vec, &mut x, &cg_params(), 1e-9);
     assert!(res.converged, "K-cycle+CG did not converge");
     assert!(rel_residual(&a, &x, &b_vec) < 1e-7);
 }
@@ -151,16 +148,13 @@ fn kcycle_inner_iters_zero_fallback() {
     let hier_k = AmgHierarchy::build(a.clone(), amg_config());
     let prec_k = AmgPrecond::new(hier_k).with_cycle(CycleType::K { inner_iters: 0 });
     let mut x_k = DenseVec::zeros(n);
-    let res_k = ConjugateGradient::<f64>::default()
-        .solve(&a, Some(&prec_k), &b_vec, &mut x_k, &cg_params())
-        .unwrap();
+    let cg = ConjugateGradient::<f64>::default();
+    let res_k = common::resolve_cg_to_residual(&cg, &a, &prec_k, &b_vec, &mut x_k, &cg_params(), 1e-9);
 
     let hier_v = AmgHierarchy::build(a.clone(), amg_config());
     let prec_v = AmgPrecond::new(hier_v).with_cycle(CycleType::V);
     let mut x_v = DenseVec::zeros(n);
-    let res_v = ConjugateGradient::<f64>::default()
-        .solve(&a, Some(&prec_v), &b_vec, &mut x_v, &cg_params())
-        .unwrap();
+    let res_v = common::resolve_cg_to_residual(&cg, &a, &prec_v, &b_vec, &mut x_v, &cg_params(), 1e-9);
 
     assert!(res_k.converged, "K{{0}}+CG did not converge");
     assert!(res_v.converged, "V-cycle+CG did not converge");

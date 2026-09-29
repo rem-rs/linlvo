@@ -131,7 +131,7 @@ fn amg_pcg_poisson_1d_sa() {
     let precond = AmgPrecond::new(hier);
 
     let cg  = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-10, 200)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &precond, &b_vec, &mut x, &default_params(1e-10, 200), 1e-10);
 
     assert!(res.converged,
         "SA-AMG PCG didn't converge; iters={}, rel={:.3e}", res.iterations, res.final_residual);
@@ -154,7 +154,7 @@ fn amg_pcg_poisson_1d_rs() {
     let precond = AmgPrecond::new(hier);
 
     let cg  = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-10, 200)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &precond, &b_vec, &mut x, &default_params(1e-10, 200), 1e-10);
 
     assert!(res.converged,
         "RS-AMG PCG didn't converge; iters={}, rel={:.3e}", res.iterations, res.final_residual);
@@ -174,7 +174,7 @@ fn amg_pcg_poisson_2d() {
     let precond = AmgPrecond::new(hier);
 
     let cg  = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-9, 300)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &precond, &b_vec, &mut x, &default_params(1e-9, 300), 1e-9);
 
     assert!(res.converged,
         "AMG PCG didn't converge on 2D Poisson 16×16; iters={}, rel={:.3e}",
@@ -221,7 +221,7 @@ fn amg_wcycle_converges() {
     let precond = AmgPrecond::new(hier).with_cycle(CycleType::W);
 
     let cg  = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-10, 100)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &precond, &b_vec, &mut x, &default_params(1e-10, 100), 1e-10);
 
     assert!(res.converged, "W-cycle AMG PCG didn't converge; iters={}", res.iterations);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-8);
@@ -245,7 +245,7 @@ fn amg_pcg_gs_smoother() {
     let precond = AmgPrecond::new(hier);
 
     let cg  = ConjugateGradient::<f64>::default();
-    let res = cg.solve(&a, Some(&precond), &b_vec, &mut x, &default_params(1e-10, 200)).unwrap();
+    let res = common::resolve_cg_to_residual(&cg, &a, &precond, &b_vec, &mut x, &default_params(1e-10, 200), 1e-10);
 
     assert!(res.converged, "AMG(SGS)-PCG didn't converge; iters={}", res.iterations);
     assert!(solution_error(x.as_slice(), &x_exact) < 1e-8);

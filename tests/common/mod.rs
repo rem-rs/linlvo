@@ -284,3 +284,35 @@ pub fn make_rect_complex(
 
     (g, c, a)
 }
+
+// ─── Warm-started re-solve past the energy-ratio early exit ──────────────────
+
+/// Drive a preconditioned CG solve until the **true** residual meets `target`.
+///
+/// Since the MFEM-compatible convergence change (commit 1e0065c, pinned by the
+/// fem-rs ex33 bit-identical anchor), preconditioned CG declares convergence
+/// on the preconditioned energy ratio `(B r, r)/(B r0, r0) < rtol`
+/// (mfem `PCG()`, solvers.cpp:919 semantics) — which can fire while
+/// `‖r‖/‖b‖` is still ~1e-4.  Re-solving warm-started from the current
+/// iterate continues the same Krylov space and drives the true residual to
+/// `target`: the standard user-side recipe for energy-stopped solvers.
+/// Returns the last solve's result; `x` holds the improved iterate.
+pub fn resolve_cg_to_residual<T: Scalar>(
+    cg: &linlvo::ConjugateGradient<T>,
+    a: &CsrMatrix<T>,
+    precond: &dyn linlvo::Preconditioner<Vector = linlvo::DenseVec<T>>,
+    b: &linlvo::DenseVec<T>,
+    x: &mut linlvo::DenseVec<T>,
+    params: &linlvo::SolverParams,
+    target: f64,
+) -> linlvo::SolverResult {
+    use linlvo::KrylovSolver;
+    let mut res = cg.solve(a, Some(precond), b, x, params).expect("cg solve");
+    for _ in 0..100 {
+        if res.final_residual < target {
+            break;
+        }
+        res = cg.solve(a, Some(precond), b, x, params).expect("cg warm re-solve");
+    }
+    res
+}
