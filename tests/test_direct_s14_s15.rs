@@ -11,7 +11,7 @@ use linlvo::{
         ordering::OrderingMethod,
     },
     sparse::{CooMatrix, CsrMatrix},
-    DenseVec, LinearOperator,
+    DenseVec, LinearOperator, SparseLu, SupernodalSparseLu,
     KrylovSolver, SolverParams, VerboseLevel,
     iterative::ConjugateGradient,
     Gmres,
@@ -273,4 +273,81 @@ fn multifrontal_with_options() {
     solver.factor(&a).unwrap();
     solver.solve(&b, &mut x).unwrap();
     assert!(relative_residual(&a, &x, &b) < 1e-10);
+}
+
+// ─── SparseLu / SupernodalSparseLu column-permutation solve (D94) ────────────
+
+/// 4×4 grid Laplacian (symmetric, perm_q ≠ I under RCM) with one pinned node.
+fn grid_laplacian_4x4() -> CsrMatrix<f64> {
+    let (nx, ny) = (4usize, 4usize);
+    let idx = |i: usize, j: usize| j * nx + i;
+    let mut coo = CooMatrix::<f64>::new(nx * ny, nx * ny);
+    for j in 0..ny {
+        for i in 0..nx {
+            let k = idx(i, j);
+            let mut deg = 0.0;
+            if i > 0 { deg += 1.0; }
+            if i + 1 < nx { deg += 1.0; }
+            if j > 0 { deg += 1.0; }
+            if j + 1 < ny { deg += 1.0; }
+            if k == 0 { deg += 1.0; } // Dirichlet-style pin
+            coo.push(k, k, deg);
+            if i > 0 { coo.push(k, idx(i - 1, j), -1.0); }
+            if i + 1 < nx { coo.push(k, idx(i + 1, j), -1.0); }
+            if j > 0 { coo.push(k, idx(i, j - 1), -1.0); }
+            if j + 1 < ny { coo.push(k, idx(i, j + 1), -1.0); }
+        }
+    }
+    CsrMatrix::from_coo(&coo)
+}
+
+/// Nonsymmetric shift (directed cycle, scaled) added entry-wise off the
+/// diagonal, so partial pivoting may also produce perm_p ≠ I.
+fn nonsym_shift(a: &CsrMatrix<f64>, shift: f64) -> CsrMatrix<f64> {
+    let n = a.nrows();
+    let mut coo = CooMatrix::<f64>::new(n, n);
+    for (row, col, v) in a.triplets() {
+        coo.push(row, col, v);
+    }
+    for row in 0..n {
+        coo.push(row, (row + 1) % n, shift);
+    }
+    CsrMatrix::from_coo(&coo)
+}
+
+/// D94 regression: the LU solve must apply the fill-reducing **column**
+/// permutation Q to the RHS (P·Qᵀb), not only the pivot row permutation P.
+/// The old code solved with P·b and returned A⁻¹·Qᵀ⁻¹b-ish garbage whenever
+/// Q ≠ I (any 2-D fill-reducing ordering) and b is not permutation-invariant.
+/// A constant RHS or a 1-D path graph (RCM-identity Q) masks the defect —
+/// that is why the pre-existing 1-D tests never caught it.
+/// `lu_sn.rs` (supernodal LU) had the same missing Q and is pinned too.
+#[test]
+fn lu_rcm_perm_q_solve() {
+    let a_sym = grid_laplacian_4x4();
+    let a = nonsym_shift(&a_sym, 0.25);
+    let n = a.nrows();
+    let b = DenseVec::from_vec((0..n).map(|i| (i as f64) * 0.5 - 3.0).collect());
+
+    for (name, ord) in [("Natural", OrderingMethod::Natural), ("Rcm", OrderingMethod::Rcm)] {
+        let mut lu = SparseLu::<f64>::new(DirectOptions {
+            ordering: ord,
+            ..Default::default()
+        });
+        lu.factor(&a).unwrap();
+        let mut x = DenseVec::zeros(n);
+        lu.solve(&b, &mut x).unwrap();
+        let rr = relative_residual(&a, &x, &b);
+        assert!(rr < 1e-10, "SparseLu {name}: rel residual {rr:.3e}");
+    }
+
+    let mut lu = SupernodalSparseLu::<f64>::new(DirectOptions {
+        ordering: OrderingMethod::Rcm,
+        ..Default::default()
+    }, 8);
+    lu.factor(&a).unwrap();
+    let mut x = DenseVec::zeros(n);
+    lu.solve(&b, &mut x).unwrap();
+    let rr = relative_residual(&a, &x, &b);
+    assert!(rr < 1e-10, "SupernodalSparseLu Rcm: rel residual {rr:.3e}");
 }

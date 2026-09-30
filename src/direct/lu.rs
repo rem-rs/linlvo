@@ -258,12 +258,14 @@ impl<T: ComplexScalar> DirectSolver<T> for SparseLu<T> {
             });
         }
 
-        // Step 1: apply row permutation P to b.
+        // Step 1: apply the column permutation Q and then the pivot row
+        // permutation P to b: the factors realize P·QᵀAQ = L·U, so the solve
+        // needs P·(Qᵀb). (perm_q[new] = old; perm_p[step] = original_row.)
         let mut pb = DenseVec::zeros(n);
         {
             let bs  = b.as_slice();
             let pbs = pb.as_mut_slice();
-            for j in 0..n { pbs[j] = bs[self.perm_p[j]]; }
+            for j in 0..n { pbs[j] = bs[self.perm_q[self.perm_p[j]]]; }
         }
 
         // Step 2: forward solve L y = Pb.
@@ -316,7 +318,7 @@ impl<T: ComplexScalar> DirectSolver<T> for SparseLu<T> {
                     {
                         let rs  = r.as_slice();
                         let pbs = pb.as_mut_slice();
-                        for j in 0..n { pbs[j] = rs[self.perm_p[j]]; }
+                        for j in 0..n { pbs[j] = rs[self.perm_q[self.perm_p[j]]]; }
                     }
                     forward_solve(
                         &self.l_row_ptr, &self.l_col_idx, &self.l_values,
