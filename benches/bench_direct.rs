@@ -10,7 +10,7 @@
 //! Direct preconditioner: LU/Cholesky/LDLt wrapped as GMRES preconditioners.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use linger::{
+use linlvo::{
     direct::{
         DirectSolver, DirectOptions, DirectSolverPrecond,
         SparseLu, SparseCholesky, SparseLdlt, MultifrontalLu, MultifrontalOptions,

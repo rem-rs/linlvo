@@ -1,7 +1,7 @@
 use num_traits::{Float, NumAssign, One, Zero};
 use std::fmt::Debug;
 
-/// Numeric scalar bound used by all linger algorithms.
+/// Numeric scalar bound used by all linlvo algorithms.
 ///
 /// Every algorithm is generic over `T: Scalar`, giving unified f32/f64 support.
 ///

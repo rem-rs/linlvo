@@ -4,7 +4,7 @@
 //! with scalar fallback implementation.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use linger::sparse::{CooMatrix, CsrMatrix};
+use linlvo::sparse::{CooMatrix, CsrMatrix};
 
 #[path = "baseline.rs"]
 mod baseline;

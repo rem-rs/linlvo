@@ -1,7 +1,7 @@
 //! Criterion benchmarks for AMG setup and solve phases.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use linger::{
+use linlvo::{
     amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy, CycleType},
     iterative::ConjugateGradient,
     sparse::{CooMatrix, CsrMatrix},

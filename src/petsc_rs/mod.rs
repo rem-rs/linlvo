@@ -1,4 +1,4 @@
-//! PETSc KSP-compatible interface built on top of `linger`'s solver builder.
+//! PETSc KSP-compatible interface built on top of `linlvo`'s solver builder.
 //!
 //! Enable with the `petsc-rs` Cargo feature.
 //!

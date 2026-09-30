@@ -1,4 +1,4 @@
-//! WASM / wasm-bindgen public interface for linger.
+//! WASM / wasm-bindgen public interface for linlvo.
 //!
 //! Exposes a minimal JS-callable API for solving sparse linear systems in the
 //! browser or Node.js.  Only available when compiled with `feature = "wasm"`.

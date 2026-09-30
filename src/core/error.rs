@@ -1,4 +1,4 @@
-/// All errors that can be returned by linger's public API.
+/// All errors that can be returned by linlvo's public API.
 #[derive(Debug, thiserror::Error)]
 pub enum SolverError {
     /// Encountered a (near-)singular pivot during factorisation.

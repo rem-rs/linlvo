@@ -4,7 +4,7 @@
 //! at several problem sizes representative of FEA applications.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use linger::{
+use linlvo::{
     parallel::parallel_spmv,
     sparse::{BsrBuilder, CooMatrix, CsrMatrix},
 };
@@ -57,7 +57,7 @@ fn make_poisson_2d(n: usize) -> CsrMatrix<f64> {
 }
 
 /// Build a BSR matrix from a 2-DOF block Poisson-like stiffness system.
-fn make_bsr_2dof(n_blocks: usize) -> linger::BsrMatrix<f64> {
+fn make_bsr_2dof(n_blocks: usize) -> linlvo::BsrMatrix<f64> {
     let r = 2;
     let c = 2;
     let mut builder = BsrBuilder::new(n_blocks, n_blocks, r, c);

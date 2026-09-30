@@ -1,4 +1,4 @@
-//! High-level `SolverBuilder` — unified entry point for all linger solvers.
+//! High-level `SolverBuilder` — unified entry point for all linlvo solvers.
 //!
 //! `SolverBuilder` provides a fluent, self-documenting API that unifies Krylov
 //! iterative and direct solvers under a single interface.  It handles the
@@ -56,26 +56,26 @@ pub enum DirectBackend {
     Cholesky,
     /// Multifrontal LU with optional BLR compression (general square).
     Multifrontal,
-    /// MUMPS-compatible direct path implemented by linger's own multifrontal solver.
+    /// MUMPS-compatible direct path implemented by linlvo's own multifrontal solver.
     Mumps,
-    /// MKL-compatible direct path implemented by linger's own multifrontal solver.
+    /// MKL-compatible direct path implemented by linlvo's own multifrontal solver.
     Mkl,
 }
 
 /// External backend families coordinated across subprojects.
 ///
 /// Note: these selections are a contract-level API in C1. Execution remains
-/// on the native linger path until per-backend wiring lands in later stages.
+/// on the native linlvo path until per-backend wiring lands in later stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalBackend {
     /// Compatibility request ID for a MUMPS-shaped direct-solver contract.
     ///
-    /// linger resolves this to its native multifrontal replacement path rather
+    /// linlvo resolves this to its native multifrontal replacement path rather
     /// than an external MUMPS dependency.
     Mumps,
     /// Compatibility request ID for an MKL-shaped direct-solver contract.
     ///
-    /// linger resolves this to its native multifrontal replacement path rather
+    /// linlvo resolves this to its native multifrontal replacement path rather
     /// than an external MKL dependency.
     Mkl,
 }
@@ -103,7 +103,7 @@ impl BackendCapabilities {
 /// Effective execution route for the current solve request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveBackend {
-    /// Native linger implementation path.
+    /// Native linlvo implementation path.
     NativeLinger,
     /// Selected external backend path.
     External(ExternalBackend),
@@ -468,7 +468,7 @@ impl SolverBuilder {
     /// Request an external backend route.
     ///
     /// In C1 this is an interface-freeze API: unsupported or not-yet-wired
-    /// requests deterministically fall back to native linger execution.
+    /// requests deterministically fall back to native linlvo execution.
     pub fn external_backend(mut self, b: ExternalBackend) -> Self {
         self.external_backend = Some(b);
         self
@@ -643,7 +643,7 @@ impl SolverBuilder {
     ) -> Result<BuilderSolveReport, SolverError> {
         let backend_report = self.backend_selection_report();
         if self.verbose && self.external_backend.is_some() {
-            eprintln!("[linger::SolverBuilder] {}", backend_report.note);
+            eprintln!("[linlvo::SolverBuilder] {}", backend_report.note);
         }
         match &self.method {
             SolveMethod::Direct(backend) => {
@@ -1229,7 +1229,7 @@ fn resolve_external_backend(
             requested: None,
             effective: EffectiveBackend::NativeLinger,
             capabilities: caps,
-            note: "No external backend requested; using native linger path.".to_string(),
+            note: "No external backend requested; using native linlvo path.".to_string(),
         },
         Some(ExternalBackend::Mumps) => {
             if caps.wasm_target {
@@ -1237,14 +1237,14 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
+                    note: "Requested mumps on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linlvo path.".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mumps. linger provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
+                    note: "Requested mumps. linlvo provides a MUMPS-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mumps)).".to_string(),
                 }
             }
         }
@@ -1254,14 +1254,14 @@ fn resolve_external_backend(
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linger path.".to_string(),
+                    note: "Requested mkl on wasm32 target. Direct native backends are unavailable on wasm; using baseline native linlvo path.".to_string(),
                 }
             } else {
                 BackendSelectionReport {
                     requested,
                     effective: EffectiveBackend::NativeLinger,
                     capabilities: caps,
-                    note: "Requested mkl. linger provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
+                    note: "Requested mkl. linlvo provides an MKL-compatible contract via its native multifrontal replacement path (SolverBuilder::Direct(DirectBackend::Mkl)).".to_string(),
                 }
             }
         }

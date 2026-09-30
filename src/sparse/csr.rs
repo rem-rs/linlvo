@@ -5,7 +5,7 @@ use crate::sparse::{coo::CooMatrix, csc::CscMatrix};
 /// Compressed Sparse Row (CSR) matrix.
 ///
 /// This is the primary sparse format used by all iterative solvers and
-/// preconditioners in linger.
+/// preconditioners in linlvo.
 ///
 /// Layout:
 /// - `row_ptr[i]..row_ptr[i+1]` indexes the entries belonging to row `i`.

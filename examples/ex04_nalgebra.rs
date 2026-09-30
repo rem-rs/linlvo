@@ -1,7 +1,7 @@
-//! ex04 — direct use of `nalgebra_sparse::CsrMatrix` as a linger `LinearOperator`.
+//! ex04 — direct use of `nalgebra_sparse::CsrMatrix` as a linlvo `LinearOperator`.
 //!
 //! **Purpose**: Verify that a matrix assembled with `nalgebra_sparse` gives
-//! identical SpMV results to linger's own `CsrMatrix`, without a wrapper type.
+//! identical SpMV results to linlvo's own `CsrMatrix`, without a wrapper type.
 
 use linlvo::{
     sparse::{CooMatrix as LingerCoo, CsrMatrix as LingerCsr},
@@ -61,7 +61,7 @@ fn main() {
             na_csr.nnz()
         );
         println!(
-            "  linger   CSR:  {}×{}  nnz={}",
+            "  linlvo   CSR:  {}×{}  nnz={}",
             linger_csr.nrows(),
             linger_csr.ncols(),
             linger_csr.nnz()

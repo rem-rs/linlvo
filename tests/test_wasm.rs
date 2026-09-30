@@ -1,4 +1,4 @@
-//! WASM end-to-end tests for linger's JS-callable API.
+//! WASM end-to-end tests for linlvo's JS-callable API.
 //!
 //! These tests are compiled and executed in a headless browser / Node.js via
 //! `wasm-pack test --headless --firefox` (or `--node`).

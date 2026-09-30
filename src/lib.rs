@@ -1,4 +1,4 @@
-//! `linger` — pure-Rust sparse linear system solver library.
+//! `linlvo` — pure-Rust sparse linear system solver library.
 //!
 //! Provides Krylov iterative methods, algebraic multigrid, and a rich
 //! preconditioner library targeting large-scale FEA problems.

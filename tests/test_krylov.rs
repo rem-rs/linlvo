@@ -287,7 +287,7 @@ fn bicgstab_nonsymmetric_convdiff() {
 // ─── MINRES tests ─────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "D94-B: linger MINRES recurrence defect - stagnates at 2.045e-9 on the 4x4 diagonal (happy-breakdown system, 100 iters); residual and solution disconnect (probe 2026-09-30). Not consumed by fem-rs (own MFEM minres ports)."]
+#[ignore = "D94-B: linlvo MINRES recurrence defect - stagnates at 2.045e-9 on the 4x4 diagonal (happy-breakdown system, 100 iters); residual and solution disconnect (probe 2026-09-30). Not consumed by fem-rs (own MFEM minres ports)."]
 fn minres_diagonal_4x4() {
     let a = diag_spd(&[1.0, 2.0, 3.0, 4.0]);
     let b = DenseVec::from_vec(vec![1.0, 2.0, 3.0, 4.0]);
@@ -302,7 +302,7 @@ fn minres_diagonal_4x4() {
 }
 
 #[test]
-#[ignore = "D94-B: linger MINRES breakdown exit reports final_residual = 0 at iter 51 while the relative solution error is 7.8e-3 (residual/solution disconnect, probe 2026-09-30). Not consumed by fem-rs (own MFEM minres ports)."]
+#[ignore = "D94-B: linlvo MINRES breakdown exit reports final_residual = 0 at iter 51 while the relative solution error is 7.8e-3 (residual/solution disconnect, probe 2026-09-30). Not consumed by fem-rs (own MFEM minres ports)."]
 fn minres_poisson_1d() {
     let n = 50;
     let (a, x_exact, b) = common::make_poisson_1d::<f64>(n);

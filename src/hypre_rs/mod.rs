@@ -1,4 +1,4 @@
-//! BoomerAMG-compatible interface built on top of `linger`'s own AMG.
+//! BoomerAMG-compatible interface built on top of `linlvo`'s own AMG.
 //!
 //! Enable with the `hypre-rs` Cargo feature.
 //!

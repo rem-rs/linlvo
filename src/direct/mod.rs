@@ -1,6 +1,6 @@
 //! Sparse direct solver module (Sprint 13).
 //!
-//! Provides exact sparse direct solvers as a complement to linger's iterative
+//! Provides exact sparse direct solvers as a complement to linlvo's iterative
 //! methods.  All implementations are pure-Rust with zero external dependencies,
 //! making the module fully compatible with `wasm32-unknown-unknown`.
 //!

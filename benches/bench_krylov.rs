@@ -1,7 +1,7 @@
 //! Criterion benchmarks for Krylov solvers and preconditioners.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use linger::{
+use linlvo::{
     direct::{DirectSolverPrecond, SparseLdlt},
     iterative::{BiCgStab, CgWorkspace, ConjugateGradient, Gmres, GmresWorkspace},
     precond::{Icc0Precond, Ilu0Precond, IlukPrecond, IldltPrecond, JacobiPrecond},
