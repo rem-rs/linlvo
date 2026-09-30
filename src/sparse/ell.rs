@@ -34,13 +34,13 @@ const PADDING_IDX: usize = usize::MAX;
 ///
 /// # Examples
 /// ```
-/// use linger::sparse::{CooMatrix, ell::EllMatrix};
+/// use linlvo::sparse::{CooMatrix, ell::EllMatrix};
 ///
 /// let mut coo: CooMatrix<f64> = CooMatrix::new(3, 3);
 /// coo.push(0, 0, 2.0); coo.push(0, 1, -1.0);
 /// coo.push(1, 0, -1.0); coo.push(1, 1, 2.0); coo.push(1, 2, -1.0);
 /// coo.push(2, 1, -1.0); coo.push(2, 2, 2.0);
-/// let ell = EllMatrix::from_csr(&linger::sparse::CsrMatrix::from_coo(&coo));
+/// let ell = EllMatrix::from_csr(&linlvo::sparse::CsrMatrix::from_coo(&coo));
 /// assert_eq!(ell.nrows(), 3);
 /// ```
 #[derive(Debug, Clone)]

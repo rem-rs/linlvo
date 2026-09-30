@@ -25,13 +25,13 @@ use super::operator::{LinearOperator, TransposeOperator};
 ///
 /// # Examples
 /// ```
-/// use linger::DenseMatrix;
+/// use linlvo::DenseMatrix;
 /// use num_complex::Complex;
 ///
 /// // Real 2×3 matrix
 /// let a = DenseMatrix::<f64>::from_fn(2, 3, |i, j| (i * 3 + j + 1) as f64);
-/// let x = linger::DenseVec::from_vec(vec![1.0_f64, 1.0, 1.0]);
-/// let mut y = linger::DenseVec::zeros(2);
+/// let x = linlvo::DenseVec::from_vec(vec![1.0_f64, 1.0, 1.0]);
+/// let mut y = linlvo::DenseVec::zeros(2);
 /// a.apply_real(&x, &mut y);  // y = A*x
 /// assert!((y[0] - 6.0).abs() < 1e-12);
 ///

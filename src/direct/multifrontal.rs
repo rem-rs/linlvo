@@ -101,9 +101,9 @@ struct BlrFactor<T> {
 ///
 /// # Example (exact solve)
 /// ```
-/// use linger::direct::{MultifrontalLu, DirectSolver};
-/// use linger::sparse::{CooMatrix, CsrMatrix};
-/// use linger::DenseVec;
+/// use linlvo::direct::{MultifrontalLu, DirectSolver};
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::DenseVec;
 ///
 /// let mut coo = CooMatrix::<f64>::new(3, 3);
 /// coo.push(0, 0, 4.0); coo.push(0, 1, 1.0);

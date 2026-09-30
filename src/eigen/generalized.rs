@@ -183,7 +183,7 @@ unsafe impl<'a, T: Scalar, A: LinearOperator<Vector=DenseVec<T>>+Sync,
 ///
 /// # Example
 /// ```no_run
-/// use linger::{
+/// use linlvo::{
 ///     eigen::{EigenParams, EigenSolver, EigenWhich},
 ///     eigen::generalized::GeneralizedEigen,
 ///     sparse::{CooMatrix, CsrMatrix},

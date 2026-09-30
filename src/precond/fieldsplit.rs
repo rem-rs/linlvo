@@ -15,13 +15,13 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use linger::{
+//! use linlvo::{
 //!     sparse::CsrMatrix,
 //!     precond::fieldsplit::{FieldSplitPrecond, SplitMode},
 //!     precond::{JacobiPrecond, Ilu0Precond},
 //!     DenseVec,
 //! };
-//! # use linger::core::preconditioner::Preconditioner;
+//! # use linlvo::core::preconditioner::Preconditioner;
 //! # fn example(p0: JacobiPrecond<f64>, p1: JacobiPrecond<f64>) {
 //! // Split 6×6 system: DOFs 0..3 → field 0, DOFs 3..6 → field 1
 //! let split_point = 3_usize;

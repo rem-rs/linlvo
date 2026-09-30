@@ -33,7 +33,7 @@ use crate::sparse::{CooMatrix, CsrMatrix};
 ///
 /// # Examples
 /// ```
-/// use linger::sparse::{CooMatrix, dia::DiaMatrix};
+/// use linlvo::sparse::{CooMatrix, dia::DiaMatrix};
 ///
 /// // Tridiagonal [-1, 2, -1]
 /// let n = 5usize;
@@ -43,7 +43,7 @@ use crate::sparse::{CooMatrix, CsrMatrix};
 ///     if i > 0     { coo.push(i, i - 1, -1.0); }
 ///     if i < n - 1 { coo.push(i, i + 1, -1.0); }
 /// }
-/// let dia = DiaMatrix::from_csr(&linger::sparse::CsrMatrix::from_coo(&coo));
+/// let dia = DiaMatrix::from_csr(&linlvo::sparse::CsrMatrix::from_coo(&coo));
 /// assert_eq!(dia.num_diags(), 3);
 /// ```
 #[derive(Debug, Clone)]

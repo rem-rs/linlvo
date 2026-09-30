@@ -34,8 +34,8 @@ use std::collections::VecDeque;
 ///
 /// # Example
 /// ```
-/// use linger::direct::ordering::rcm;
-/// use linger::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::direct::ordering::rcm;
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
 ///
 /// let mut coo: CooMatrix<f64> = CooMatrix::new(4, 4);
 /// for i in 0..4usize { coo.push(i, i, 2.0); }

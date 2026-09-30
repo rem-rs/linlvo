@@ -33,9 +33,9 @@ use crate::direct::{
 ///
 /// # Example
 /// ```
-/// use linger::direct::{SparseLu, DirectSolver};
-/// use linger::sparse::{CooMatrix, CsrMatrix};
-/// use linger::{DenseVec};
+/// use linlvo::direct::{SparseLu, DirectSolver};
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::{DenseVec};
 ///
 /// let mut coo = CooMatrix::<f64>::new(3, 3);
 /// coo.push(0, 0, 4.0); coo.push(0, 1, 1.0);

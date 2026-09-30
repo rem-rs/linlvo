@@ -13,7 +13,7 @@ use crate::sparse::{coo::CooMatrix, csc::CscMatrix};
 ///
 /// # Examples
 /// ```
-/// use linger::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
 ///
 /// let mut coo: CooMatrix<f64> = CooMatrix::new(3, 3);
 /// coo.push(0, 0, 2.0); coo.push(0, 1, -1.0);

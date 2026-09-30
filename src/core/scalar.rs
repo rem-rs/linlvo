@@ -7,7 +7,7 @@ use std::fmt::Debug;
 ///
 /// # Examples
 /// ```
-/// use linger::Scalar;
+/// use linlvo::Scalar;
 /// fn eps<T: Scalar>() -> T { T::machine_epsilon() }
 /// assert!(eps::<f64>() < 1e-10);
 /// assert!(eps::<f32>() < 1e-5);

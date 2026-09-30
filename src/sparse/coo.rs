@@ -7,7 +7,7 @@ use crate::core::scalar::ComplexScalar;
 ///
 /// # Examples
 /// ```
-/// use linger::sparse::CooMatrix;
+/// use linlvo::sparse::CooMatrix;
 ///
 /// let mut m: CooMatrix<f64> = CooMatrix::new(3, 3);
 /// m.push(0, 0, 4.0);

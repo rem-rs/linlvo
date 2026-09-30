@@ -49,9 +49,9 @@ use crate::direct::{
 ///
 /// # Example
 /// ```
-/// use linger::direct::{SparseLdlt, DirectSolver};
-/// use linger::sparse::{CooMatrix, CsrMatrix};
-/// use linger::DenseVec;
+/// use linlvo::direct::{SparseLdlt, DirectSolver};
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::DenseVec;
 ///
 /// // 3×3 symmetric indefinite system: saddle-point-like
 /// let mut coo: CooMatrix<f64> = CooMatrix::new(3, 3);

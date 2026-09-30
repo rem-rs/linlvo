@@ -40,8 +40,8 @@ use std::cmp::Reverse;
 ///
 /// # Example
 /// ```
-/// use linger::direct::ordering::colamd;
-/// use linger::sparse::{CooMatrix, CsrMatrix};
+/// use linlvo::direct::ordering::colamd;
+/// use linlvo::sparse::{CooMatrix, CsrMatrix};
 ///
 /// let mut coo: CooMatrix<f64> = CooMatrix::new(4, 4);
 /// for i in 0..4usize { coo.push(i, i, 2.0); }
