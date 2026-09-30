@@ -57,7 +57,7 @@ use super::{EigenParams, EigenResult, EigenSolver, EigenWhich, fill_random, dot}
 
 /// LOBPCG eigensolver for symmetric positive definite operators.
 ///
-/// Best combined with an AMG preconditioner (`linger::AmgPrecond`) for FEA
+/// Best combined with an AMG preconditioner (`linlvo::AmgPrecond`) for FEA
 /// structural modal analysis.
 ///
 /// Set `which = EigenWhich::SmallestAlgebraic` for structural modes (default),

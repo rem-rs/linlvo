@@ -39,7 +39,7 @@
 //! ## Usage
 //!
 //! ```text
-//! use linger::direct::{SupernodalSparseLu, DirectSolver};
+//! use linlvo::direct::{SupernodalSparseLu, DirectSolver};
 //! let mut solver = SupernodalSparseLu::<f64>::default();
 //! solver.factor(&a).unwrap();
 //! solver.solve(&b, &mut x).unwrap();

@@ -7,9 +7,9 @@
 //! | Capability | Status |
 //! |-----------|--------|
 //! | `BoomerAmgPrecond` / `BoomerAmgConfig` | ✓ Implemented (wraps `AmgPrecond`) |
-//! | AMS H(curl) auxiliary-space path | ✓ Available via `linger::AmsPrecond` |
-//! | ADS H(div) auxiliary-space path | ✓ Available via `linger::AdsPrecond` |
-//! | AIR nonsymmetric restriction | ✓ Available via `linger::amg::air` |
+//! | AMS H(curl) auxiliary-space path | ✓ Available via `linlvo::AmsPrecond` |
+//! | ADS H(div) auxiliary-space path | ✓ Available via `linlvo::AdsPrecond` |
+//! | AIR nonsymmetric restriction | ✓ Available via `linlvo::amg::air` |
 //! | ParCSR partitioned matrix bridge | ○ Planned (roadmap M1) |
 //! | Device-policy hooks (GPU passthrough) | ○ Planned (roadmap M2) |
 //!
@@ -21,9 +21,9 @@
 //! # Example
 //! ```rust,no_run
 //! # #[cfg(feature = "hypre-rs")] {
-//! use linger::hypre_rs::{BoomerAmgConfig, BoomerAmgPrecond};
-//! use linger::sparse::CsrMatrix;
-//! use linger::core::preconditioner::Preconditioner;
+//! use linlvo::hypre_rs::{BoomerAmgConfig, BoomerAmgPrecond};
+//! use linlvo::sparse::CsrMatrix;
+//! use linlvo::core::preconditioner::Preconditioner;
 //!
 //! let a: CsrMatrix<f64> = CsrMatrix::identity(64);
 //! let config = BoomerAmgConfig::default();

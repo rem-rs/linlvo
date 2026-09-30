@@ -21,7 +21,7 @@
 //! ## Usage
 //!
 //! ```text
-//! use linger::precond::{AdsPrecond, AdsConfig, AuxSpaceSolver};
+//! use linlvo::precond::{AdsPrecond, AdsConfig, AuxSpaceSolver};
 //!
 //! // C: discrete curl, n_faces × n_edges
 //! // G: discrete gradient, n_edges × n_nodes

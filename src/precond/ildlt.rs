@@ -54,7 +54,7 @@ use crate::sparse::CsrMatrix;
 ///
 /// # Example
 /// ```text
-/// use linger::precond::IldltPrecond;
+/// use linlvo::precond::IldltPrecond;
 /// let precond = IldltPrecond::<f64>::from_csr(&a)?;
 /// cg.solve(&a, Some(&precond), &b, &mut x, &params)?;
 /// ```

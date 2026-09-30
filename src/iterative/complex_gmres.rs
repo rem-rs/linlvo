@@ -14,8 +14,8 @@
 //!
 //! # Usage
 //! ```ignore
-//! use linger::iterative::complex_gmres::ComplexGmres;
-//! use linger::core::{DenseMatrix, vector::DenseVec};
+//! use linlvo::iterative::complex_gmres::ComplexGmres;
+//! use linlvo::core::{DenseMatrix, vector::DenseVec};
 //! use num_complex::Complex;
 //!
 //! let a: DenseMatrix<Complex<f64>> = /* ... */;

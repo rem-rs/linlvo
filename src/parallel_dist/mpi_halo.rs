@@ -12,14 +12,14 @@
 //! # Example (2-rank run)
 //! ```no_run
 //! # #[cfg(feature = "mpi")] {
-//! use linger::parallel_dist::{
+//! use linlvo::parallel_dist::{
 //!     LocalHaloExchange, HaloExchange,
 //!     mpi_halo::{MpiHaloExchange, MpiReduce, GlobalReduce},
 //!     HaloPlan, NeighborHaloPlan,
 //!     DistCsrMatrix, block_partition,
 //!     dist_cg, DistCgParams,
 //! };
-//! use linger::sparse::CsrMatrix;
+//! use linlvo::sparse::CsrMatrix;
 //!
 //! let universe = mpi::initialize().unwrap();
 //! let world    = universe.world();

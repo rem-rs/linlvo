@@ -18,7 +18,7 @@
 //! reduce memory and time:
 //!
 //! ```text
-//! use linger::direct::ordering::{rcm, OrderingMethod};
+//! use linlvo::direct::ordering::{rcm, OrderingMethod};
 //! let perm = rcm(&a);   // Reverse Cuthill-McKee
 //! ```
 //!
@@ -28,7 +28,7 @@
 //! into any [`KrylovSolver`](crate::KrylovSolver) as a preconditioner:
 //!
 //! ```text
-//! use linger::direct::{SparseLu, DirectSolverPrecond};
+//! use linlvo::direct::{SparseLu, DirectSolverPrecond};
 //! let lu = SparseLu::<f64>::default();
 //! let precond = DirectSolverPrecond::new(lu, &a)?;
 //! let result = ConjugateGradient::default()

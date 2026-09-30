@@ -1,6 +1,6 @@
 //! Native-target integration for `nalgebra_sparse::CsrMatrix`.
 //!
-//! `linger::core::LinearOperator` is a local trait, so it can be implemented
+//! `linlvo::core::LinearOperator` is a local trait, so it can be implemented
 //! directly for nalgebra's CSR matrix without a wrapper newtype.
 
 use crate::core::{operator::LinearOperator, scalar::Scalar, vector::DenseVec};

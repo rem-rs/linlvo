@@ -19,7 +19,7 @@
 //! ## Usage
 //!
 //! ```text
-//! use linger::precond::{AmsPrecond, AmsConfig, AuxSpaceSolver};
+//! use linlvo::precond::{AmsPrecond, AmsConfig, AuxSpaceSolver};
 //!
 //! // G: discrete gradient, n_edges × n_nodes, user-assembled
 //! let config = AmsConfig::default();  // AMG coarse solve, ω = 0.667

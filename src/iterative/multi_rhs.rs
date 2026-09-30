@@ -15,8 +15,8 @@
 //!
 //! ## Example
 //! ```ignore
-//! use linger::{DenseMatrix, DenseVec};
-//! use linger::iterative::multi_rhs::{MultiRhsGmres, MultiRhsParams};
+//! use linlvo::{DenseMatrix, DenseVec};
+//! use linlvo::iterative::multi_rhs::{MultiRhsGmres, MultiRhsParams};
 //!
 //! // Build the (complex) impedance matrix Z and k excitation columns B
 //! let z: DenseMatrix<Complex<f64>> = /* ... */;
@@ -175,8 +175,8 @@ impl MultiRhsGmres {
 ///
 /// # Example
 /// ```ignore
-/// use linger::iterative::multi_rhs::{ComplexMultiRhsGmres, MultiRhsParams};
-/// use linger::{DenseMatrix, DenseVec};
+/// use linlvo::iterative::multi_rhs::{ComplexMultiRhsGmres, MultiRhsParams};
+/// use linlvo::{DenseMatrix, DenseVec};
 /// use num_complex::Complex;
 ///
 /// type C64 = Complex<f64>;

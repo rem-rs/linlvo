@@ -8,7 +8,7 @@
 //! # Quick examples
 //!
 //! ```text
-//! use linger::builder::{SolverBuilder, SolveMethod, DirectBackend};
+//! use linlvo::builder::{SolverBuilder, SolveMethod, DirectBackend};
 //!
 //! // Simple direct solve (multifrontal LU, RCM ordering)
 //! let x = SolverBuilder::new()

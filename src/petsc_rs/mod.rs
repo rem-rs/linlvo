@@ -21,9 +21,9 @@
 //! # Example
 //! ```rust,no_run
 //! # #[cfg(feature = "petsc-rs")] {
-//! use linger::petsc_rs::KspSolver;
-//! use linger::sparse::CsrMatrix;
-//! use linger::core::vector::DenseVec;
+//! use linlvo::petsc_rs::KspSolver;
+//! use linlvo::sparse::CsrMatrix;
+//! use linlvo::core::vector::DenseVec;
 //!
 //! let a: CsrMatrix<f64> = CsrMatrix::identity(64);
 //! let b = DenseVec::zeros(64);
