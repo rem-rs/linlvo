@@ -141,6 +141,23 @@ pub struct AmsConfig {
     /// This is similar to MFEM's `SetSingularProblem()` which tells AMS to
     /// handle the H¹ nodal operator nullspace internally.
     pub singularity_regularization: f64,
+    /// Declare the edge system itself singular — a curl-curl problem with no
+    /// mass term and no essential BCs, i.e. exactly the system
+    /// `HypreAMS::SetSingularProblem()` declares (MFEM `linalg/hypre.hpp:2047`
+    /// = `HYPRE_AMSSetBetaPoissonMatrix(ams, NULL)`: AMS builds the nodal
+    /// `GᵀAG` itself and solves the *unshifted* singular A).
+    ///
+    /// When `true`, a zero (or near-zero) diagonal entry of `A` no longer
+    /// fails the setup: its Jacobi scale factor is set to zero — the row gets
+    /// no Jacobi edge smoothing, mirroring hypre's relaxation which skips
+    /// zero-pivot rows (the symmetric Gauss-Seidel arm already skips them).
+    /// PCG remains responsible for kernel compatibility: with a right-hand
+    /// side in `range(A)` the Krylov iterates stay in `range(A)` and the
+    /// convergent representative is the min-norm one — no `δI` shift on `A`
+    /// is needed or wanted (a shift perturbs the solved system by `O(δ)`).
+    ///
+    /// Default `false` (every previous consumer keeps the strict setup).
+    pub singular_problem: bool,
 }
 
 impl Default for AmsConfig {
@@ -163,6 +180,9 @@ impl Default for AmsConfig {
             // zero, and the AMG ω·D⁻¹ smoother then amplifies the nullspace
             // into an indefinite coarse correction, breaking PCG.
             singularity_regularization: 1e-6,
+            // `A` is assumed nonsingular unless the caller declares the
+            // curl-curl singular problem (see [`AmsConfig::singular_problem`]).
+            singular_problem: false,
         }
     }
 }
@@ -218,6 +238,7 @@ impl AmsConfig {
                 ..AmgConfig::default()
             }),
             singularity_regularization: 0.0,
+            singular_problem: false,
         }
     }
 }
@@ -374,6 +395,12 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         }
 
         // ── 2. Edge smoother: ω / d_i ────────────────────────────────────────
+        // `singular_problem` (MFEM `HypreAMS::SetSingularProblem` =
+        // `HYPRE_AMSSetBetaPoissonMatrix(NULL)`, linalg/hypre.hpp:2047) declares
+        // the unshifted curl-curl system: zero-pivot rows get a zero Jacobi
+        // scale (no edge smoothing on that row — hypre's relaxation skips
+        // them; the symmetric Gauss-Seidel arm already does) instead of
+        // failing the setup.  Without the flag the strict check stands.
         let omega = T::from_real(<T::Real as Scalar>::from_f64(config.smoother_omega));
         let tol   = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
         let diag  = a.diag();
@@ -382,9 +409,13 @@ impl<T: ComplexScalar> AmsPrecond<T> {
             .enumerate()
             .map(|(i, &d)| {
                 if d.abs() < tol {
-                    Err(SolverError::PrecondSetupFailed {
-                        reason: format!("AMS: near-zero diagonal in A at row {i}: {d:?}"),
-                    })
+                    if config.singular_problem {
+                        Ok(T::zero())
+                    } else {
+                        Err(SolverError::PrecondSetupFailed {
+                            reason: format!("AMS: near-zero diagonal in A at row {i}: {d:?}"),
+                        })
+                    }
                 } else {
                     Ok(omega / d)
                 }
