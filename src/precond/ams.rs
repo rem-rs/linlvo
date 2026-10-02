@@ -40,6 +40,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond};
+use crate::core::vector::Vector as _;
 use crate::core::{
     error::SolverError,
     operator::TransposeOperator,
@@ -150,11 +151,20 @@ pub struct AmsConfig {
     /// When `true`, a zero (or near-zero) diagonal entry of `A` no longer
     /// fails the setup: its Jacobi scale factor is set to zero — the row gets
     /// no Jacobi edge smoothing, mirroring hypre's relaxation which skips
-    /// zero-pivot rows (the symmetric Gauss-Seidel arm already skips them).
+    /// zero-pivot rows (the symmetric Gauss-Seidel arm already does).
     /// PCG remains responsible for kernel compatibility: with a right-hand
     /// side in `range(A)` the Krylov iterates stay in `range(A)` and the
     /// convergent representative is the min-norm one — no `δI` shift on `A`
     /// is needed or wanted (a shift perturbs the solved system by `O(δ)`).
+    ///
+    /// **Cycle effect** (hypre 2.28 `ams.c:3688`, `hypre_AMSSolve`): a singular
+    /// problem switches the block-Pi multiplicative cycle from the
+    /// three-space `034515430` (GS → Pi_x → Pi_y → Pi_z → **nodal** → Pi_z →
+    /// Pi_y → Pi_x → GS) to `0345430` — the nodal gradient correction is
+    /// **dropped entirely** (hypre does not even build `B_G` when
+    /// `beta_is_zero`, `ams.c:3144`).  The flag only changes the cycle when
+    /// face blocks are present (constructor [`AmsPrecond::with_pi`]); the
+    /// historical two-space cycle keeps its nodal correction unconditionally.
     ///
     /// Default `false` (every previous consumer keeps the strict setup).
     pub singular_problem: bool,
@@ -314,8 +324,12 @@ pub struct AmsPrecond<T: ComplexScalar> {
     /// Approximate solver for the nodal coarse problem GᵀAG.
     node_precond: Box<dyn Preconditioner<Vector = DenseVec<T>>>,
     /// Face (curl) auxiliary space: `(Pi_d, B_d)` for d = x, y, z, where
-    /// `B_d ≈ (Pi_dᵀ A Pi_d)⁻¹`.  Empty when `AmsConfig::face_space` is off.
+    /// `B_d ≈ (Pi_dᵀ A Pi_d)⁻¹`.  Empty when the face space is off.
     face_blocks: Vec<(CsrMatrix<T>, Box<dyn Preconditioner<Vector = DenseVec<T>>>)>,
+    /// Whether the edge system was declared singular
+    /// ([`AmsConfig::singular_problem`]): with face blocks present this drops
+    /// the nodal correction from the cycle (hypre `beta_is_zero` → `0345430`).
+    singular_problem: bool,
     /// Setup diagnostics for observability and tuning.
     profile: AmsProfile,
 }
@@ -344,7 +358,44 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         g:      &CsrMatrix<T>,
         config: AmsConfig,
     ) -> Result<Self, SolverError> {
-        Self::build(a, g, None, config)
+        Self::build(a, g, None, None, config)
+    }
+
+    /// Build the AMS preconditioner with **user-supplied** face
+    /// (curl) interpolation blocks, the analogue of hypre's
+    /// `HYPRE_AMSSetInterpolations(ams, Pi_x, Pi_y, Pi_z)`.
+    ///
+    /// This is the mechanism MFEM's `HypreAMS` uses for every non-trivial
+    /// space: when the edge space is higher order or the mesh is curved,
+    /// `HypreAMS::MakeGradientAndInterpolation` (MFEM `linalg/hypre.cpp`)
+    /// assembles the identity interpolator `id_ND : [H¹]³ → H(curl)` and hands
+    /// its three component blocks to hypre — hypre then runs the block-Pi
+    /// multiplicative cycle (`cycle_type = 13`: `034515430`, or `0345430`
+    /// with [`AmsConfig::singular_problem`]) with `B_Pi_d = AMG(Pi_dᵀ A Pi_d)`
+    /// on each block.  Unlike [`Self::with_coords`] (hypre's internal
+    /// lowest-order coordinate construction, only valid for straight first-
+    /// order meshes), the caller supplies the FE-exact interpolations.
+    ///
+    /// `pi` holds 1–3 rectangular matrices `Pi_d` of shape
+    /// `n_edges × n_face_dofs` (columns in node-based order).  Zero rows of
+    /// the assembled coarse operators `Pi_dᵀ A Pi_d` are fixed to unit
+    /// diagonal, matching hypre's `hypre_ParCSRMatrixFixZeroRows`.  The
+    /// [`AmsConfig::face_space`] flag (coordinate construction) is ignored by
+    /// this constructor.
+    ///
+    /// See [`Self::new`] for the common arguments and error conditions.
+    pub fn with_pi(
+        a:      &CsrMatrix<T>,
+        g:      &CsrMatrix<T>,
+        pi:     &[CsrMatrix<T>],
+        config: AmsConfig,
+    ) -> Result<Self, SolverError> {
+        if pi.is_empty() || pi.len() > 3 {
+            return Err(SolverError::PrecondSetupFailed {
+                reason: format!("AMS: with_pi expects 1–3 Pi blocks, got {}", pi.len()),
+            });
+        }
+        Self::build(a, g, None, Some(pi), config)
     }
 
     /// Build the AMS preconditioner with the 3-D face (curl) auxiliary space.
@@ -362,13 +413,14 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         coords: &[f64],
         config: AmsConfig,
     ) -> Result<Self, SolverError> {
-        Self::build(a, g, Some(coords), config)
+        Self::build(a, g, Some(coords), None, config)
     }
 
     fn build(
         a:      &CsrMatrix<T>,
         g:      &CsrMatrix<T>,
         coords: Option<&[f64]>,
+        pi:     Option<&[CsrMatrix<T>]>,
         config: AmsConfig,
     ) -> Result<Self, SolverError> {
         let n_edges = a.nrows();
@@ -452,17 +504,62 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         }
 
         // ── 4. Coarse solver ─────────────────────────────────────────────────
+        // On the `with_pi` path (the MFEM HypreAMS structure) the coarse
+        // operators are generally SINGULAR: hypre deliberately avoids an
+        // exact coarsest solve there ("Generally, don't use exact solve on
+        // the coarsest level (matrix may be singular)", linalg/hypre.cpp —
+        // `SetCycleRelaxType(amg_rlx_type, 3)` for both B_G and B_Pi).  An
+        // LU-based coarsest solve amplifies the near-nullspace by 1/ε and
+        // blows up PCG (measured: tesla `-cr` order-1).  Force
+        // relaxation-based coarsest solves for the user-Pi path unless the
+        // caller already chose one.
+        let mut node_solver = config.node_solver.clone();
+        if pi.is_some() {
+            if let AuxSpaceSolver::Amg(cfg) = &mut node_solver {
+                if cfg.coarsest_sweeps.is_none() {
+                    cfg.coarsest_sweeps = Some(2);
+                }
+            }
+        }
         let a_node_nnz = a_node.nnz();
-        let (node_precond, node_solver_profile) = build_aux_solver(a_node, &config.node_solver)?;
+        let (node_precond, node_solver_profile) = build_aux_solver(a_node, &node_solver)?;
 
         // ── 5. Face (curl) auxiliary space: Pi = [Pi_x, Pi_y, Pi_z] ─────────
-        // HYPRE AMS: Pi_d(e, v) = 0.5·|G(e,v)|·(Gᵀx_d)[e], i.e. half the
-        // d-th component of edge e's vector, distributed over both vertices.
-        // Coarse operator per block: A_Pid = Pi_dᵀ·A·Pi_d (n_nodes × n_nodes).
+        // Two construction paths:
+        // * `with_pi` — user-supplied FE-exact interpolation blocks (the MFEM
+        //   `HYPRE_AMSSetInterpolations` path).  Coarse operator per block:
+        //   `A_Pid = Pi_dᵀ·A·Pi_d` with zero rows fixed to unit diagonal
+        //   (hypre `hypre_ParCSRMatrixFixZeroRows`, ams.c:3272).
+        // * `with_coords` + `face_space` — hypre's internal lowest-order
+        //   construction `Pi_d(e, v) = 0.5·|G(e,v)|·(Gᵀx_d)[e]`.
         let mut face_blocks: Vec<(CsrMatrix<T>, Box<dyn Preconditioner<Vector = DenseVec<T>>>)> =
             Vec::new();
-        let dim = coords.map(|c| c.len() / n_nodes).unwrap_or(0);
-        if config.face_space {
+        if let Some(pi) = pi {
+            for (d, pid) in pi.iter().enumerate() {
+                if pid.nrows() != n_edges {
+                    return Err(SolverError::PrecondSetupFailed {
+                        reason: format!(
+                            "AMS: Pi block {d} must have nrows = n_edges = {n_edges}, got {}",
+                            pid.nrows()
+                        ),
+                    });
+                }
+                let pid_t = pid.transpose_csr();
+                let a_pid = pid_t.matmat(&a.matmat(pid));
+                // Zero rows → unit diagonal (hypre `FixZeroRows`); NO ε·I
+                // shift — hypre's BoomerAMG runs unshifted on the (generally
+                // singular) A_Pi, and the earlier measured shift here made
+                // things *worse*: a 10⁻⁶ eigenvalue turns the relaxation
+                // coarsest solve into a 10⁺⁶-amplified near-null mode
+                // (tesla `-cr` order-1 divergence).  The relaxation-based
+                // coarsest solve (`coarsest_sweeps`) is the hypre-faithful
+                // nullspace handling.
+                let a_pid = fix_zero_rows(&a_pid);
+                let (b_pid, _) = build_aux_solver(a_pid, &node_solver)?;
+                face_blocks.push((pid.clone(), b_pid));
+            }
+        } else if config.face_space {
+            let dim = coords.map(|c| c.len() / n_nodes).unwrap_or(0);
             let coords = coords.ok_or_else(|| SolverError::PrecondSetupFailed {
                 reason: "AMS: face_space requires vertex coordinates (AmsPrecond::with_coords)"
                     .into(),
@@ -496,8 +593,8 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                 }
                 let pid = CsrMatrix::from_coo(&coo); // n_edges × n_nodes
                 let pid_t = pid.transpose_csr();
-                let a_pid = pid_t.matmat(&a.matmat(&pid)); // n_nodes × n_nodes
-                let (b_pid, _) = build_aux_solver(a_pid, &config.node_solver)?;
+                let a_pid = fix_zero_rows(&pid_t.matmat(&a.matmat(&pid))); // n_nodes × n_nodes
+                let (b_pid, _) = build_aux_solver(a_pid, &node_solver)?;
                 face_blocks.push((pid, b_pid));
             }
         }
@@ -522,6 +619,7 @@ impl<T: ComplexScalar> AmsPrecond<T> {
             smoother_sweeps: config.smoother_sweeps,
             node_precond,
             face_blocks,
+            singular_problem: config.singular_problem,
             profile,
         })
     }
@@ -574,14 +672,49 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
                 return;
             }
 
-            // Full HYPRE AMS cycle_type = 13 ("034515430"):
-            // GS → Pi_x → Pi_y → Pi_z → nodal → Pi_z → Pi_y → Pi_x → GS
-            for (pid, b) in &self.face_blocks {
+            // Full HYPRE AMS block-Pi multiplicative cycle.  hypre 2.28
+            // `hypre_AMSSolve` (ams.c:3688) switches on `beta_is_zero`
+            // (= [`AmsConfig::singular_problem`]):
+            // * non-singular: `cycle_type = 13` → "034515430"
+            //   GS → Pi_x → Pi_y → Pi_z → nodal → Pi_z → Pi_y → Pi_x → GS
+            // * singular (SetSingularProblem): → "0345430" — the nodal
+            //   gradient correction is dropped (hypre never builds B_G).
+            let use_nodal = !self.singular_problem;
+            let dbg = std::env::var("LINLVO_AMS_DEBUG").is_ok();
+            let mut rayleigh = |tag: &str, v: &DenseVec<T>| {
+                if !dbg {
+                    return;
+                }
+                // Temporary diagnostic (LINLVO_AMS_DEBUG): ||v||² and the
+                // Rayleigh quotient (v,Av)/(v,v) — Debug formatting since
+                // Scalar::Real does not implement formatting traits.
+                let v2 = v
+                    .as_slice()
+                    .iter()
+                    .fold(<T::Real as crate::core::scalar::Scalar>::from_f64(0.0), |acc, vv| {
+                        acc + (*vv * T::conj(*vv)).real()
+                    });
+                let mut av = DenseVec::zeros(v.len());
+                self.a.spmv(v.as_slice(), av.as_mut_slice());
+                let vav = v
+                    .as_slice()
+                    .iter()
+                    .zip(av.as_slice().iter())
+                    .fold(<T::Real as crate::core::scalar::Scalar>::from_f64(0.0), |acc, (vv, avv)| {
+                        acc + (*avv * T::conj(*vv)).real()
+                    });
+                eprintln!("[ams] {tag}: ||v||^2 = {:?}  rayleigh = {:?}", v2, vav / v2);
+            };
+            rayleigh("after GS", y);
+            for (idx, (pid, b)) in self.face_blocks.iter().enumerate() {
                 self.residual_of(x, y, &mut r);
                 self.apply_coarse(pid, &**b, &r, y);
+                rayleigh(&format!("after Pi arm {idx}"), y);
             }
-            self.residual_of(x, y, &mut r);
-            self.apply_coarse(&self.g, &*self.node_precond, &r, y);
+            if use_nodal {
+                self.residual_of(x, y, &mut r);
+                self.apply_coarse(&self.g, &*self.node_precond, &r, y);
+            }
             for (pid, b) in self.face_blocks.iter().rev() {
                 self.residual_of(x, y, &mut r);
                 self.apply_coarse(pid, &**b, &r, y);
@@ -654,6 +787,10 @@ impl<T: ComplexScalar> AmsPrecond<T> {
     }
 
     /// Apply one coarse-space correction: `y += P·B⁻¹·Pᵀ·r`.
+    ///
+    /// The temporary vectors are sized from `p.ncols()` — the Pi blocks may be
+    /// rectangular (`n_edges × n_face_dofs`) with more columns than the nodal
+    /// `G` block's vertex count.
     fn apply_coarse(
         &self,
         p: &CsrMatrix<T>,
@@ -661,9 +798,9 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         r: &DenseVec<T>,
         y: &mut DenseVec<T>,
     ) {
-        let n_nodes = self.n_nodes;
-        let mut t_node = DenseVec::zeros(n_nodes);
-        let mut s_node = DenseVec::zeros(n_nodes);
+        let n_cols = p.ncols();
+        let mut t_node = DenseVec::zeros(n_cols);
+        let mut s_node = DenseVec::zeros(n_cols);
         p.apply_transpose(r, &mut t_node);
         b.apply_precond(&t_node, &mut s_node);
         p.spmv_add(T::one(), s_node.as_slice(), T::one(), y.as_mut_slice());
@@ -701,6 +838,36 @@ impl<T: ComplexScalar> AmsPrecond<T> {
 }
 
 // ─── Shared helper ────────────────────────────────────────────────────────────
+
+/// Replace all-zero rows of `mat` with a unit diagonal row.
+///
+/// hypre `hypre_ParCSRMatrixFixZeroRows` (used on `A_Pi` in `hypre_AMSSetup`,
+/// ams.c:3272: "Make sure that A_Pix has no zero rows"): a zero row would
+/// break the AMG l1-based smoothers; fixing it to the identity row leaves the
+/// preconditioner consistent on the affected dofs.
+fn fix_zero_rows<T: ComplexScalar>(mat: &CsrMatrix<T>) -> CsrMatrix<T> {
+    let tol = T::machine_epsilon() * <T::Real as Scalar>::from_f64(1e6);
+    let mut coo = CooMatrix::new(mat.nrows(), mat.ncols());
+    let mut zero_rows = vec![true; mat.nrows()];
+    for (r, c, v) in mat.triplets() {
+        if v.abs() > tol {
+            zero_rows[r] = false;
+        }
+        coo.push(r, c, v);
+    }
+    let mut fixed = false;
+    for (r, z) in zero_rows.iter().enumerate() {
+        if *z {
+            coo.push(r, r, T::one());
+            fixed = true;
+        }
+    }
+    if fixed {
+        CsrMatrix::from_coo(&coo)
+    } else {
+        mat.clone()
+    }
+}
 
 /// Build a boxed coarse-space solver from the given operator and strategy.
 ///

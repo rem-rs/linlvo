@@ -8,7 +8,7 @@ use crate::core::scalar::{ComplexScalar, Scalar};
 use crate::core::vector::DenseVec;
 use crate::sparse::CsrMatrix;
 use crate::simd::smoother::{
-    jacobi_smooth, gs_smooth, chebyshev_smooth,
+    jacobi_smooth, gs_smooth, chebyshev_smooth, l1_sgs_smooth,
     estimate_spectral_radius,
 };
 
@@ -21,6 +21,11 @@ pub enum SmootherType {
     GaussSeidel,
     /// Symmetric Gauss-Seidel (forward + backward).
     SymmetricGaussSeidel,
+    /// L1-scaled symmetric Gauss-Seidel (hypre BoomerAMG relax type 8, the
+    /// AMS B_Pi/B_G smoother): the sweep divides by the l1 row norm instead
+    /// of the diagonal, so rows of a singular coarse operator whose diagonal
+    /// underflows stay stable.
+    L1SymmetricGaussSeidel,
     /// Chebyshev polynomial smoother (degree iterations, eigenvalue ratio).
     ///
     /// `degree` is the polynomial degree (number of iterations, typically 2–5).
@@ -61,6 +66,9 @@ pub fn smooth_with_hint<T: ComplexScalar>(
         }
         SmootherType::SymmetricGaussSeidel => {
             gs_smooth(a, x, b, true, n_sweeps);
+        }
+        SmootherType::L1SymmetricGaussSeidel => {
+            l1_sgs_smooth(a, x, b, n_sweeps);
         }
         SmootherType::Chebyshev { degree, ratio } => {
             // Use cached ρ(D⁻¹A) or estimate via power iterations.

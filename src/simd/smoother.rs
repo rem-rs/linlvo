@@ -5,7 +5,7 @@
 //! dispatched to AVX2 on x86-64 and fall back to scalar on other targets.
 
 use crate::core::scalar::{ComplexScalar, Scalar};
-use crate::core::vector::{DenseVec, Vector};
+use crate::core::vector::DenseVec;
 use crate::core::operator::LinearOperator;
 use crate::sparse::CsrMatrix;
 use crate::simd::dense_ops::{simd_axpby, simd_axpy};
@@ -686,5 +686,73 @@ mod tests {
         assert!(rho > 0.0, "spectral radius should be positive, got {rho}");
         // For 1D Poisson, eigenvalues of D^{-1}A ∈ [0,2], so ρ < 2.5
         assert!(rho < 2.5, "spectral radius should be < 2.5 for 1D Poisson, got {rho}");
+    }
+}
+
+/// L1-scaled symmetric Gauss–Seidel (hypre BoomerAMG relax type 8, the
+/// AMS B_Pi/B_G smoother): `u_i += (f_i − (Au)_i) / l1_i` forward then
+/// backward, where `l1_i = Σ_j |a_ij|` — the l1 row norm is bounded below by
+/// `max_j |a_ij|`, so rows whose *diagonal* underflows (singular coarse
+/// operators) stay stable.  Rows with `l1_i == 0` are skipped, exactly like
+/// hypre's `hypre_HybridGaussSeidelNS` (`par_relax.h`).
+pub fn l1_sgs_smooth<T: ComplexScalar>(
+    a: &CsrMatrix<T>,
+    x: &mut DenseVec<T>,
+    b: &DenseVec<T>,
+    iterations: usize,
+) {
+    let n = x.len();
+    debug_assert_eq!(a.nrows(), n);
+    debug_assert_eq!(a.ncols(), n);
+    let rp = a.row_ptr();
+    let ci = a.col_idx();
+    let vs = a.values();
+    let bs = b.as_slice();
+    // l1 row norms.
+    let l1: Vec<T::Real> = (0..n)
+        .map(|i| {
+            vs[rp[i]..rp[i + 1]]
+                .iter()
+                .fold(<T::Real as Scalar>::from_f64(0.0), |acc, v| {
+                    acc + v.abs()
+                })
+        })
+        .collect();
+
+    for _ in 0..iterations {
+        // Forward sweep
+        {
+            let xs = x.as_mut_slice();
+            for i in 0..n {
+                let l1_i = l1[i];
+                if l1_i == <T::Real as Scalar>::from_f64(0.0) {
+                    continue;
+                }
+                let start = rp[i];
+                let end = rp[i + 1];
+                let mut res = bs[i];
+                for k in start..end {
+                    res = res - vs[k] * xs[ci[k]];
+                }
+                xs[i] = xs[i] + res / T::from_real(l1_i);
+            }
+        }
+        // Backward sweep
+        {
+            let xs = x.as_mut_slice();
+            for i in (0..n).rev() {
+                let l1_i = l1[i];
+                if l1_i == <T::Real as Scalar>::from_f64(0.0) {
+                    continue;
+                }
+                let start = rp[i];
+                let end = rp[i + 1];
+                let mut res = bs[i];
+                for k in start..end {
+                    res = res - vs[k] * xs[ci[k]];
+                }
+                xs[i] = xs[i] + res / T::from_real(l1_i);
+            }
+        }
     }
 }

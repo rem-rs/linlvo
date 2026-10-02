@@ -136,16 +136,24 @@ fn vcycle<T: ComplexScalar>(
     // near-singular coarse operators (ex35's K - ω²M has λ_min ≈ 1e-3).
     // Fall back to weighted-Jacobi sweeps when the coarse operator is
     // numerically singular (LU pivot breakdown).
+    // `coarsest_sweeps = Some(k)` opts out of the direct solve entirely
+    // (hypre `SetCycleRelaxType(·, 3)`) — required for singular hierarchies
+    // (AMS Pi/nodal coarse problems), where the LU amplifies the
+    // near-nullspace by 1/ε.
     if lv.p.is_none() {
+        let coarse_smoother = match &hier.config.smoother {
+            SmootherType::Chebyshev { .. } => SmootherType::WeightedJacobi { omega: 0.667 },
+            other => other.clone(),
+        };
+        if let Some(k) = hier.config.coarsest_sweeps {
+            smooth_with_hint(&lv.a, x, b, &coarse_smoother, k, None);
+            return;
+        }
         let mut lu = crate::direct::SparseLu::<T>::default();
         if lu.factor(&lv.a).is_ok() {
             lu.solve(b, x).expect("AMG coarsest LU solve");
             return;
         }
-        let coarse_smoother = match &hier.config.smoother {
-            SmootherType::Chebyshev { .. } => SmootherType::WeightedJacobi { omega: 0.667 },
-            other => other.clone(),
-        };
         smooth_with_hint(&lv.a, x, b, &coarse_smoother, 50, None);
         return;
     }

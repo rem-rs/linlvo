@@ -52,6 +52,17 @@ pub struct AmgConfig {
     /// Nodal (system) AMG: number of DOFs per physical node for byNODES
     /// vector problems (hypre `SetNodal(1)` style).  `None` = scalar AMG.
     pub nodal_dofs: Option<usize>,
+    /// Coarsest-level solve: `None` (default) = direct sparse LU; `Some(k)` =
+    /// `k` sweeps of the configured smoother instead of the LU factorization.
+    ///
+    /// hypre's analogue is `HYPRE_BoomerAMGSetCycleRelaxType(..., 3)` — MFEM's
+    /// HypreAMS deliberately avoids an exact coarsest solve because the
+    /// Galerkin coarse operators of an auxiliary-space preconditioner are
+    /// frequently *singular* (linalg/hypre.cpp: "Generally, don't use exact
+    /// solve on the coarsest level"), where an LU factorization amplifies the
+    /// near-nullspace by 1/ε.  Set `Some(k)` when the hierarchy may be
+    /// singular (AMS Pi/nodal coarse problems).
+    pub coarsest_sweeps: Option<usize>,
 }
 
 impl Default for AmgConfig {
@@ -66,6 +77,7 @@ impl Default for AmgConfig {
             max_levels:       20,
             sa_omega:         0.667,
             nodal_dofs:       None,
+            coarsest_sweeps:  None,
         }
     }
 }
