@@ -22,6 +22,23 @@
 //!    (λ ≈ 0, a relative threshold) and keep the `k` smallest positive λ;
 //! 4. eigenvectors back-transformed `x = L⁻ᵀ y` (zero on boundary DOFs).
 //!
+//! # Round-106 semantic pin (D997)
+//!
+//! HYPRE AME (`src/parcsr_ls/ame.c`) LOBPCG-iterates the **plain** `(A, M)`
+//! operators over the discretely div-free subspace
+//! `{x : GᵀM x = 0}` (the initial block and the AMS preconditioner output are
+//! projected with `P = I − G(GᵀMG)⁻¹GᵀM`).  Because every positive eigenvector
+//! of a PSD pencil is `M`-orthogonal to `ker A = range(G)`, that projection
+//! does **not** change the positive spectrum: AME converges to the smallest
+//! positive eigenvalues of the *unconstrained* free pencil.  (The Ritz values
+//! of the *Euclidean* constraint `Gᵀx = 0` are a different, non-standard
+//! problem and sit ~1.4% below at ex32/h levels — round-106 comparison-basis
+//! finding; see `tmp/d106ex32/REPORT.md`.)  The dense path above already
+//! returns exactly that unconstrained positive spectrum; `cfg.tol` is
+//! honoured as an a-posteriori *relative-residual* verification
+//! (`‖Av − λMv‖ / (|λ|·‖Mv‖) ≤ tol` for every returned pair, the LOBPCG
+//! convergence criterion shape), and `converged` reports it.
+//!
 //! **Why not LOBPCG + AMS (BLOPEX/HYPRE)?** BLOPEX-style LOBPCG needs a
 //! quasi-inverse preconditioner so the generalised Rayleigh–Ritz Gram cross
 //! terms stay below 1 (HYPRE AME gets this from its full auxiliary-space AMS
@@ -113,7 +130,7 @@ impl<T: Scalar> AmeSolver<T> {
     pub fn tol(mut self, tol: f64) -> Self { self.cfg.tol = tol; self }
     pub fn max_iter(mut self, max_iter: usize) -> Self { self.cfg.max_iter = max_iter; self }
     pub fn verbose(mut self, verbose: bool) -> Self { self.cfg.verbose = verbose; self }
-    pub fn singularity_regularization(mut self, _val: f64) -> Self { self }
+    pub fn singularity_regularization(self, _val: f64) -> Self { self }
     pub fn extra(mut self, extra: usize) -> Self { self.cfg.extra = extra; self }
     /// Zero the given DOFs in the initial iterate — informational; the free-DOF
     /// elimination is detected from the `M` diagonal instead.
@@ -206,9 +223,20 @@ impl<T: Scalar> AmeSolver<T> {
         let mut residuals = Vec::with_capacity(k);
         // relative nullspace threshold: drop λ ≪ λ_max (the gradient
         // nullspace of the pencil) — h-refinement shrinks λ_min ∝ h², so an
-        // absolute cutoff would silently drop genuine eigenvalues.
-        let lam_max = se.eigenvalues[nf - 1].abs();
+        // absolute cutoff would silently drop genuine eigenvalues.  D997:
+        // λ_max is the *largest* magnitude over the sorted spectrum (the old
+        // `se.eigenvalues[nf-1]` read the last entry of the *unsorted* vector
+        // — a near-zero kernel value on ex32 pencils).
+        let lam_max = idx
+            .iter()
+            .fold(0.0_f64, |m, &i| m.max(se.eigenvalues[i].abs()));
         let null_tol = 1e-8 * lam_max.max(1.0);
+        // LOBPCG-style relative residual: ‖Av − λMv‖₂ / (|λ|·‖Mv‖₂).
+        // HYPRE AME converges the projected iteration with
+        // `lobpcg_tol.relative = rtol`; the dense direct pass reproduces the
+        // same spectrum to machine precision, so `tol` is honoured as an
+        // a-posteriori verification: every returned pair must satisfy it.
+        let mut all_converged = true;
         for &i in &idx {
             let lam = se.eigenvalues[i];
             if lam <= null_tol { continue; } // nullspace / spurious
@@ -226,18 +254,34 @@ impl<T: Scalar> AmeSolver<T> {
             m.spmv(v.as_slice(), mx.as_mut_slice());
             let lam_t = T::from_f64(lam);
             let mut rn = T::zero();
+            let mut mvn = T::zero();
             for ii in 0..n {
                 let ri = av.as_slice()[ii] - lam_t * mx.as_slice()[ii];
                 rn += ri * ri;
+                let mi = mx.as_slice()[ii];
+                mvn += mi * mi;
+            }
+            let rel = num_traits::ToPrimitive::to_f64(&rn).unwrap_or(0.0).sqrt()
+                / (lam.abs()
+                    * num_traits::ToPrimitive::to_f64(&mvn).unwrap_or(0.0).sqrt().max(1e-300));
+            if rel > self.cfg.tol {
+                all_converged = false;
             }
             residuals.push(rn.sqrt());
             evals.push(lam_t);
             evecs.push(v);
         }
         let n_converged = evecs.len();
-        // dense solve: a single (direct) pass; converged = enough genuine
-        // eigenvalues above the nullspace threshold were found
-        Ok(AmeResult { eigenvalues: evals, eigenvectors: evecs, iterations: 1, converged: n_converged >= k, residuals })
+        // dense solve: a single (direct) pass; `converged` = enough genuine
+        // eigenvalues above the nullspace threshold were found *and* every
+        // returned pair satisfies cfg.tol (relative residual).
+        Ok(AmeResult {
+            eigenvalues: evals,
+            eigenvectors: evecs,
+            iterations: 1,
+            converged: n_converged >= k && all_converged,
+            residuals,
+        })
     }
 }
 
@@ -291,5 +335,32 @@ mod tests {
         assert!(result.eigenvalues.len() >= 2);
         assert!((result.eigenvalues[0] - exact).abs() < 1e-3,
             "first eigenvalue ≈ {exact}, got {}", result.eigenvalues[0]);
+    }
+
+    /// D997: `tol` is honoured as an a-posteriori relative-residual
+    /// verification (the LOBPCG convergence-criterion shape): the dense pass
+    /// reproduces the spectrum to machine precision, so the default tol
+    /// reports `converged = true`, while an unreachable tolerance must flip
+    /// the flag *without* changing the eigenvalues.
+    #[test]
+    fn ame_tol_is_relative_residual_verification() {
+        let (a, m, g) = build_small_maxwell_problem();
+        let n_edges_test = a.nrows();
+        let mut eye_coo = CooMatrix::new(n_edges_test, n_edges_test);
+        for i in 0..n_edges_test { eye_coo.push(i, i, 1.0); }
+        let eye = CsrMatrix::from_coo(&eye_coo);
+
+        let mut solver = AmeSolver::new(2);
+        solver.cfg.shift = 0.001;
+        solver.cfg.tol = 1e-8;
+        let ok = solver.solve(&a, &eye, &g).unwrap();
+        assert!(ok.converged, "tol=1e-8 must be met by the dense pass");
+        let exact = 2.0 - 2.0 * (std::f64::consts::PI / 61.0).cos();
+        assert!((ok.eigenvalues[0] - exact).abs() < 1e-3);
+
+        solver.cfg.tol = 1e-20; // unreachable for any iterative refinement
+        let strict = solver.solve(&a, &eye, &g).unwrap();
+        assert!(!strict.converged, "unreachable tol must flip `converged`");
+        assert_eq!(ok.eigenvalues, strict.eigenvalues, "λ must not change");
     }
 }
