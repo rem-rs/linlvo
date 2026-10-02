@@ -11,6 +11,36 @@ use crate::simd::smoother::{
     jacobi_smooth, gs_smooth, chebyshev_smooth, l1_sgs_smooth,
     estimate_spectral_radius,
 };
+use num_traits::{One, Zero};
+
+/// Gershgorin upper bound of the spectrum of the symmetric scaling
+/// `D^{-1/2} A D^{-1/2}` (same spectrum as `D⁻¹A`):
+/// `max_i (|a_ii| + Σ_{j≠i} |a_ij|) / |a_ii|`.
+///
+/// Guaranteed upper bound, O(nnz) sequential — unlike the power-iteration
+/// [`estimate_spectral_radius`], whose uniform start vector is dominated by
+/// the *lowest* mode and can undershoot ρ, which flips the sign of the
+/// Chebyshev inverse polynomial above λmax and makes the cycle preconditioner
+/// indefinite (CG then aborts on `(B r, r) < 0`, MFEM solvers.cpp:938).
+pub fn gershgorin_upper_scaled<T: ComplexScalar>(a: &CsrMatrix<T>) -> T::Real {
+    let rp = a.row_ptr();
+    let ci = a.col_idx();
+    let vs = a.values();
+    let mut bound = T::Real::zero();
+    for i in 0..a.nrows() {
+        let mut diag = T::Real::zero();
+        let mut off = T::Real::zero();
+        for k in rp[i]..rp[i + 1] {
+            let m = vs[k].abs();
+            if ci[k] == i { diag = m; } else { off += m; }
+        }
+        if diag > T::Real::zero() {
+            let r = <T::Real as One>::one() + off / diag;
+            if r > bound { bound = r; }
+        }
+    }
+    bound
+}
 
 /// Smoother variant.
 #[derive(Clone, Debug)]
@@ -71,8 +101,15 @@ pub fn smooth_with_hint<T: ComplexScalar>(
             l1_sgs_smooth(a, x, b, n_sweeps);
         }
         SmootherType::Chebyshev { degree, ratio } => {
-            // Use cached ρ(D⁻¹A) or estimate via power iterations.
+            // Use cached ρ(D⁻¹A) or estimate via power iterations, then clamp
+            // with the guaranteed Gershgorin bound: an under-estimated ρ puts
+            // λmax below the true spectrum top and the Chebyshev inverse
+            // polynomial turns NEGATIVE there — the cycle preconditioner
+            // becomes indefinite and CG aborts on (B r, r) < 0 (MFEM
+            // solvers.cpp:938 semantics, D976).
             let rho = spectral_radius.unwrap_or_else(|| estimate_spectral_radius(a, 10));
+            let gersh = gershgorin_upper_scaled(a);
+            let rho = if gersh > rho.abs() { T::from_real(gersh) } else { rho };
             let lambda_max = rho * T::from_f64(1.1);
             let lambda_min = lambda_max / T::from_f64(*ratio);
             // Guard: if estimate is zero/tiny, fall back to Jacobi.

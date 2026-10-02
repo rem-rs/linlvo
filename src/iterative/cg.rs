@@ -159,24 +159,70 @@ impl<T: Scalar> ConjugateGradient<T> {
         // Compute z = M⁻¹ r (preconditioner) or z = r (no preconditioner).
         apply_precond_or_copy(precond, &workspace.r, &mut workspace.z);
 
-        // MFEM-compatible convergence: use (B r, r) / (B r₀, r₀) when
-        // a preconditioner is present (preconditioned residual energy),
-        // or ‖r‖/‖b‖ otherwise (true residual).
-        let rz_initial = if precond.is_some() {
-            let rz0 = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
-            if rz0 == T::zero() { T::one() } else { rz0 }
+        // MFEM `CGSolver::Mult` convergence semantics (linalg/solvers.cpp:869-1053,
+        // MFEM 4.10): the threshold is computed ONCE from the initial residual
+        // energy `nom0 = (B r₀, r₀)` (or `‖r₀‖²` without a preconditioner),
+        //
+        //     r0 = max(nom0·rel_tol², abs_tol²)              (solvers.cpp:915)
+        //
+        // and every step tests the new energy `betanom = (B r, r)` against that
+        // fixed threshold (solvers.cpp:977).  The preconditioned-energy *ratio*
+        // must therefore reach rel_tol² — not rel_tol: callers wanting the
+        // legacy `PCG()` helper's sqrt convention (`SetRelTol(sqrt(RTOL))`)
+        // must pass sqrt(RTOL) themselves (see fem-solver's `solve_pcg`, which
+        // wraps exactly that helper).  Stopping on the un-squared ratio made
+        // rtol 1e-12 stop at true residual ~1e-6 (D976).
+        let nom0 = if precond.is_some() {
+            dot_slice(workspace.r.as_slice(), workspace.z.as_slice())
         } else {
-            norm_b_f * norm_b_f  // ‖r₀‖² / ‖b‖² = (‖r₀‖/‖b‖)² → initial true rel. res. squared
+            dot_slice(workspace.r.as_slice(), workspace.r.as_slice())
         };
-
-        workspace.p.copy_from(&workspace.z);
-
-        let mut rz = dot_slice(workspace.r.as_slice(), workspace.z.as_slice());
-        if !rz.is_finite() {
+        if !nom0.is_finite() {
             return Err(SolverError::NumericalBreakdown {
                 detail: "CG: non-finite <r,z> at initialization; check matrix/RHS values and preconditioner output".into(),
             });
         }
+
+        // MFEM solvers.cpp:916-928 — indefinite preconditioner at iteration 0.
+        if nom0 < T::zero() {
+            if params.verbose != VerboseLevel::Silent {
+                println!(
+                    "  PCG: The preconditioner is not positive definite. (Br, r) = {:.6e}",
+                    to_f64(nom0)
+                );
+            }
+            return Err(SolverError::NumericalBreakdown {
+                detail: format!(
+                    "CG: preconditioner not positive definite at iteration 0 ((B r₀, r₀) = {:.3e})",
+                    to_f64(nom0)
+                ),
+            });
+        }
+
+        let mut rz = nom0;
+        let r0 = (nom0 * T::from_f64(params.rtol * params.rtol))
+            .max(T::from_f64(params.atol * params.atol));
+
+        // MFEM solvers.cpp:918-928 — iteration-0 test against the fixed
+        // threshold (covers b = 0 and an exact initial guess; final_iter = 0).
+        // Gated off for fixed-iteration benchmark runs (they always execute
+        // exactly the requested number of steps).
+        if allow_early_exit && nom0 <= r0 {
+            let res_f = to_f64(workspace.r.norm2() / norm_b_f);
+            if params.verbose != VerboseLevel::Silent {
+                println!("  CG converged at iter 0  ‖r‖/‖b‖ = {res_f:.3e}");
+            }
+            residual_history.push(res_f);
+            return Ok(SolverResult {
+                converged: true,
+                iterations: 0,
+                final_residual: res_f,
+                residual_history: std::mem::take(&mut residual_history),
+                history: history.take(),
+            });
+        }
+
+        workspace.p.copy_from(&workspace.z);
 
         for k in 0..target_iterations {
             op.apply(&workspace.p, &mut workspace.ap);
@@ -194,20 +240,6 @@ impl<T: Scalar> ConjugateGradient<T> {
 
             let r_norm = workspace.r.norm2();
             let res_now = r_norm / norm_b_f;
-            if allow_early_exit && (res_now < T::from_f64(params.rtol) || r_norm < T::from_f64(params.atol)) {
-                let res_f = to_f64(res_now);
-                if params.verbose != VerboseLevel::Silent {
-                    println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
-                }
-                residual_history.push(res_f);
-                return Ok(SolverResult {
-                    converged: true,
-                    iterations: k + 1,
-                    final_residual: res_f,
-                    residual_history: std::mem::take(&mut residual_history),
-                    history: history.take(),
-                });
-            }
 
             if pap.abs() < T::machine_epsilon() * T::from_f64(1e3) * rz.abs() {
                 if !allow_early_exit || (res_now > T::from_f64(params.rtol) && r_norm > T::from_f64(params.atol)) {
@@ -259,6 +291,25 @@ impl<T: Scalar> ConjugateGradient<T> {
                     ),
                 });
             }
+
+            // MFEM solvers.cpp:938-946 — indefinite preconditioner inside the
+            // loop, checked before the iteration print.
+            if rz_new < T::zero() {
+                if params.verbose != VerboseLevel::Silent {
+                    println!(
+                        "  PCG: The preconditioner is not positive definite. (Br, r) = {:.6e}",
+                        to_f64(rz_new)
+                    );
+                }
+                return Err(SolverError::NumericalBreakdown {
+                    detail: format!(
+                        "CG: preconditioner not positive definite at iter {} ((B r, r) = {:.3e})",
+                        k + 1,
+                        to_f64(rz_new)
+                    ),
+                });
+            }
+
             if params.verbose == VerboseLevel::Iterations {
                 println!("    CG iter {:4}  (B r, r) = {:.9e}", k + 1, to_f64(rz_new));
             }
@@ -270,18 +321,12 @@ impl<T: Scalar> ConjugateGradient<T> {
             if params.verbose == VerboseLevel::Iterations {
                 println!("    CG iter {:4}  ‖r‖/‖b‖ = {res_f:.6e}", k + 1);
             }
-            // MFEM-compatible convergence: when a preconditioner is present,
-            // use the preconditioned residual energy (B r, r).  The legacy
-            // PCG() helper (solvers.cpp) sets rel_tol = sqrt(RTOLERANCE), so
-            // the energy ratio is compared against rtol itself (NOT rtol²):
-            // (B r, r)/(B r0, r0) < rtol  ⟺  sqrt ratio < sqrt(rtol).
-            let converged = if precond.is_some() {
-                rz_new.abs() / rz_initial.abs() < T::from_f64(params.rtol)
-                    || workspace.r.norm2() < T::from_f64(params.atol)
-            } else {
-                res < T::from_f64(params.rtol) || workspace.r.norm2() < T::from_f64(params.atol)
-            };
-            if allow_early_exit && converged {
+            // MFEM solvers.cpp:977 — fixed-threshold test: the new energy
+            // `betanom = (B r, r)` against `r0 = max(nom0·rel_tol², abs_tol²)`
+            // computed once before the loop.  (D976: the previous test
+            // `|rz_new|/|rz₀| < rtol` used the un-squared tolerance and stopped
+            // six orders of magnitude in √ratio too early.)
+            if allow_early_exit && rz_new <= r0 {
                 if params.verbose == VerboseLevel::Iterations {
                     println!("  CG converged at iter {}  ‖r‖/‖b‖ = {res_f:.3e}", k + 1);
                 }

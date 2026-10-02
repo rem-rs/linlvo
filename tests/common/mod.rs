@@ -289,14 +289,16 @@ pub fn make_rect_complex(
 
 /// Drive a preconditioned CG solve until the **true** residual meets `target`.
 ///
-/// Since the MFEM-compatible convergence change (commit 1e0065c, pinned by the
-/// fem-rs ex33 bit-identical anchor), preconditioned CG declares convergence
-/// on the preconditioned energy ratio `(B r, r)/(B r0, r0) < rtol`
-/// (mfem `PCG()`, solvers.cpp:919 semantics) — which can fire while
-/// `‖r‖/‖b‖` is still ~1e-4.  Re-solving warm-started from the current
-/// iterate continues the same Krylov space and drives the true residual to
-/// `target`: the standard user-side recipe for energy-stopped solvers.
-/// Returns the last solve's result; `x` holds the improved iterate.
+/// linlvo CG stops with MFEM `CGSolver::Mult` semantics: the preconditioned
+/// energy ratio `(B r, r)/(B r₀, r₀)` must reach `rel_tol²`
+/// (mfem solvers.cpp:915/977; D976).  A warm restart squares the energy
+/// requirement again relative to the *restarted* residual, so after a few
+/// restarts the ratio test hits the roundoff floor and the solver exhausts
+/// `max_iter` — while the iterate (which is updated in place even on failure)
+/// may already satisfy the true-residual target.  This helper therefore
+/// (a) stops when a restart reports 0 iterations (already below threshold),
+/// (b) accepts an exhausted solve whose true residual still reached `target`.
+/// Returns the last result; `x` holds the improved iterate.
 pub fn resolve_cg_to_residual<T: Scalar>(
     cg: &linlvo::ConjugateGradient<T>,
     a: &CsrMatrix<T>,
@@ -306,13 +308,23 @@ pub fn resolve_cg_to_residual<T: Scalar>(
     params: &linlvo::SolverParams,
     target: f64,
 ) -> linlvo::SolverResult {
-    use linlvo::KrylovSolver;
+    use linlvo::{KrylovSolver, SolverError, SolverResult as Res};
     let mut res = cg.solve(a, Some(precond), b, x, params).expect("cg solve");
     for _ in 0..100 {
-        if res.final_residual < target {
+        if res.final_residual < target || res.iterations == 0 {
             break;
         }
-        res = cg.solve(a, Some(precond), b, x, params).expect("cg warm re-solve");
+        res = match cg.solve(a, Some(precond), b, x, params) {
+            Ok(r) => r,
+            Err(SolverError::ConvergenceFailed { residual, max_iter }) if residual < target => Res {
+                converged: true,
+                iterations: max_iter,
+                final_residual: residual,
+                residual_history: Vec::new(),
+                history: None,
+            },
+            Err(e) => panic!("cg warm re-solve: {e}"),
+        };
     }
     res
 }
