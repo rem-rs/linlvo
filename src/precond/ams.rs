@@ -205,6 +205,14 @@ pub enum AmsEdgeSmoother {
     /// Symmetric Gauss-Seidel (forward + backward sweep) — the default of
     /// HYPRE AMS (`rlx_type = 2`, `rlx_weight = 1.0`).
     SymmetricGaussSeidel,
+    /// hypre AMS `rlx_type = 2` semantics (ams.c `hypre_ParCSRRelax`): the
+    /// "offd-l1-scaled" symmetric Gauss-Seidel — for relax types 1–4 hypre
+    /// AMSSetup computes the **row l1 norms of A** (ams.c:3041-3053) and the
+    /// hybrid-SOR relax divides by them, NOT by the diagonal: each update is
+    /// `x_i += (b_i - Σ_j a_ij x_j)/‖row_i‖₁`.  On singular curl-curl systems
+    /// rows with ‖row‖₁ >> |a_ii| make the plain (diag-scaled) SGS arm
+    /// amplify; the l1 scaling stays bounded (hypre-faithful robustness).
+    L1ScaledSymmetricGaussSeidel,
 }
 
 impl Default for AmsEdgeSmoother {
@@ -517,8 +525,30 @@ impl<T: ComplexScalar> AmsPrecond<T> {
         if pi.is_some() {
             if let AuxSpaceSolver::Amg(cfg) = &mut node_solver {
                 if cfg.coarsest_sweeps.is_none() {
-                    cfg.coarsest_sweeps = Some(2);
+                    cfg.coarsest_sweeps = Some(1);
                 }
+            }
+        }
+        // The Pi-block AMG (`B_Pi_d ≈ (Pi_dᵀ A Pi_d)⁻¹`) must keep a SHALLOW
+        // hierarchy: the Galerkin operators `A_Pi_d = Pi_dᵀ A Pi_d` carry the
+        // curl-curl near-nullspace (on straight meshes `Pi_d·x̂_d` is a
+        // DISCRETE gradient, so λ_min(A_Pi) ~ round-off).  Deep aggregation
+        // concentrates that smooth near-null mode into one giant aggregate,
+        // collapsing the hierarchy to a 1×1 coarsest whose single entry IS
+        // the near-zero eigenvalue (measured, tesla inline-hex o2: level-8
+        // 1×1 entry 2.18e-9) — the relaxation-based coarsest solve then
+        // INVERTS it (x += r/λ, one sweep is exact on 1×1) and each Pi arm
+        // amplifies by ~5e8 (measured ‖y‖² growth e-11 → e+24).  hypre's
+        // BoomerAMG never sees this: its HMIS + aggressive-coarsening
+        // hierarchy stays shallow, so the coarsest relaxation remains
+        // relaxational (low-energy modes pass through with factor ~1).
+        // Raising the coarse-size threshold to ≥ 64 reproduces that on the
+        // smoothed-aggregation path (729-dof A_Pi: 4 levels, coarsest 45,
+        // min row-l1 8.9e3 — healthy).
+        let mut pi_solver = node_solver.clone();
+        if pi.is_some() {
+            if let AuxSpaceSolver::Amg(cfg) = &mut pi_solver {
+                cfg.coarse_threshold = cfg.coarse_threshold.max(64);
             }
         }
         let a_node_nnz = a_node.nnz();
@@ -555,7 +585,7 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                 // coarsest solve (`coarsest_sweeps`) is the hypre-faithful
                 // nullspace handling.
                 let a_pid = fix_zero_rows(&a_pid);
-                let (b_pid, _) = build_aux_solver(a_pid, &node_solver)?;
+                let (b_pid, _) = build_aux_solver(a_pid, &pi_solver)?;
                 face_blocks.push((pid.clone(), b_pid));
             }
         } else if config.face_space {
@@ -681,7 +711,7 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
             //   gradient correction is dropped (hypre never builds B_G).
             let use_nodal = !self.singular_problem;
             let dbg = std::env::var("LINLVO_AMS_DEBUG").is_ok();
-            let mut rayleigh = |tag: &str, v: &DenseVec<T>| {
+            let rayleigh = |tag: &str, v: &DenseVec<T>| {
                 if !dbg {
                     return;
                 }
@@ -832,6 +862,15 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                     1,
                     None,
                 );
+            }
+            AmsEdgeSmoother::L1ScaledSymmetricGaussSeidel => {
+                // hypre rlx_type = 2 exact semantics: l1-scaled symmetric GS
+                // (ams.c:3041-3053 computes the row l1 norms of A for relax
+                // types 1-4; `hypre_BoomerAMGRelaxHybridSOR` divides by them).
+                for c in b_out.as_mut_slice().iter_mut().take(n_edges) {
+                    *c = T::zero();
+                }
+                crate::simd::smoother::l1_sgs_smooth(&self.a, b_out, b_in, 1);
             }
         }
     }
