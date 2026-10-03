@@ -169,7 +169,7 @@ fn build_aggregates_covers_all_nodes() {
     // Every node must be assigned to some aggregate.
     let a = poisson_1d(10);
     let s = strong_connections(&a, 0.25);
-    let agg_id = build_aggregates::<f64>(&s);
+    let agg_id = build_aggregates::<f64>(&a, &s);
 
     assert_eq!(agg_id.len(), 10);
     for (i, &id) in agg_id.iter().enumerate() {
@@ -183,7 +183,7 @@ fn build_aggregates_count_reasonable() {
     let n = 12;
     let a = poisson_1d(n);
     let s = strong_connections(&a, 0.25);
-    let agg_id = build_aggregates::<f64>(&s);
+    let agg_id = build_aggregates::<f64>(&a, &s);
     let n_agg = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     assert!(n_agg >= 1 && n_agg <= n,
         "Expected 1..={n} aggregates, got {n_agg}");
@@ -194,7 +194,7 @@ fn build_aggregates_disconnected_graph_each_own_aggregate() {
     // Diagonal-only matrix → no strong connections → every node is its own aggregate.
     let a = csr_from_triplets(4, 4, &[(0,0,1.0),(1,1,1.0),(2,2,1.0),(3,3,1.0)]);
     let s = strong_connections(&a, 0.25);
-    let agg_id = build_aggregates::<f64>(&s);
+    let agg_id = build_aggregates::<f64>(&a, &s);
     // With no off-diagonal strong connections, each seed forms a singleton aggregate.
     let n_agg = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(0);
     assert_eq!(n_agg, 4, "4 disconnected nodes → 4 singletons");
@@ -207,7 +207,7 @@ fn tentative_prolongation_shape() {
     // P₀ must have shape n_fine × n_agg and exactly one nonzero per row.
     let a = poisson_1d(8);
     let s = strong_connections(&a, 0.25);
-    let agg_id  = build_aggregates::<f64>(&s);
+    let agg_id  = build_aggregates::<f64>(&a, &s);
     let n_coarse = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(1);
     let p0: CsrMatrix<f64> = tentative_prolongation::<f64>(&agg_id, n_coarse);
 
@@ -221,7 +221,7 @@ fn tentative_prolongation_unit_values() {
     // Every nonzero in P₀ should be 1.0.
     let a = poisson_1d(6);
     let s = strong_connections(&a, 0.25);
-    let agg_id   = build_aggregates::<f64>(&s);
+    let agg_id   = build_aggregates::<f64>(&a, &s);
     let n_coarse = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(1);
     let p0: CsrMatrix<f64> = tentative_prolongation::<f64>(&agg_id, n_coarse);
 

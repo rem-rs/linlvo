@@ -248,9 +248,20 @@ pub fn gs_smooth_simd<T: Scalar>(
 /// Applies `degree` steps of the Chebyshev iteration targeting the eigenvalue
 /// interval `[lambda_min, lambda_max]` of `D⁻¹A`, where `D = diag(A)`.
 ///
-/// The inner update `d ← ρ · (2θ · D⁻¹r + (ρ-1)·d)` is vectorised with
-/// [`simd_axpby`] / element-wise SIMD scale, giving ≈ 2-4× speedup on large
-/// problems compared to the pure-scalar path in `amg::smoother`.
+/// The recursion realises the exact normalized-Chebyshev residual polynomial
+/// `R_k(t) = T_k(τ(t))/T_k(τ₀)` (`τ(t) = (σ−t)/δ`, `τ₀ = σ/δ`), the same
+/// polynomial hypre's `par_cheby.c` explicit coefficients encode for relax
+/// types 11/16.  The direction update is the classical three-term form
+/// `d_k = β_k·d_{k−1} + α_k·r_k` with `β_k = 1/(π_{k−1}π_k)`,
+/// `α_k = 2/(δπ_k)`, `π_k = 2τ₀ − 1/π_{k−1}` (π_k = T_k(τ₀)/T_{k−1}(τ₀)).
+///
+/// Round-107 D1000: the previous update used the coefficient `ρ(ρ−1)`
+/// instead of the direction product `ρ_kρ_{k−1} = 1/(π_{k−1}π_k)`, which
+/// produced a *different* polynomial with `|R(λmax)| ≈ 1` — no damping of
+/// the highest smoothed mode — and made the AMG-cycle preconditioner
+/// genuinely indefinite for degree ≥ 3 (measured λmin(B) = −3.69e-2 on the
+/// degree-3 1-D Laplacian hierarchy; CG then aborts on `(B r, r) < 0`,
+/// MFEM `solvers.cpp:938` semantics).
 pub fn chebyshev_smooth_simd<T: Scalar>(
     a:          &CsrMatrix<T>,
     x:          &mut DenseVec<T>,
@@ -267,10 +278,21 @@ pub fn chebyshev_smooth_simd<T: Scalar>(
     let delta = (lambda_max - lambda_min) / T::from_f64(2.0);
     if sigma.abs() < T::machine_epsilon() { return; }
 
-    let theta              = T::one() / sigma;
-    let half_delta_over_sigma = delta / (T::from_f64(2.0) * sigma);
-    let qdsa               = half_delta_over_sigma * half_delta_over_sigma;
-    let two_theta          = T::from_f64(2.0) * theta;
+    let theta = T::one() / sigma;
+    let two_theta = T::from_f64(2.0) * theta;
+
+    // Degenerate interval (lambda_min == lambda_max, e.g. ratio == 1): the
+    // π-recursion below divides by δ, so keep the historical repeated
+    // two-step-Richardson fallback there.
+    if delta.abs() <= T::machine_epsilon() {
+        for _ in 0..degree {
+            richardson_step(a, x, b, two_theta);
+        }
+        return;
+    }
+    let tau0 = sigma / delta;
+    let two_tau0 = T::from_f64(2.0) * tau0;
+    let mut pi_prev = tau0;
 
     // Extract diagonal inverse once.
     let rp = a.row_ptr();
@@ -293,7 +315,6 @@ pub fn chebyshev_smooth_simd<T: Scalar>(
     let mut d_vec = vec![T::zero(); n];
 
     let bs = b.as_slice();
-    let mut rho_prev = T::zero();
 
     for k in 0..degree {
         // r ← D⁻¹(b - A·x)
@@ -305,27 +326,46 @@ pub fn chebyshev_smooth_simd<T: Scalar>(
         }
 
         if k == 0 {
-            // d₀ = θ · r₀
+            // d₁ = θ · r₀
             let rs = r_vec.as_slice();
             for i in 0..n { d_vec[i] = theta * rs[i]; }
-            rho_prev = T::one();
         } else {
-            // ρ_k = 1 / (1 - q·ρ_{k-1})  where q = (δ/2σ)²
-            let rho = T::one() / (T::one() - qdsa * rho_prev);
-            // d_k = ρ_k · (2θ·r + (ρ_k - 1)·d_{k-1})
-            //      = ρ_k·(ρ_k - 1)·d_{k-1} + ρ_k·2θ·r
-            // Use SIMD AXPBY for the d update:
-            //   d ← (ρ_k-1)·d  +  ρ_k·2θ·r
-            //   then scale d by ρ_k  —  achieved via simd_axpby(alpha, r, beta, d)
-            // alpha = ρ_k·2θ,  beta = ρ_k·(ρ_k-1)
-            let alpha = rho * two_theta;
-            let beta  = rho * (rho - T::one());
+            // π_k = 2τ₀ − 1/π_{k−1}
+            let pi = two_tau0 - T::one() / pi_prev;
+            // d_k = β·d_{k−1} + α·r  (β = 1/(π_{k−1}π_k), α = 2/(δπ_k))
+            let alpha = T::from_f64(2.0) / (delta * pi);
+            let beta  = T::one() / (pi_prev * pi);
             simd_axpby(alpha, r_vec.as_slice(), beta, &mut d_vec);
-            rho_prev = rho;
+            pi_prev = pi;
         }
 
         // x ← x + d
         simd_axpy(T::one(), &d_vec, x.as_mut_slice());
+    }
+}
+
+/// One Richardson step `x ← x + ω·D⁻¹(b − A·x)` (degenerate-interval
+/// fallback of [`chebyshev_smooth_simd`]).
+fn richardson_step<T: Scalar>(a: &CsrMatrix<T>, x: &mut DenseVec<T>, b: &DenseVec<T>, omega: T) {
+    let n = b.len();
+    let rp = a.row_ptr();
+    let ci = a.col_idx();
+    let vs = a.values();
+    let mut ax = DenseVec::zeros(n);
+    a.apply(x, &mut ax);
+    let bs = b.as_slice();
+    let axs = ax.as_slice();
+    let xs = x.as_mut_slice();
+    for i in 0..n {
+        // D⁻¹ row-wise: reuse diag lookup via the row scan (cheap fallback path).
+        let mut d = T::one();
+        for k in rp[i]..rp[i + 1] {
+            if ci[k] == i {
+                if vs[k].abs() > T::machine_epsilon() { d = T::one() / vs[k]; }
+                break;
+            }
+        }
+        xs[i] += omega * d * (bs[i] - axs[i]);
     }
 }
 
@@ -427,6 +467,9 @@ pub fn gs_smooth<T: ComplexScalar>(
 }
 
 /// Chebyshev smoother (scalar, ComplexScalar-compatible).
+///
+/// Same exact normalized-Chebyshev π-recursion as [`chebyshev_smooth_simd`]
+/// (see its docs for the D1000 round-107 rationale and the formulas).
 pub fn chebyshev_smooth<T: ComplexScalar>(
     a:          &CsrMatrix<T>,
     x:          &mut DenseVec<T>,
@@ -442,10 +485,8 @@ pub fn chebyshev_smooth<T: ComplexScalar>(
     let delta = (lambda_max - lambda_min) / T::from_real(<T::Real as Scalar>::from_f64(2.0));
     if sigma.abs() < T::machine_epsilon() { return; }
 
-    let theta              = T::one() / sigma;
-    let half_delta_over_sigma = delta / (sigma * T::from_real(<T::Real as Scalar>::from_f64(2.0)));
-    let qdsa               = half_delta_over_sigma * half_delta_over_sigma;
-    let two_theta          = theta * T::from_real(<T::Real as Scalar>::from_f64(2.0));
+    let theta     = T::one() / sigma;
+    let two_theta = theta * T::from_real(<T::Real as Scalar>::from_f64(2.0));
 
     let rp = a.row_ptr();
     let ci = a.col_idx();
@@ -465,8 +506,24 @@ pub fn chebyshev_smooth<T: ComplexScalar>(
     let mut r_vec = DenseVec::zeros(n);
     let mut d_vec = vec![T::zero(); n];
 
+    // Degenerate interval (lambda_min == lambda_max): repeated two-step
+    // Richardson fallback, as in the SIMD path.
+    if delta.abs() <= T::machine_epsilon() {
+        for _ in 0..degree {
+            a.apply(x, &mut ax);
+            let bs_ = b.as_slice();
+            let axs = ax.as_slice();
+            let xs = x.as_mut_slice();
+            for i in 0..n {
+                xs[i] += two_theta * diag_inv[i] * (bs_[i] - axs[i]);
+            }
+        }
+        return;
+    }
+    let two_tau0 = (sigma / delta) * T::from_real(<T::Real as Scalar>::from_f64(2.0));
+    let mut pi_prev = sigma / delta;
+
     let bs = b.as_slice();
-    let mut rho_prev = T::zero();
 
     for k in 0..degree {
         a.apply(x, &mut ax);
@@ -477,17 +534,19 @@ pub fn chebyshev_smooth<T: ComplexScalar>(
         }
 
         if k == 0 {
+            // d₁ = θ · r₀
             let rs = r_vec.as_slice();
             for i in 0..n { d_vec[i] = theta * rs[i]; }
-            rho_prev = T::one();
         } else {
-            let rho = T::one() / (T::one() - qdsa * rho_prev);
-            // d_k = ρ_k · (ρ_k - 1) · d_{k-1} + ρ_k · 2θ · r  (scalar)
+            // π_k = 2τ₀ − 1/π_{k−1}; d_k = β·d_{k−1} + α·r
+            let pi = two_tau0 - T::one() / pi_prev;
+            let alpha = T::from_real(<T::Real as Scalar>::from_f64(2.0)) / (delta * pi);
+            let beta = T::one() / (pi_prev * pi);
             let rs = r_vec.as_slice();
             for i in 0..n {
-                d_vec[i] = rho * ((rho - T::one()) * d_vec[i] + two_theta * rs[i]);
+                d_vec[i] = beta * d_vec[i] + alpha * rs[i];
             }
-            rho_prev = rho;
+            pi_prev = pi;
         }
 
         // x ← x + d  (scalar)
