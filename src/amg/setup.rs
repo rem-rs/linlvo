@@ -170,7 +170,7 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
                     }
                 }
                 CoarsenStrategy::SmoothedAggregation => {
-                    let agg_id   = build_aggregates::<T>(&s);
+                    let agg_id   = build_aggregates::<T>(&a_now, &s);
                     let n_coarse = agg_id.iter().copied().max().map(|m| m + 1).unwrap_or(1);
                     let p0 = tentative_prolongation::<T>(&agg_id, n_coarse);
                     (smooth_prolongation(&a_now, &p0, config.sa_omega), None)

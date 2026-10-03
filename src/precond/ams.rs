@@ -919,6 +919,16 @@ pub(super) fn build_aux_solver<T: ComplexScalar>(
     match solver {
         AuxSpaceSolver::Amg(cfg) => {
             let hier = AmgHierarchy::build(mat, cfg.clone());
+            if std::env::var("FEMRS_AUXAMG_DEBUG").as_deref() == Ok("1") {
+                let sizes: Vec<usize> = hier.level_info().iter().map(|l| l.ndof).collect();
+                eprintln!(
+                    "aux-AMG: n={:5} levels={:2} sizes={:?} op_cx={:.2}",
+                    sizes.first().copied().unwrap_or(0),
+                    hier.n_levels(),
+                    sizes,
+                    hier.operator_complexity()
+                );
+            }
             let profile = AuxSolverProfile::Amg(AuxAmgProfile {
                 n_levels: hier.n_levels(),
                 operator_complexity: hier.operator_complexity().max(1.0),
