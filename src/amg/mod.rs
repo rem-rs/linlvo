@@ -3,6 +3,7 @@
 pub mod coarsen_agg;
 pub mod coarsen_rs;
 pub mod cycle;
+pub mod hmis;
 pub mod nodal;
 pub mod air;
 pub mod interpolation;

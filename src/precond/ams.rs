@@ -39,7 +39,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond};
+use crate::amg::{AmgConfig, AmgHierarchy, AmgPrecond, CoarsenStrategy};
 use crate::core::vector::Vector as _;
 use crate::core::{
     error::SolverError,
@@ -529,26 +529,39 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                 }
             }
         }
-        // The Pi-block AMG (`B_Pi_d ≈ (Pi_dᵀ A Pi_d)⁻¹`) must keep a SHALLOW
-        // hierarchy: the Galerkin operators `A_Pi_d = Pi_dᵀ A Pi_d` carry the
-        // curl-curl near-nullspace (on straight meshes `Pi_d·x̂_d` is a
-        // DISCRETE gradient, so λ_min(A_Pi) ~ round-off).  Deep aggregation
-        // concentrates that smooth near-null mode into one giant aggregate,
-        // collapsing the hierarchy to a 1×1 coarsest whose single entry IS
+        // The Pi-block AMG (`B_Pi_d ≈ (Pi_dᵀ A Pi_d)⁻¹`) runs the hypre
+        // BoomerAMG configuration MFEM 4.10 `HypreAMS::MakeSolver` sets for
+        // every B_Pi: coarsen_type 10 (HMIS) + aggressive second shot
+        // (`agg_num_levels = 1`, `Create2ndS` + `CoarsenHMIS(S2, measure+3)`)
+        // + interp_type 6 (extended-i, PMax 4) — [`CoarsenStrategy::HmisAms`].
+        // The Galerkin operators `A_Pi_d = Pi_dᵀ A Pi_d` carry the curl-curl
+        // near-nullspace (on straight meshes `Pi_d·x̂_d` is a DISCRETE
+        // gradient, so λ_min(A_Pi) ~ round-off); the historical SA-era guard
+        // (`coarse_threshold ≥ 64`, D957) existed because deep aggregation
+        // collapses such operators to a 1×1 coarsest whose single entry IS
         // the near-zero eigenvalue (measured, tesla inline-hex o2: level-8
-        // 1×1 entry 2.18e-9) — the relaxation-based coarsest solve then
-        // INVERTS it (x += r/λ, one sweep is exact on 1×1) and each Pi arm
-        // amplifies by ~5e8 (measured ‖y‖² growth e-11 → e+24).  hypre's
-        // BoomerAMG never sees this: its HMIS + aggressive-coarsening
-        // hierarchy stays shallow, so the coarsest relaxation remains
-        // relaxational (low-energy modes pass through with factor ~1).
-        // Raising the coarse-size threshold to ≥ 64 reproduces that on the
-        // smoothed-aggregation path (729-dof A_Pi: 4 levels, coarsest 45,
-        // min row-l1 8.9e3 — healthy).
+        // 1×1 entry 2.18e-9 → each Pi arm amplifies by ~5e8).  The HMIS
+        // aggressive hierarchy is shallow by construction — that is exactly
+        // what hypre's second-shot coarsening buys — so hypre's own bounds
+        // apply: MinCoarseSize 2 (ams.c:3226), MaxLevels 25 (ams.c:3215).
         let mut pi_solver = node_solver.clone();
         if pi.is_some() {
             if let AuxSpaceSolver::Amg(cfg) = &mut pi_solver {
-                cfg.coarse_threshold = cfg.coarse_threshold.max(64);
+                cfg.strategy = CoarsenStrategy::HmisAms;
+                cfg.coarse_threshold = 2;
+                cfg.max_levels = 25;
+                // hypre BoomerAMG relax type 8 ("l1" SSOR) computes its scale
+                // factors with hypre_ParCSRComputeL1Norms OPTION 4
+                // (par_amg_setup.c:3280, truncation per Remark 6.2,
+                // ams.c:678-692): l1_i starts at |a_ii| and the off-diagonal
+                // contributions only come from the processor-offd block —
+                // on ONE RANK the result degenerates to the (sign-fixed)
+                // diagonal, i.e. plain symmetric Gauss-Seidel
+                // (par_amg_setup.c:3265-3285 picks option 4 for coarsest
+                // type-8 as well).  The earlier "option 1, full row sum"
+                // reading (r108 ledger) was wrong: option 1 is the AMS-scope
+                // helper, not the BoomerAMG relax-8 path.
+                cfg.smoother = crate::amg::SmootherType::SymmetricGaussSeidel;
             }
         }
         let a_node_nnz = a_node.nnz();

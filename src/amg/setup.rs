@@ -12,6 +12,7 @@ use crate::amg::{
     air::air_restriction_diag,
     coarsen_agg::{build_aggregates, tentative_prolongation},
     coarsen_rs::rs_coarsen,
+    hmis,
     interpolation::{rs_interpolation, smooth_prolongation},
     smoother::{SmootherType},
     strength::strong_connections,
@@ -28,6 +29,15 @@ pub enum CoarsenStrategy {
     SmoothedAggregation,
     /// AIR baseline: RS C/F splitting + diagonal-A_ff ideal-restriction approximation.
     Air,
+    /// hypre BoomerAMG HMIS(10) + aggressive second shot + hypre interp —
+    /// the exact serial configuration MFEM 4.10 `HypreAMS::MakeSolver` hands
+    /// to hypre for the AMS Pi-block solvers: classical measure-0 strength
+    /// (θ from [`AmgConfig::theta`], `max_row_sum = 0.9`), HMIS coarsening
+    /// (Ruge first pass, Z_PT), `Create2ndS`(num_paths=1) + HMIS(measure+3)
+    /// second shot + `CorrectCFMarker` on level 0, multipass interpolation
+    /// (agg_interp_type 4) on level 0, extended+i (interp_type 6, PMax 4)
+    /// above.  See [`crate::amg::hmis`] for the hypre source citations.
+    HmisAms,
 }
 
 /// Configuration for the AMG setup phase.
@@ -129,7 +139,7 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
         // Check whether we need to precompute spectral radii for Chebyshev.
         let need_spectral = matches!(&config.smoother, SmootherType::Chebyshev { .. });
 
-        for _ in 0..config.max_levels {
+        for level in 0..config.max_levels {
             let a_now = a_curr.take().unwrap();
             let n = a_now.nrows();
             if n <= config.coarse_threshold {
@@ -144,8 +154,20 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
                 None
             };
 
-            // Strong connection graph.
-            let s = strong_connections(&a_now, config.theta);
+            // Strong connection graph: hypre classical measure-0 for the
+            // HmisAms strategy (signed strength + max_row_sum filter),
+            // absolute-value strength otherwise.
+            let s_classical;
+            let s = match &config.strategy {
+                CoarsenStrategy::HmisAms => {
+                    s_classical = hmis::classical_strength(&a_now, config.theta);
+                    &s_classical
+                }
+                _ => {
+                    s_classical = strong_connections(&a_now, config.theta);
+                    &s_classical
+                }
+            };
 
             // Build prolongation P and (optionally) custom restriction R.
             let (p, r_custom) = match &config.strategy {
@@ -181,10 +203,59 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
                     let r = air_restriction_diag(&a_now, &status);
                     (p, Some(r))
                 }
+                CoarsenStrategy::HmisAms => {
+                    // HMIS first pass (measure 0 → Z_PT / SF_PT).
+                    let mut cf = hmis::coarsen_hmis::<T>(&s, false);
+                    let dbg = std::env::var("LINLVO_AMS_DEBUG").is_ok();
+                    if dbg {
+                        let c1 = cf.iter().filter(|&&m| m > 0).count();
+                        eprintln!("[hmis] level {level}: n {n} 1st-pass C {c1}");
+                    }
+                    // Aggressive second shot on level 0 only
+                    // (agg_num_levels = 1): Create2ndS + HMIS(measure+3)
+                    // + CorrectCFMarker (par_amg_setup.c:1266-1271).
+                    if level == 0 {
+                        if let Some(s2) = hmis::create_second_strength::<T>(&s, &cf) {
+                            let cfn = hmis::coarsen_hmis::<T>(&s2, true);
+                            if dbg {
+                                let c2 = cfn.iter().filter(|&&m| m > 0).count();
+                                eprintln!("[hmis] level 0: S2 {}x{} 2nd-pass C {c2}", s2.nrows(), s2.ncols());
+                            }
+                            hmis::correct_cf_marker(&mut cf, &cfn);
+                        }
+                    }
+                    // Interpolation: multipass (agg_interp_type 4) on the
+                    // aggressive level, extended+i (interp_type 6, PMax 4)
+                    // above (par_amg_setup.c:1695, 2234).
+                    let p = if level == 0 {
+                        hmis::interp_multipass::<T>(&a_now, &cf, &s)
+                    } else {
+                        hmis::truncate_pmax(&hmis::interp_ext_pi::<T>(&a_now, &cf, &s))
+                    };
+                    if dbg {
+                        let cf_ = cf.iter().filter(|&&m| m > 0).count();
+                        eprintln!(
+                            "[hmis] level {level}: final C {cf_}  P {}x{} nnz {}",
+                            p.nrows(),
+                            p.ncols(),
+                            p.nnz()
+                        );
+                    }
+                    (p, None)
+                }
             };
 
             let nc = p.ncols();
-            if nc == 0 || nc >= n {
+            // hypre MinCoarseSize: the coarse grid must hold at least
+            // `min_coarse_size = 2` points (ams.c:3226), otherwise the level
+            // is discarded and the current operator becomes the coarsest
+            // (par_amg_setup.c:1673-1693).  Other strategies keep the
+            // historical nc >= 1 acceptance.
+            let nc_min = match &config.strategy {
+                CoarsenStrategy::HmisAms => 2,
+                _ => 1,
+            };
+            if nc == 0 || nc < nc_min || nc >= n {
                 // Coarsening failed to reduce the problem; stop here.
                 levels.push(AmgLevel { a: a_now, p: None, r: None, spectral_radius: None });
                 break;
