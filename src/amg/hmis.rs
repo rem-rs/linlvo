@@ -68,7 +68,7 @@
 //!   `amg_Pmax = 4`).
 
 use crate::core::scalar::{ComplexScalar, Scalar};
-use crate::sparse::CsrMatrix;
+use crate::sparse::{CooMatrix, CsrMatrix};
 use num_traits::Zero;
 
 /// hypre C/F marker values (`par_coarsen_device.c:12-16`, `par_cgc_coarsen.c:19-23`).
@@ -388,6 +388,91 @@ pub fn create_second_strength<T: ComplexScalar>(
 /// `hypre_BoomerAMGCorrectCFMarker` (`par_strength.c:3064-3088`): merge the
 /// second-pass verdicts (`new_cf`, indexed over the first-pass C-points in
 /// order) back into the full marker.
+/// Galerkin operator `Pᵀ·A·P` accumulated in hypre's exact triple-loop order.
+///
+/// hypre `hypre_BoomerAMGBuildCoarseOperatorKT` (parcsr_ls/par_rap.c) treats
+/// the first argument as the restriction RT and walks, per coarse row `ic`,
+/// the entries of RT's own row `i1` (the implicit transpose), then A's row
+/// `i1`, then P's row `i2`, folding each `v1·va·vp` into a marker-SPA slot in
+/// exactly that traversal order.  The multiplication ORDER fixes the float
+/// rounding of the coarse operator — and hypre's HMIS coarsening flips
+/// near-tie strength decisions on those last-ulp differences (measured d110a:
+/// a last-ulp-different `A_Pi` moved 10 of 20 level-0 C-points and one PCG
+/// iteration), so the user-Pi path must reproduce it rather than use the
+/// algebraically equivalent `(PᵀA)·P` matmat chain.  Row-major emission
+/// (sorted columns) is ulp-irrelevant: hypre's first-touch column order only
+/// changes non-discrete matvec summations.
+pub fn rap_hypre_order<T: ComplexScalar>(p: &CsrMatrix<T>, a: &CsrMatrix<T>) -> CsrMatrix<T> {
+    use std::collections::HashMap;
+    // R_diag = Pᵀ (hypre transposes RT internally when keepTranspose = 0;
+    // the transpose's row entries come out in ascending column order).
+    let pt = p.transpose_csr();
+    let n = pt.nrows();
+    let rt_rp = pt.row_ptr();
+    let rt_ci = pt.col_idx();
+    let rt_va = pt.values();
+    let a_rp = a.row_ptr();
+    let a_ci = a.col_idx();
+    let a_va = a.values();
+    let p_rp = p.row_ptr();
+    let p_ci = p.col_idx();
+    let p_va = p.values();
+    let mut coo = CooMatrix::new(n, n);
+    let mut ra_i: Vec<usize> = Vec::new();
+    let mut ra_v: Vec<T> = Vec::new();
+    let mut ra_seen: HashMap<usize, usize> = HashMap::new();
+    let mut rap_i: Vec<usize> = Vec::new();
+    let mut rap_v: Vec<T> = Vec::new();
+    let mut rap_seen: HashMap<usize, usize> = HashMap::new();
+    for ic in 0..n {
+        // Stage 1 (par_rap.c "compute row ic of RA"): RA[ic, i2] =
+        // Σ_{(i1,v1)∈R_row(ic)} v1·A[i1, i2] — create-or-add, so the RA
+        // columns are in first-touch order and each entry accumulates in
+        // ascending i1 order.
+        ra_i.clear();
+        ra_v.clear();
+        ra_seen.clear();
+        for jj1 in rt_rp[ic]..rt_rp[ic + 1] {
+            let i1 = rt_ci[jj1];
+            let v1 = rt_va[jj1];
+            for jj2 in a_rp[i1]..a_rp[i1 + 1] {
+                let i2 = a_ci[jj2];
+                match ra_seen.get(&i2) {
+                    Some(&idx) => ra_v[idx] += v1 * a_va[jj2],
+                    None => {
+                        ra_seen.insert(i2, ra_i.len());
+                        ra_i.push(i2);
+                        ra_v.push(v1 * a_va[jj2]);
+                    }
+                }
+            }
+        }
+        // Stage 2: RAP[ic, k] = Σ_{i2∈RA_row(ic)} RA[ic, i2]·P[i2, k] — the
+        // RA entries are consumed in first-touch (not sorted) order, which is
+        // part of the float accumulation order.
+        rap_i.clear();
+        rap_v.clear();
+        rap_seen.clear();
+        for (i2, &ra) in ra_i.iter().zip(ra_v.iter()) {
+            for jj3 in p_rp[*i2]..p_rp[*i2 + 1] {
+                let k = p_ci[jj3];
+                match rap_seen.get(&k) {
+                    Some(&idx) => rap_v[idx] += ra * p_va[jj3],
+                    None => {
+                        rap_seen.insert(k, rap_i.len());
+                        rap_i.push(k);
+                        rap_v.push(ra * p_va[jj3]);
+                    }
+                }
+            }
+        }
+        for (k, v) in rap_i.iter().zip(rap_v.iter()) {
+            coo.push(ic, *k, *v);
+        }
+    }
+    CsrMatrix::from_coo(&coo)
+}
+
 pub fn correct_cf_marker(cf: &mut [i32], new_cf: &[i32]) {
     let mut cnt = 0;
     for v in cf.iter_mut() {

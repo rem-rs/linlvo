@@ -587,8 +587,7 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                         ),
                     });
                 }
-                let pid_t = pid.transpose_csr();
-                let a_pid = pid_t.matmat(&a.matmat(pid));
+                let a_pid = crate::amg::hmis::rap_hypre_order(pid, a);
                 // Zero rows → unit diagonal (hypre `FixZeroRows`); NO ε·I
                 // shift — hypre's BoomerAMG runs unshifted on the (generally
                 // singular) A_Pi, and the earlier measured shift here made

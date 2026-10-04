@@ -170,7 +170,7 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
             };
 
             // Build prolongation P and (optionally) custom restriction R.
-            let (p, r_custom) = match &config.strategy {
+            let (p, mut r_custom) = match &config.strategy {
                 CoarsenStrategy::RugeStüben => {
                     if let Some(dim) = config.nodal_dofs {
                         // Nodal (system) AMG: coarsen the nodal strength graph,
@@ -262,10 +262,16 @@ impl<T: ComplexScalar> AmgHierarchy<T> {
             }
 
             // Restriction: default R=Pᵀ, AIR uses custom R.
-            let r = r_custom.unwrap_or_else(|| p.transpose_csr());
+            let r = r_custom.take().unwrap_or_else(|| p.transpose_csr());
 
-            // Galerkin coarse-grid operator: Ac = R * A * P
-            let a_coarse = r.matmat(&a_now.matmat(&p));
+            // Galerkin coarse-grid operator: Ac = R * A * P.  The HmisAms
+            // strategy accumulates in hypre's RAP order (see
+            // [`hmis::rap_hypre_order`]) — the coarse-level operators are as
+            // tie-break-sensitive as the finest one.
+            let a_coarse = match &config.strategy {
+                CoarsenStrategy::HmisAms => hmis::rap_hypre_order(&p, &a_now),
+                _ => r.matmat(&a_now.matmat(&p)),
+            };
 
             levels.push(AmgLevel { a: a_now, p: Some(p), r: Some(r), spectral_radius: sr });
             a_curr = Some(a_coarse);
