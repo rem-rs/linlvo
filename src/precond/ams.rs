@@ -782,9 +782,27 @@ impl<T: ComplexScalar> Preconditioner for AmsPrecond<T> {
                 self.residual_of(x, y, &mut r);
                 self.apply_coarse(&self.g, &*self.node_precond, &r, y);
             }
-            for (pid, b) in self.face_blocks.iter().rev() {
-                self.residual_of(x, y, &mut r);
-                self.apply_coarse(pid, &**b, &r, y);
+            // Reverse sweep.  hypre runs cycle_type 13 as a *string* of
+            // subspace phases (hypre_ParCSRSubspacePrec, ams.c:3965-3968:
+            // digit 'k' → subspace k-1, '0' → A relaxation):
+            //   non-singular "034515430" (ams.c:3737) = GS Px Py Pz G Pz Py Px GS
+            //   singular     "0345430"  (ams.c:3710) = GS Px Py Pz Py Px GS
+            // — the singular cycle's reverse sweep repeats only Py,Px; the
+            // second Pz is DROPPED (the cycle is not a mirror).  The nodal
+            // arm exists only in the non-singular string, so the mirror is
+            // exact there and the singular path must skip its first reverse
+            // block.  (D116a: the extra Pz arm was the +1.29% <C*b,b> / 7-vs-8
+            // iteration residual against the C++ probe.)
+            if use_nodal {
+                for (pid, b) in self.face_blocks.iter().rev() {
+                    self.residual_of(x, y, &mut r);
+                    self.apply_coarse(pid, &**b, &r, y);
+                }
+            } else {
+                for (pid, b) in self.face_blocks.iter().rev().skip(1) {
+                    self.residual_of(x, y, &mut r);
+                    self.apply_coarse(pid, &**b, &r, y);
+                }
             }
             self.residual_of(x, y, &mut r);
             let mut post = DenseVec::zeros(n_edges);

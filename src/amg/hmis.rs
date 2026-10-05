@@ -417,7 +417,10 @@ pub fn rap_hypre_order<T: ComplexScalar>(p: &CsrMatrix<T>, a: &CsrMatrix<T>) -> 
     let p_rp = p.row_ptr();
     let p_ci = p.col_idx();
     let p_va = p.values();
-    let mut coo = CooMatrix::new(n, n);
+    let mut row_ptr: Vec<usize> = Vec::with_capacity(n + 1);
+    let mut col_idx: Vec<usize> = Vec::with_capacity(n * 8);
+    let mut values: Vec<T> = Vec::with_capacity(n * 8);
+    row_ptr.push(0);
     let mut ra_i: Vec<usize> = Vec::new();
     let mut ra_v: Vec<T> = Vec::new();
     let mut ra_seen: HashMap<usize, usize> = HashMap::new();
@@ -466,11 +469,16 @@ pub fn rap_hypre_order<T: ComplexScalar>(p: &CsrMatrix<T>, a: &CsrMatrix<T>) -> 
                 }
             }
         }
-        for (k, v) in rap_i.iter().zip(rap_v.iter()) {
-            coo.push(ic, *k, *v);
-        }
+        // Emit in the KT first-touch order — hypre's coarse operator stores
+        // each row in its create order (par_rap.c build loop), NOT sorted;
+        // the row-l1 norms and HMIS measures of the next AMG level sum over
+        // this stored order, so a sorted emission would divert the whole
+        // hierarchy at the ulp level.  Values are untouched by the choice.
+        col_idx.extend_from_slice(&rap_i);
+        values.extend_from_slice(&rap_v);
+        row_ptr.push(col_idx.len());
     }
-    CsrMatrix::from_coo(&coo)
+    CsrMatrix::from_raw(n, n, row_ptr, col_idx, values)
 }
 
 pub fn correct_cf_marker(cf: &mut [i32], new_cf: &[i32]) {
