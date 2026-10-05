@@ -588,6 +588,30 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                     });
                 }
                 let a_pid = crate::amg::hmis::rap_hypre_order(pid, a);
+                // D1215 instrument (`FEMRS_AMS_API_DUMP=<prefix>`): dump the
+                // level-0 Galerkin operator per block, `<prefix>_raw_<d>.ij`
+                // (the raw `rap_hypre_order` output) and `<prefix>_fixed_<d>.ij`
+                // (post `fix_zero_rows` — what hypre's `A_Pix` is after
+                // `hypre_ParCSRMatrixFixZeroRows`, ams.c:3272), `row col
+                // %.17e`.  Bitwise-compare against the d115a C harness running
+                // `hypre_BoomerAMGBuildCoarseOperator` on the same dumps.
+                let api_dump = std::env::var("FEMRS_AMS_API_DUMP").ok();
+                let dump_api = |tag: String, m: &CsrMatrix<T>| {
+                    if let Some(prefix) = &api_dump {
+                        let mut out = String::with_capacity(m.nnz() * 32);
+                        for r in 0..m.nrows() {
+                            for k in m.row_ptr()[r]..m.row_ptr()[r + 1] {
+                                // AMS is real-valued: `.real()` is the entry.
+                                let re = m.values()[k].real();
+                                let v: f64 = num_traits::ToPrimitive::to_f64(&re)
+                                    .unwrap_or(f64::INFINITY);
+                                out.push_str(&format!("{} {} {v:.17e}\n", r, m.col_idx()[k]));
+                            }
+                        }
+                        let _ = std::fs::write(format!("{prefix}_{tag}.ij"), out);
+                    }
+                };
+                dump_api(format!("raw_{d}"), &a_pid);
                 // Zero rows → unit diagonal (hypre `FixZeroRows`); NO ε·I
                 // shift — hypre's BoomerAMG runs unshifted on the (generally
                 // singular) A_Pi, and the earlier measured shift here made
@@ -597,6 +621,7 @@ impl<T: ComplexScalar> AmsPrecond<T> {
                 // coarsest solve (`coarsest_sweeps`) is the hypre-faithful
                 // nullspace handling.
                 let a_pid = fix_zero_rows(&a_pid);
+                dump_api(format!("fixed_{d}"), &a_pid);
                 let (b_pid, _) = build_aux_solver(a_pid, &pi_solver)?;
                 face_blocks.push((pid.clone(), b_pid));
             }
