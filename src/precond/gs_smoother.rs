@@ -84,13 +84,20 @@ impl<T: ComplexScalar> GaussSeidelSmoother<T> {
     }
 
     /// Backward Gauss-Seidel sweep: for i = n-1..0, update y[i] using all y[j].
+    ///
+    /// Within a row the nonzeros are scanned in **descending** column order,
+    /// mirroring MFEM `SparseMatrix::Gauss_Seidel_back`'s finalized (CSR) path
+    /// (`linalg/sparsemat.cpp`: `for (j = Ip[s]-1; j >= Ip[i]; j--)`).  The
+    /// scan direction fixes the floating-point summation order of the
+    /// off-diagonal accumulation, so this sweep is bitwise-compatible with
+    /// MFEM rather than merely algebraically equal (D945).
     fn sweep_backward(&self, r: &[T], y: &mut [T]) {
         for ii in 0..self.n {
             let i = self.n - 1 - ii;
             let mut sum = T::zero();
             let start = self.row_ptr[i];
             let end = self.row_ptr[i + 1];
-            for k in start..end {
+            for k in (start..end).rev() {
                 let c = self.col_idx[k];
                 if c != i {
                     sum = sum + self.values[k] * y[c];
